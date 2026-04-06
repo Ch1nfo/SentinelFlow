@@ -1,0 +1,3 @@
+name: soc-triage-agent
+description: SentinelFlow demo triage agent for alert analysis and closure guidance.
+mode: primary

@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+from typing import Any
+from pydantic import BaseModel, Field
+
+class CommandDispatchRequest(BaseModel):
+    command_text: str = Field(..., alias="commandText")
+    history: list[dict[str, str]] | None = None
+    agent_name: str | None = Field(default=None, alias="agentName")
+
+
+class AlertActionRequest(BaseModel):
+    action: str
+    task: dict[str, Any] | None = None
+    alert: dict[str, Any] | None = None
+
+
+class RuntimeConfigRequest(BaseModel):
+    poll_interval_seconds: int | None = Field(default=None, alias="pollIntervalSeconds")
+    demo_mode: bool | None = Field(default=None, alias="demoMode")
+    demo_fallback: bool | None = Field(default=None, alias="demoFallback")
+    verify_ssl: bool | None = Field(default=None, alias="verifySsl")
+    agent_enabled: bool | None = Field(default=None, alias="agentEnabled")
+    llm_api_base_url: str | None = Field(default=None, alias="llmApiBaseUrl")
+    llm_api_key: str | None = Field(default=None, alias="llmApiKey")
+    llm_model: str | None = Field(default=None, alias="llmModel")
+    llm_temperature: float | None = Field(default=None, alias="llmTemperature")
+    llm_timeout: int | None = Field(default=None, alias="llmTimeout")
+    alert_source_enabled: bool | None = Field(default=None, alias="alertSourceEnabled")
+    alert_source_url: str | None = Field(default=None, alias="alertSourceUrl")
+    alert_source_method: str | None = Field(default=None, alias="alertSourceMethod")
+    alert_source_headers: str | None = Field(default=None, alias="alertSourceHeaders")
+    alert_source_query: str | None = Field(default=None, alias="alertSourceQuery")
+    alert_source_body: str | None = Field(default=None, alias="alertSourceBody")
+    alert_source_timeout: int | None = Field(default=None, alias="alertSourceTimeout")
+    alert_source_sample_payload: str | None = Field(default=None, alias="alertSourceSamplePayload")
+    alert_parser_rule: dict[str, Any] | None = Field(default=None, alias="alertParserRule")
+
+    def to_payload(self) -> dict[str, Any]:
+        payload = {
+            "poll_interval_seconds": self.poll_interval_seconds,
+            "demo_mode": self.demo_mode,
+            "demo_fallback": self.demo_fallback,
+            "verify_ssl": self.verify_ssl,
+            "agent_enabled": self.agent_enabled,
+            "llm_api_base_url": self.llm_api_base_url,
+            "llm_api_key": self.llm_api_key,
+            "llm_model": self.llm_model,
+            "llm_temperature": self.llm_temperature,
+            "llm_timeout": self.llm_timeout,
+            "alert_source_enabled": self.alert_source_enabled,
+            "alert_source_url": self.alert_source_url,
+            "alert_source_method": self.alert_source_method,
+            "alert_source_headers": self.alert_source_headers,
+            "alert_source_query": self.alert_source_query,
+            "alert_source_body": self.alert_source_body,
+            "alert_source_timeout": self.alert_source_timeout,
+            "alert_source_sample_payload": self.alert_source_sample_payload,
+            "alert_parser_rule": self.alert_parser_rule if isinstance(self.alert_parser_rule, dict) else None,
+        }
+        return {key: value for key, value in payload.items() if value is not None}
+
+
+class AlertSourceParserGenerateRequest(BaseModel):
+    sample_payload: str = Field(..., alias="samplePayload")
+
+
+class AlertSourceParserPreviewRequest(BaseModel):
+    sample_payload: str = Field(..., alias="samplePayload")
+    parser_rule: dict[str, Any] | None = Field(default=None, alias="parserRule")
+
+
+class SkillCreateRequest(BaseModel):
+    name: str
+    description: str
+    type: str = "doc"
+    content: str = ""
+    mode: str | None = None
+    code: str = ""
+
+
+class SkillDebugRequest(BaseModel):
+    arguments: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+
+
+class WorkflowCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+    template: str = "close"
+    workflow: dict[str, Any] | None = None
+
+
+class WorkflowRunRequest(BaseModel):
+    context: dict[str, Any] | None = None
+
+
+class AgentCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+    description_cn: str | None = None
+    prompt: str
+    mode: str = "subagent"
+    role: str | None = None
+    enabled: bool = True
+    color: str | None = None
+    skills: list[str] | None = None
+    tools: list[str] | None = None
+    doc_skill_mode: str = Field(default="all", alias="docSkillMode")
+    doc_skill_allowlist: list[str] | None = Field(default=None, alias="docSkillAllowlist")
+    doc_skill_denylist: list[str] | None = Field(default=None, alias="docSkillDenylist")
+    hybrid_doc_allowlist: list[str] | None = Field(default=None, alias="hybridDocAllowlist")
+    exec_skill_allowlist: list[str] | None = Field(default=None, alias="execSkillAllowlist")
+    worker_allowlist: list[str] | None = Field(default=None, alias="workerAllowlist")
+    worker_max_steps: int = Field(default=3, alias="workerMaxSteps")
+    use_global_model: bool = Field(default=True, alias="useGlobalModel")
+    llm_api_base_url: str | None = Field(default=None, alias="llmApiBaseUrl")
+    llm_api_key: str | None = Field(default=None, alias="llmApiKey")
+    llm_model: str | None = Field(default=None, alias="llmModel")
+    llm_temperature: float | None = Field(default=None, alias="llmTemperature")
+    llm_timeout: int | None = Field(default=None, alias="llmTimeout")
+
+
+class DeleteRequest(BaseModel):
+    name: str | None = None

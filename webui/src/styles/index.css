@@ -1,0 +1,643 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    @apply bg-gray-50 text-gray-900;
+    overflow-y: scroll;
+  }
+}
+
+@layer utilities {
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Markdown 渲染样式 */
+@layer components {
+  .prose {
+    line-height: 1.75;
+    /* 覆盖 @tailwindcss/typography 插件的 CSS 变量，避免插件样式污染自定义样式 */
+    --tw-prose-code: inherit;
+    --tw-prose-pre-code: #e5e7eb;
+    --tw-prose-pre-bg: #1f2937;
+  }
+  
+  .prose h1, .prose h2, .prose h3, .prose h4 {
+    @apply font-bold mt-4 mb-2;
+  }
+  
+  .prose h2 {
+    @apply text-lg border-b border-gray-200 pb-1;
+  }
+  
+  .prose h3 {
+    @apply text-base;
+  }
+  
+  .prose p {
+    @apply my-2;
+  }
+  
+  .prose ul, .prose ol {
+    @apply pl-6 my-2;
+  }
+  
+  .prose ul {
+    list-style-type: disc;
+  }
+  
+  .prose ol {
+    list-style-type: decimal;
+  }
+  
+  .prose li {
+    @apply my-1;
+  }
+  
+  .prose li > ul, .prose li > ol {
+    @apply mt-1;
+  }
+  
+  .prose strong {
+    @apply font-semibold;
+  }
+  
+  .prose hr {
+    @apply my-4 border-gray-300;
+  }
+  
+  .prose a {
+    @apply text-red-600 hover:underline;
+  }
+  
+  .prose code {
+    @apply bg-gray-100 px-1 py-0.5 rounded text-sm font-mono;
+  }
+  
+  .prose pre {
+    @apply bg-gray-800 text-gray-100 p-3 rounded overflow-x-auto my-2;
+    color: #e5e7eb;
+  }
+  
+  .prose pre code {
+    /* 覆盖 typography 插件给 code 设置的深色文字，以及行内代码的浅色背景 */
+    background: transparent !important;
+    padding: 0 !important;
+    color: inherit !important;
+    font-size: inherit;
+    border-radius: 0;
+  }
+  
+  .prose blockquote {
+    @apply border-l-4 border-gray-300 pl-4 italic my-2;
+  }
+
+  /* GFM 表格样式 */
+  .prose table {
+    @apply w-full border-collapse my-3 text-sm;
+  }
+
+  .prose thead {
+    @apply bg-gray-100;
+  }
+
+  .prose th {
+    @apply border border-gray-200 px-3 py-2 text-left font-semibold text-gray-700;
+  }
+
+  .prose td {
+    @apply border border-gray-200 px-3 py-2 text-gray-700;
+  }
+
+  .prose tr:nth-child(even) td {
+    @apply bg-gray-50;
+  }
+
+  /* 用户消息里的表格反色 */
+  .prose-invert thead {
+    @apply bg-white/10;
+  }
+
+  .prose-invert th,
+  .prose-invert td {
+    @apply border-white/20 text-red-50;
+  }
+
+  .prose-invert tr:nth-child(even) td {
+    @apply bg-white/5;
+  }
+  
+  /* 让 highlight.js 主题不覆盖我们的 pre 背景 */
+  .prose pre .hljs,
+  .prose .hljs {
+    background: transparent !important;
+    padding: 0 !important;
+  }
+
+  /* 用户消息反色 */
+  .prose-invert h2, .prose-invert h3 {
+    @apply border-red-400;
+  }
+  
+  .prose-invert a {
+    @apply text-red-200;
+  }
+  
+  .prose-invert code {
+    @apply bg-white/10;
+  }
+  
+  .prose-invert hr {
+    @apply border-red-400;
+  }
+
+  /* <details> / <summary> 折叠样式 */
+  .prose details {
+    @apply border border-gray-200 rounded-lg my-2 overflow-hidden;
+  }
+
+  .prose details summary {
+    @apply px-3 py-2 cursor-pointer text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 transition-colors select-none list-none;
+  }
+
+  .prose details summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .prose details[open] summary {
+    @apply border-b border-gray-200;
+  }
+
+  .prose details > *:not(summary) {
+    @apply px-3 py-2;
+  }
+
+  /* 用户消息里的 details 反色 */
+  .prose-invert details {
+    @apply border-white/20;
+  }
+
+  .prose-invert details summary {
+    @apply text-red-100 bg-white/10 hover:bg-white/20;
+  }
+
+  .prose-invert details[open] summary {
+    @apply border-white/20;
+  }
+}
+
+@layer components {
+  .sentinelflow-page-stack {
+    @apply min-w-0 flex flex-col gap-6;
+  }
+
+  .sentinelflow-page-hero {
+    @apply relative overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 px-8 py-8 text-white shadow-xl;
+  }
+
+  .sentinelflow-page-hero h1 {
+    @apply mt-3 text-4xl font-bold tracking-tight;
+  }
+
+  .sentinelflow-page-hero p {
+    @apply mt-3 max-w-3xl text-sm leading-7 text-slate-300;
+  }
+
+  .sentinelflow-hero-badge {
+    @apply inline-flex items-center rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold tracking-wide text-sky-100;
+  }
+
+  .sentinelflow-surface {
+    @apply overflow-hidden rounded-3xl border border-slate-200 bg-white/90 shadow-sm backdrop-blur;
+  }
+
+  .sentinelflow-surface-header {
+    @apply border-b border-slate-100 px-6 py-5;
+  }
+
+  .sentinelflow-surface-header h2 {
+    @apply text-lg font-semibold text-slate-900;
+  }
+
+  .sentinelflow-surface-header p {
+    @apply mt-2 text-sm leading-6 text-slate-500;
+  }
+
+  .sentinelflow-surface-body {
+    @apply min-w-0 px-6 py-5;
+  }
+
+  .sentinelflow-stat-grid {
+    @apply grid gap-4 md:grid-cols-2 xl:grid-cols-4;
+  }
+
+  .sentinelflow-stat-card {
+    @apply rounded-2xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white px-4 py-4;
+  }
+
+  .sentinelflow-stat-card span {
+    @apply block text-sm text-slate-500;
+  }
+
+  .sentinelflow-stat-card strong {
+    @apply mt-3 block text-3xl font-bold text-slate-900;
+  }
+
+  .sentinelflow-grid-2 {
+    @apply grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)];
+  }
+
+  .sentinelflow-card-grid {
+    @apply grid gap-4 lg:grid-cols-2;
+  }
+
+  .sentinelflow-workflow-card,
+  .sentinelflow-detail-panel,
+  .sentinelflow-task-tile {
+    @apply min-w-0 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-left;
+  }
+
+  .sentinelflow-task-tile-active {
+    @apply border-sky-200 bg-gradient-to-r from-sky-50 to-emerald-50;
+  }
+
+  .sentinelflow-task-tile-failed {
+    @apply border-red-200 bg-red-50/70;
+  }
+
+  .sentinelflow-toolbar-row,
+  .sentinelflow-inline-metrics,
+  .sentinelflow-inline-status,
+  .sentinelflow-response-row,
+  .sentinelflow-action-bar,
+  .sentinelflow-topbar-actions,
+  .sentinelflow-settings-actions {
+    @apply flex flex-wrap items-center gap-3;
+  }
+
+
+  .sentinelflow-inline-metrics span,
+  .sentinelflow-inline-status span {
+    @apply text-sm text-slate-500;
+  }
+
+  .sentinelflow-task-tile-copy {
+    @apply mt-3 block text-left text-sm leading-7 text-slate-800;
+  }
+
+  .sentinelflow-stack-list {
+    @apply flex flex-col;
+  }
+
+  .sentinelflow-stack-item {
+    @apply border-b border-slate-100 py-4 last:border-b-0;
+  }
+
+  .sentinelflow-stack-item strong {
+    @apply mb-2 block text-sm font-semibold text-slate-900;
+  }
+
+  .sentinelflow-stack-item span,
+  .sentinelflow-muted-text {
+    @apply text-sm leading-6 text-slate-500;
+  }
+
+  .sentinelflow-data-table {
+    @apply w-full border-collapse text-sm;
+  }
+
+  .sentinelflow-data-table th,
+  .sentinelflow-data-table td {
+    @apply border-b border-slate-100 px-3 py-3 text-left align-top;
+  }
+
+  .sentinelflow-data-table th {
+    @apply text-xs font-semibold uppercase tracking-wide text-slate-500;
+  }
+
+  .sentinelflow-data-table tbody tr {
+    @apply cursor-pointer transition-colors hover:bg-sky-50/70;
+  }
+
+  .sentinelflow-table-row-active {
+    @apply bg-sky-50;
+  }
+
+  .sentinelflow-primary-button,
+  .sentinelflow-ghost-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors;
+  }
+
+  .sentinelflow-inline-button {
+    @apply inline-flex items-center gap-2 whitespace-nowrap;
+  }
+
+  .sentinelflow-primary-button {
+    @apply bg-gradient-to-r from-teal-700 to-sky-700 text-white hover:from-teal-600 hover:to-sky-600 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .sentinelflow-ghost-button {
+    @apply border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .sentinelflow-status-badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold;
+  }
+
+  .sentinelflow-status-badge-neutral {
+    @apply bg-slate-100 text-slate-600;
+  }
+
+  .sentinelflow-status-badge-success {
+    @apply bg-emerald-100 text-emerald-700;
+  }
+
+  .sentinelflow-status-badge-warn {
+    @apply bg-amber-100 text-amber-700;
+  }
+
+  .sentinelflow-status-badge-danger {
+    @apply bg-red-100 text-red-700;
+  }
+
+  .sentinelflow-activity-banner,
+  .sentinelflow-message-block {
+    @apply rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4;
+  }
+
+  .sentinelflow-activity-banner-header {
+    @apply mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-slate-500;
+  }
+
+  .sentinelflow-message-error {
+    @apply border-red-200 bg-red-50 text-red-700;
+  }
+
+  .sentinelflow-message-success {
+    @apply border-emerald-200 bg-emerald-50 text-emerald-700;
+  }
+
+  .sentinelflow-response-stack,
+  .sentinelflow-history-list,
+  .sentinelflow-task-list {
+    @apply flex flex-col gap-3;
+  }
+
+  .sentinelflow-history-item {
+    @apply rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-left transition-colors hover:bg-slate-100;
+  }
+
+  .sentinelflow-history-item-active {
+    @apply border-sky-200 bg-sky-50;
+  }
+
+  .sentinelflow-chip-button {
+    @apply rounded-full border border-sky-100 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-colors hover:bg-sky-100;
+  }
+
+  .sentinelflow-chip-button-active {
+    @apply border-sky-200 bg-gradient-to-r from-sky-100 to-emerald-100 text-slate-900;
+  }
+
+  .sentinelflow-quick-actions,
+  .sentinelflow-filter-row {
+    @apply mb-4 flex flex-wrap gap-2;
+  }
+
+  .sentinelflow-field-label {
+    @apply mb-3 block text-sm font-semibold text-slate-900;
+  }
+
+  .sentinelflow-command-input,
+  .sentinelflow-settings-input {
+    @apply w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition-colors focus:border-sky-300 focus:ring-2 focus:ring-sky-100;
+  }
+
+  .sentinelflow-chat-composer .sentinelflow-command-input {
+    @apply min-h-[88px] resize-none rounded-none border-0 bg-transparent px-2 py-1 text-base leading-7 shadow-none focus:border-0 focus:ring-0;
+  }
+
+  .sentinelflow-chat-composer .sentinelflow-command-input::placeholder {
+    @apply text-base leading-7 text-slate-400;
+  }
+
+  .sentinelflow-code-block {
+    @apply overflow-x-auto rounded-2xl bg-slate-900 p-4 text-xs leading-6 text-slate-100;
+  }
+
+  .sentinelflow-key-value-list {
+    @apply flex flex-col gap-3;
+  }
+
+  .sentinelflow-key-value-item {
+    @apply flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3;
+  }
+
+  .sentinelflow-key-value-item span {
+    @apply text-sm text-slate-500;
+  }
+
+  .sentinelflow-key-value-item strong {
+    @apply text-sm font-semibold text-slate-900;
+  }
+
+  .sentinelflow-context-grid {
+    @apply grid gap-3 md:grid-cols-2;
+  }
+
+  .sentinelflow-context-card {
+    @apply rounded-2xl border border-slate-200 bg-white px-4 py-3;
+  }
+
+  .sentinelflow-context-card strong {
+    @apply mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500;
+  }
+
+  .sentinelflow-context-card span {
+    @apply text-sm text-slate-900;
+  }
+
+  .sentinelflow-settings-form {
+    @apply grid gap-4 lg:grid-cols-2;
+  }
+
+  .sentinelflow-settings-field {
+    @apply flex flex-col gap-2;
+  }
+
+  .sentinelflow-settings-field span {
+    @apply text-sm font-semibold text-slate-700;
+  }
+
+  .sentinelflow-settings-field-full {
+    @apply lg:col-span-2;
+  }
+
+  .sentinelflow-settings-toggle {
+    @apply flex items-center gap-3 text-sm text-slate-700;
+  }
+
+  .sentinelflow-divider {
+    @apply my-5 border-t border-slate-100;
+  }
+
+  .sentinelflow-workflow-flow {
+    @apply flex flex-col gap-3;
+  }
+
+  .sentinelflow-workflow-node {
+    @apply flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100;
+  }
+
+  .sentinelflow-workflow-node strong {
+    @apply text-sm font-semibold text-slate-900;
+  }
+
+  .sentinelflow-workflow-node span {
+    @apply text-xs text-slate-500;
+  }
+
+  .sentinelflow-workflow-node-active {
+    @apply border-sky-200 bg-sky-50;
+  }
+
+  .sentinelflow-workflow-edge-row {
+    @apply grid min-w-0 items-center gap-2 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_120px_auto];
+  }
+
+  .sentinelflow-workflow-run-columns {
+    @apply grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)];
+  }
+
+  .sentinelflow-conversation-layout {
+    @apply mx-auto min-w-0 w-full max-w-5xl;
+  }
+
+  .sentinelflow-session-strip {
+    @apply mb-4 flex flex-wrap items-center gap-2;
+  }
+
+  .sentinelflow-session-chip {
+    @apply inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50;
+  }
+
+  .sentinelflow-session-chip span {
+    @apply font-medium text-slate-900;
+  }
+
+  .sentinelflow-session-chip-active {
+    @apply border-slate-900 bg-slate-900 text-white;
+  }
+
+  .sentinelflow-session-chip-active span {
+    @apply text-white;
+  }
+
+  .sentinelflow-session-chip-active:hover {
+    @apply bg-slate-900;
+  }
+
+  .sentinelflow-chat-panel {
+    @apply flex h-[calc(100vh-11rem)] min-h-[760px] min-w-0 flex-col gap-5;
+  }
+
+  .sentinelflow-chat-panel-empty {
+    @apply justify-center;
+  }
+
+  .sentinelflow-chat-stream {
+    @apply flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto bg-white px-4 py-6;
+  }
+
+  .sentinelflow-chat-empty-state {
+    @apply flex flex-1 items-center justify-center px-6;
+  }
+
+  .sentinelflow-chat-empty-title {
+    @apply text-center text-4xl font-medium tracking-tight text-slate-900;
+  }
+
+  .sentinelflow-chat-turn {
+    @apply mx-auto flex w-full max-w-3xl flex-col gap-3;
+  }
+
+  .sentinelflow-chat-meta {
+    @apply text-center text-xs text-slate-400;
+  }
+
+  .sentinelflow-chat-bubble {
+    @apply max-w-[85%] px-1 py-1;
+  }
+
+  .sentinelflow-chat-bubble strong {
+    @apply mb-2 block text-sm font-semibold;
+  }
+
+  .sentinelflow-chat-bubble p {
+    @apply whitespace-pre-wrap text-[15px] leading-8;
+  }
+
+  .sentinelflow-chat-bubble-user {
+    @apply self-end rounded-[1.75rem] bg-slate-100 px-5 py-3 text-slate-900;
+  }
+
+  .sentinelflow-chat-bubble-assistant {
+    @apply self-start max-w-none text-slate-900;
+  }
+
+  .sentinelflow-chat-actions {
+    @apply mt-4 flex flex-wrap items-center gap-2;
+  }
+
+  .sentinelflow-chat-details {
+    @apply mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4;
+  }
+
+  .sentinelflow-tool-call-list {
+    @apply mt-4 flex flex-col gap-3;
+  }
+
+  .sentinelflow-tool-call-summary {
+    @apply mt-3 text-xs leading-5 text-slate-400;
+  }
+
+  .sentinelflow-tool-call-card {
+    @apply rounded-3xl border border-slate-200 bg-slate-50/80 px-4 py-3;
+  }
+
+  .sentinelflow-tool-call-card strong {
+    @apply mb-0 text-sm font-semibold text-slate-900;
+  }
+
+  .sentinelflow-tool-call-card span {
+    @apply mt-2 block text-xs leading-6 text-slate-500;
+  }
+
+  .sentinelflow-chat-composer {
+    @apply sticky bottom-0 z-10 relative mx-auto w-full max-w-3xl rounded-[2rem] border border-slate-200 bg-white/95 px-4 py-3 shadow-[0_8px_30px_rgba(15,23,42,0.08)] backdrop-blur;
+  }
+
+  .sentinelflow-chat-composer-home {
+    @apply static mb-10;
+  }
+
+  .sentinelflow-chat-composer-actions {
+    @apply pointer-events-none absolute bottom-3 right-3 flex items-center gap-3;
+  }
+
+  .sentinelflow-chat-send-button {
+    @apply pointer-events-auto inline-flex h-11 w-11 items-center justify-center rounded-full bg-black text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300;
+  }
+}

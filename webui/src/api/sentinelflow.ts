@@ -1,0 +1,593 @@
+export type AlertTask = {
+  task_id: string
+  event_ids: string
+  workflow_name: string
+  title: string
+  description: string
+  status: string
+  retry_count: number
+  last_action: string
+  last_result_success?: boolean | null
+  last_result_error?: string | null
+  last_result_data: Record<string, unknown>
+  payload: Record<string, unknown>
+}
+
+export type PollAlertsResponse = {
+  fetched_count: number
+  queued_count: number
+  skipped_count: number
+  failed_count: number
+  tasks: AlertTask[]
+  errors: string[]
+}
+
+export type AlertActionResponse = {
+  action: string
+  success: boolean
+  task_id: string
+  event_ids: string
+  data: Record<string, unknown>
+  task?: AlertTask | null
+  error?: string | null
+}
+
+export type SkillSummary = {
+  name: string
+  type: string
+  description: string
+  executable: boolean
+  entry?: string | null
+  mode?: string | null
+}
+
+export type SkillDetail = SkillSummary & {
+  markdown: string
+  code: string
+  input_schema: Record<string, unknown>
+  output_schema: Record<string, unknown>
+}
+
+export type SkillDebugResponse = {
+  success: boolean
+  skill: string
+  data: Record<string, unknown>
+  error?: string | null
+}
+
+export type CommandDispatchResponse = {
+  command_text: string
+  route: string
+  success: boolean
+  data: Record<string, unknown>
+  error?: string | null
+}
+
+export type ConversationHistoryMessage = {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export type CommandStreamEvent =
+  | { type: 'request'; payload: { request_id: string } }
+  | { type: 'meta'; payload: { route: string; success: boolean } }
+  | { type: 'status'; payload: { text: string } }
+  | { type: 'delta'; payload: { text: string } }
+  | { type: 'done'; payload: CommandDispatchResponse }
+
+export type HealthResponse = {
+  name: string
+  status: string
+  demo_mode?: boolean
+  agent_enabled?: boolean
+  agent_configured?: boolean
+  agent_available?: boolean
+}
+
+export type AuditEvent = {
+  event_type: string
+  message: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export type RuntimeSettingsResponse = {
+  branding: {
+    product_name: string
+    console_title: string
+  }
+  runtime: {
+    poll_interval_seconds: string
+    workflow_engine: string
+    agent_enabled: boolean
+  }
+  llm: {
+    api_base_url: string
+    api_key: string
+    api_key_configured: boolean
+    model: string
+    temperature: number
+    timeout: number
+    agent_configured: boolean
+    agent_available: boolean
+    agent_unavailable_reason: string
+  }
+  alert_source: {
+    enabled: boolean
+    url: string
+    method: string
+    headers: string
+    query: string
+    body: string
+    timeout: number
+    sample_payload: string
+    parser_rule: Record<string, unknown>
+    parser_configured: boolean
+  }
+  features: {
+    natural_language_dispatch: boolean
+    alert_polling: boolean
+    hybrid_skills: boolean
+    audit_timeline: boolean
+    agent_runtime: boolean
+  }
+  persisted_overrides: Record<string, unknown>
+}
+
+export type AlertSourceFetchResponse = {
+  raw_payload?: Record<string, unknown> | unknown[]
+  raw_response?: string
+  status_code?: number
+}
+
+export type AlertSourceParserGenerateResponse = {
+  parser_rule: Record<string, unknown>
+  strategy: string
+  reason: string
+  preview: {
+    count: number
+    alerts: Array<Record<string, unknown>>
+    error?: string | null
+  }
+}
+
+export type DashboardSummaryResponse = {
+  totals: {
+    tasks: number
+    queued: number
+    running: number
+    succeeded: number
+    failed: number
+    audit_events: number
+    skills: number
+    workflows: number
+    agents: number
+  }
+  judgment: {
+    business_trigger: number
+    false_positive: number
+    true_attack: number
+    unknown: number
+  }
+  operations: {
+    closed_success: number
+    disposed_success: number
+    banned_ip_count: number
+    banned_ips: string[]
+  }
+  recent_results: Array<{
+    task_id: string
+    event_ids: string
+    title: string
+    status: string
+    last_action: string
+    disposition: string
+  }>
+}
+
+export type WorkflowSummary = {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  scenarios: string[]
+  recommended_action: string
+  steps_count: number
+  step_agents: string[]
+  final_handler_type: string
+  final_handler_action: string
+  location: string
+}
+
+export type WorkflowDetail = WorkflowSummary & {
+  selection_keywords: string[]
+  steps: Array<{
+    id: string
+    name: string
+    agent: string
+    task_prompt?: string
+  }>
+  final_handler: {
+    type: string
+    action: string
+  }
+  validation?: {
+    valid: boolean
+    errors: string[]
+  }
+}
+
+export type WorkflowRunResponse = {
+  success: boolean
+  workflow_id: string
+  workflow_name?: string
+  error?: string
+  validation?: {
+    valid: boolean
+    errors: string[]
+  }
+  workflow_steps?: Array<{
+    id: string
+    name: string
+    agent: string
+  }>
+  worker_results?: Array<Record<string, unknown>>
+  summary?: string
+  reason?: string
+}
+
+export type AgentSummary = {
+  name: string
+  description: string
+  mode: string
+  role?: string
+  enabled?: boolean
+  location: string
+  has_prompt: boolean
+  use_global_model?: boolean
+  has_model_override?: boolean
+  is_system?: boolean
+}
+
+export type AgentDetail = AgentSummary & {
+  color?: string
+  prompt: string
+  skills: string[]
+  tools: string[]
+  role: string
+  enabled: boolean
+  doc_skill_mode: string
+  doc_skill_allowlist: string[]
+  doc_skill_denylist: string[]
+  hybrid_doc_allowlist: string[]
+  exec_skill_allowlist: string[]
+  worker_allowlist: string[]
+  worker_max_steps: number
+  use_global_model: boolean
+  llm_api_base_url?: string
+  llm_api_key?: string
+  llm_api_key_configured?: boolean
+  llm_model?: string
+  llm_temperature?: number | null
+  llm_timeout?: number | null
+}
+
+async function parseJson<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`
+    try {
+      const payload = await response.json() as { detail?: string }
+      if (payload?.detail) {
+        message = payload.detail
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
+  }
+  return (await response.json()) as T
+}
+
+async function getJson<T>(path: string): Promise<T> {
+  const response = await fetch(path)
+  return parseJson<T>(response)
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return parseJson<T>(response)
+}
+
+export async function fetchHealth(): Promise<HealthResponse> {
+  return getJson('/api/sentinelflow/health')
+}
+
+export async function fetchDashboardSummary(): Promise<DashboardSummaryResponse> {
+  return getJson('/api/sentinelflow/dashboard/summary')
+}
+
+export async function fetchPollAlerts(): Promise<PollAlertsResponse> {
+  return getJson('/api/sentinelflow/alerts/poll')
+}
+
+export async function handleAlertAction(action: string, task?: AlertTask, alert?: Record<string, unknown>) {
+  return postJson<AlertActionResponse>('/api/sentinelflow/alerts/handle', { action, task, alert })
+}
+
+export async function fetchSkills(): Promise<{ skills: SkillSummary[] }> {
+  return getJson('/api/sentinelflow/skills')
+}
+
+export async function fetchSkillDetail(name: string): Promise<SkillDetail> {
+  return getJson(`/api/sentinelflow/skills/${encodeURIComponent(name)}`)
+}
+
+export async function createSkill(payload: {
+  name: string
+  description: string
+  type: string
+  content: string
+  code: string
+  mode?: string | null
+}) {
+  return postJson<SkillDetail>('/api/sentinelflow/skills', payload)
+}
+
+export async function saveSkill(name: string, payload: {
+  name: string
+  description: string
+  type: string
+  content: string
+  code: string
+  mode?: string | null
+}) {
+  return postJson<SkillDetail>(`/api/sentinelflow/skills/${encodeURIComponent(name)}/save`, payload)
+}
+
+export async function deleteSkill(name: string) {
+  return postJson<{ deleted: boolean; name: string }>(`/api/sentinelflow/skills/${encodeURIComponent(name)}/delete`, {})
+}
+
+export async function debugSkill(name: string, payload: {
+  arguments?: Record<string, unknown>
+  context?: Record<string, unknown>
+}) {
+  return postJson<SkillDebugResponse>(`/api/sentinelflow/skills/${encodeURIComponent(name)}/debug`, payload)
+}
+
+export async function fetchWorkflows(): Promise<{ workflows: WorkflowSummary[] }> {
+  return getJson('/api/sentinelflow/workflows')
+}
+
+export async function fetchWorkflowDetail(id: string): Promise<WorkflowDetail> {
+  return getJson(`/api/sentinelflow/workflows/${encodeURIComponent(id)}`)
+}
+
+export async function createWorkflow(payload: {
+  name: string
+  description: string
+  template: string
+  workflow?: Record<string, unknown>
+}) {
+  return postJson('/api/sentinelflow/workflows', payload)
+}
+
+export async function saveWorkflow(id: string, payload: {
+  name: string
+  description: string
+  template: string
+  workflow?: Record<string, unknown>
+}) {
+  return postJson<WorkflowDetail>(`/api/sentinelflow/workflows/${encodeURIComponent(id)}/save`, payload)
+}
+
+export async function deleteWorkflow(id: string) {
+  return postJson<{ deleted: boolean; id: string }>(`/api/sentinelflow/workflows/${encodeURIComponent(id)}/delete`, {})
+}
+
+export async function runWorkflow(id: string, payload: {
+  context?: Record<string, unknown>
+}) {
+  return postJson<WorkflowRunResponse>(`/api/sentinelflow/workflows/${encodeURIComponent(id)}/run`, payload)
+}
+
+export async function fetchAgents(): Promise<{ agents: AgentSummary[] }> {
+  return getJson('/api/sentinelflow/agents')
+}
+
+export async function fetchAgentDetail(name: string): Promise<AgentDetail> {
+  return getJson(`/api/sentinelflow/agents/${encodeURIComponent(name)}`)
+}
+
+export async function createAgent(payload: {
+  name: string
+  description: string
+  description_cn?: string
+  prompt: string
+  mode?: string
+  role?: string
+  enabled?: boolean
+  color?: string
+  skills?: string[]
+  tools?: string[]
+  docSkillMode?: string
+  docSkillAllowlist?: string[]
+  docSkillDenylist?: string[]
+  hybridDocAllowlist?: string[]
+  execSkillAllowlist?: string[]
+  workerAllowlist?: string[]
+  useGlobalModel?: boolean
+  llmApiBaseUrl?: string
+  llmApiKey?: string
+  llmModel?: string
+  llmTemperature?: number
+  llmTimeout?: number
+}) {
+  return postJson('/api/sentinelflow/agents', payload)
+}
+
+export async function saveAgent(name: string, payload: {
+  name: string
+  description: string
+  description_cn?: string
+  prompt: string
+  mode?: string
+  role?: string
+  enabled?: boolean
+  color?: string
+  skills?: string[]
+  tools?: string[]
+  docSkillMode?: string
+  docSkillAllowlist?: string[]
+  docSkillDenylist?: string[]
+  hybridDocAllowlist?: string[]
+  execSkillAllowlist?: string[]
+  workerAllowlist?: string[]
+  useGlobalModel?: boolean
+  llmApiBaseUrl?: string
+  llmApiKey?: string
+  llmModel?: string
+  llmTemperature?: number
+  llmTimeout?: number
+}) {
+  return postJson<AgentDetail>(`/api/sentinelflow/agents/${encodeURIComponent(name)}/save`, payload)
+}
+
+export async function deleteAgent(name: string) {
+  return postJson<{ deleted: boolean; name: string }>(`/api/sentinelflow/agents/${encodeURIComponent(name)}/delete`, {})
+}
+
+export async function dispatchCommand(commandText: string, history: ConversationHistoryMessage[] = []): Promise<CommandDispatchResponse> {
+  return postJson('/api/sentinelflow/commands/dispatch', { commandText, history })
+}
+
+export async function streamCommand(
+  commandText: string,
+  history: ConversationHistoryMessage[] = [],
+  onEvent?: (event: CommandStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<CommandDispatchResponse> {
+  const response = await fetch('/api/sentinelflow/commands/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commandText, history }),
+    signal,
+  })
+  if (!response.ok || !response.body) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let finalPayload: CommandDispatchResponse | null = null
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const chunks = buffer.split('\n\n')
+    buffer = chunks.pop() ?? ''
+
+    for (const chunk of chunks) {
+      const trimmed = chunk.trim()
+      if (!trimmed) continue
+      const dataLine = trimmed
+        .split('\n')
+        .find((line) => line.startsWith('data:'))
+      if (!dataLine) continue
+      const event = JSON.parse(dataLine.slice(5).trim()) as CommandStreamEvent
+      onEvent?.(event)
+      if (event.type === 'done') {
+        finalPayload = event.payload
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const dataLine = buffer
+      .trim()
+      .split('\n')
+      .find((line) => line.startsWith('data:'))
+    if (dataLine) {
+      const event = JSON.parse(dataLine.slice(5).trim()) as CommandStreamEvent
+      onEvent?.(event)
+      if (event.type === 'done') {
+        finalPayload = event.payload
+      }
+    }
+  }
+
+  if (!finalPayload) {
+    throw new Error('流式响应未返回最终结果')
+  }
+  return finalPayload
+}
+
+export async function stopStreamingCommand(requestId: string) {
+  return postJson<{ stopped: boolean; request_id?: string; error?: string }>('/api/sentinelflow/commands/stop', {
+    request_id: requestId,
+  })
+}
+
+export async function fetchAuditEvents(): Promise<{ events: AuditEvent[] }> {
+  return getJson('/api/sentinelflow/audit/events')
+}
+
+export async function fetchRuntimeSettings(): Promise<RuntimeSettingsResponse> {
+  return getJson('/api/sentinelflow/runtime/settings')
+}
+
+export async function saveRuntimeSettings(payload: {
+  pollIntervalSeconds: string
+  agentEnabled: boolean
+  llmApiBaseUrl: string
+  llmApiKey?: string
+  llmModel: string
+  llmTemperature: string
+  llmTimeout: string
+  alertSourceEnabled?: boolean
+  alertSourceUrl?: string
+  alertSourceMethod?: string
+  alertSourceHeaders?: string
+  alertSourceQuery?: string
+  alertSourceBody?: string
+  alertSourceTimeout?: string
+  alertSourceSamplePayload?: string
+  alertParserRule?: Record<string, unknown>
+}) {
+  return postJson<RuntimeSettingsResponse>('/api/sentinelflow/runtime/settings', payload)
+}
+
+export async function resetRuntimeSettings() {
+  return postJson<RuntimeSettingsResponse>('/api/sentinelflow/runtime/settings/reset', {})
+}
+
+export async function testAlertSourceFetch(payload: {
+  alertSourceEnabled?: boolean
+  alertSourceUrl?: string
+  alertSourceMethod?: string
+  alertSourceHeaders?: string
+  alertSourceQuery?: string
+  alertSourceBody?: string
+  alertSourceTimeout?: string
+}) {
+  return postJson<AlertSourceFetchResponse>('/api/sentinelflow/runtime/settings/alert-source/test-fetch', payload)
+}
+
+export async function generateAlertParser(samplePayload: string) {
+  return postJson<AlertSourceParserGenerateResponse>('/api/sentinelflow/runtime/settings/alert-source/generate-parser', {
+    samplePayload,
+  })
+}
+
+export async function testAlertParser(payload: {
+  samplePayload: string
+  parserRule?: Record<string, unknown>
+}) {
+  return postJson<AlertSourceParserGenerateResponse['preview']>('/api/sentinelflow/runtime/settings/alert-source/test-parse', payload)
+}

@@ -1,0 +1,1022 @@
+from __future__ import annotations
+
+from dataclasses import replace
+import json
+from pathlib import Path
+import re
+from typing import Any, Callable
+from uuid import uuid4
+
+from sentinelflow.agent.graph import build_agent_graph
+from sentinelflow.agent.policy import can_agent_delegate_to_worker, can_agent_execute_skill, can_agent_read_skill
+from sentinelflow.agent.prompts import (
+    PRIMARY_ALERT_ORCHESTRATION_APPENDIX,
+    PRIMARY_ALERT_WORKFLOW_SELECTION_APPENDIX,
+    PRIMARY_ALERT_SYNTHESIS_APPENDIX,
+    PRIMARY_COMMAND_ORCHESTRATION_APPENDIX,
+    PRIMARY_COMMAND_SYNTHESIS_APPENDIX,
+)
+from sentinelflow.agent.registry import list_agent_definitions, resolve_default_agent
+from sentinelflow.config.runtime import load_runtime_config
+from sentinelflow.services.triage_service import TriageService
+from sentinelflow.skills.adapters import SentinelFlowSkillRuntime
+from sentinelflow.workflows.agent_workflow_registry import list_agent_workflows
+
+
+THINK_BLOCK_PATTERN = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
+
+
+def _clean_model_text(text: str) -> str:
+    cleaned = THINK_BLOCK_PATTERN.sub("", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _normalize_markdown_line(text: str) -> str:
+    cleaned = text.strip()
+    cleaned = cleaned.strip("|").strip()
+    cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"__(.*?)__", r"\1", cleaned)
+    cleaned = re.sub(r"`([^`]*)`", r"\1", cleaned)
+    cleaned = cleaned.lstrip("-*#>").strip()
+    parts = [part.strip() for part in cleaned.split("|") if part.strip()]
+    if parts:
+        cleaned = " ".join(parts)
+    return cleaned
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    cleaned = _clean_model_text(text)
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    cleaned = cleaned.strip()
+    try:
+        decoded = json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if not match:
+            return None
+        try:
+            decoded = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+class SentinelFlowAgentService:
+    def __init__(self, project_root: Path, skill_runtime: SentinelFlowSkillRuntime) -> None:
+        self.project_root = project_root
+        self.skill_runtime = skill_runtime
+        self.triage_service = TriageService()
+        self.agent_root = project_root / ".sentinelflow" / "plugins" / "agents"
+
+    def is_configured(self, agent_name: str | None = None) -> bool:
+        config = load_runtime_config()
+        if not config.agent_enabled:
+            return False
+        agent_definition = resolve_default_agent(self.agent_root, agent_name)
+        effective_config = agent_definition.resolve_runtime_config(config) if agent_definition else config
+        return bool(
+            effective_config.llm_model
+            and effective_config.llm_api_key
+            and effective_config.llm_api_base_url
+        )
+
+    def is_available(self) -> tuple[bool, str | None]:
+        try:
+            import langgraph  # noqa: F401
+            import langchain_openai  # noqa: F401
+            import langchain_core  # noqa: F401
+        except ModuleNotFoundError as exc:
+            return False, str(exc)
+        return True, None
+
+    def _resolve_skill_permissions(self, agent_definition) -> tuple[list[str], list[str]]:
+        if agent_definition is None:
+            return self.skill_runtime.list_skills(), self.skill_runtime.list_skills()
+        readable_skills: list[str] = []
+        executable_skills: list[str] = []
+        for skill in self.skill_runtime.loader.list_skills():
+            if can_agent_read_skill(agent_definition, skill):
+                readable_skills.append(skill.spec.name)
+            if can_agent_execute_skill(agent_definition, skill):
+                executable_skills.append(skill.spec.name)
+        return readable_skills, executable_skills
+
+    def _resolve_worker_candidates(self, primary_agent, entry_type: str = "conversation") -> list:
+        if primary_agent is None or primary_agent.role != "primary" or not primary_agent.enabled:
+            return []
+        # Allow multi-agent routing for both conversation and alert entry types
+        workers = [agent for agent in list_agent_definitions(self.agent_root) if agent.role == "worker" and agent.enabled]
+        return [agent for agent in workers if can_agent_delegate_to_worker(primary_agent, agent.name)]
+
+    async def _run_agent_graph(
+        self,
+        agent_definition,
+        alert_data: dict[str, Any],
+        history: list[dict[str, str]] | None = None,
+        cancel_event=None,
+    ) -> dict[str, Any]:
+        config = load_runtime_config()
+        effective_config = agent_definition.resolve_runtime_config(config) if agent_definition else config
+        readable_skills, executable_skills = self._resolve_skill_permissions(agent_definition)
+        graph = build_agent_graph(
+            self.project_root,
+            self.skill_runtime,
+            effective_config,
+            enable_read_skill_document=bool(readable_skills),
+            enable_execute_skill=bool(executable_skills),
+        )
+        state = await graph.ainvoke(
+            {
+                "alert_data": alert_data,
+                "messages": self._build_history_messages(history or []),
+                "event_id_ref": str(alert_data.get("eventIds", "")).strip(),
+                "input_seeded": False,
+                "cancel_event": cancel_event,
+                "readable_skills": readable_skills,
+                "executable_skills": executable_skills,
+                "system_prompt_override": agent_definition.prompt if agent_definition else "",
+                "agent_name": agent_definition.name if agent_definition else "",
+            }
+        )
+        return self._serialize_graph_result(
+            str(alert_data.get("payload") or alert_data.get("eventIds") or "").strip(),
+            state,
+            agent_definition.name if agent_definition else "",
+        )
+
+    async def _run_planner_graph(
+        self,
+        agent_definition,
+        alert_data: dict[str, Any],
+        history: list[dict[str, str]] | None = None,
+        cancel_event=None,
+    ) -> dict[str, Any]:
+        from pydantic import BaseModel, Field
+        from langchain_openai import ChatOpenAI
+        from sentinelflow.agent.prompts import DEFAULT_COMMAND_SYSTEM_PROMPT, DEFAULT_ALERT_SYSTEM_PROMPT
+        from langchain_core.messages import SystemMessage, HumanMessage
+
+        class PlannerResult(BaseModel):
+            strategy: str = Field(description="The strategy to handle the task: 'self_handle', 'finish', 'self_execute', 'delegate', 'workflow', or 'direct'")
+            response: str = Field(description="Direct response to the user, if strategy is self_handle or finish", default="")
+            worker: str = Field(description="Target sub-agent to delegate to, if strategy is delegate", default="")
+            task_prompt: str = Field(description="The instructions to send to the worker, if strategy is delegate", default="")
+            reason: str = Field(description="The internal reasoning for this decision.", default="")
+            workflow_id: str = Field(description="Target workflow id if strategy is workflow", default="")
+
+        config = load_runtime_config()
+        effective_config = agent_definition.resolve_runtime_config(config) if agent_definition else config
+        try:
+            llm_instance = ChatOpenAI(
+                model=effective_config.llm_model,
+                api_key=effective_config.llm_api_key,
+                base_url=effective_config.llm_api_base_url,
+                temperature=effective_config.llm_temperature,
+                timeout=effective_config.llm_timeout,
+            )
+            llm = llm_instance.with_structured_output(PlannerResult)
+        except Exception as exc:
+            raise RuntimeError(f"模型加载失败，可能是它不支持强绑定 Function Calling({exc})。")
+
+        custom_prompt = agent_definition.prompt if agent_definition else ""
+        system_msg = SystemMessage(content=custom_prompt)
+        
+        is_human_command = alert_data.get("alert_source") == "human_command"
+        if is_human_command:
+            payload = str(alert_data.get("payload", "")).strip()
+            initial_msg = HumanMessage(content=f"请执行以下人工指令：{payload}")
+        else:
+            alert_json = json.dumps(alert_data, ensure_ascii=False, indent=2)
+            initial_msg = HumanMessage(content=f"请分析并调度以下告警：\n\n```json\n{alert_json}\n```")
+
+        messages = [system_msg] + self._build_history_messages(history or []) + [initial_msg]
+        
+        try:
+            response_obj = await llm.ainvoke(messages)
+            if hasattr(response_obj, "model_dump_json"):
+                final_response = response_obj.model_dump_json()
+            else:
+                final_response = json.dumps(dict(response_obj), ensure_ascii=False)
+        except Exception as exc:
+            raise RuntimeError(f"结构化输出解析失败 (可能是模型智商不足或配置错误): {exc}")
+
+        if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+            raise RuntimeError("用户已停止当前任务。")
+
+        return {
+            "final_response": final_response,
+            "success": True,
+            "route": "structured_planner",
+            "messages": []
+        }
+
+    def _build_worker_catalog(self, workers: list) -> str:
+        if not workers:
+            return "（当前没有可用子 Agent）"
+        items: list[str] = []
+        for worker in workers:
+            items.append(f"- name: {worker.name}\n  description: {worker.description or worker.name}")
+        return "\n".join(items)
+
+    def _build_primary_prompt(self, primary_agent, appendix_template: str, workers: list) -> str:
+        base_prompt = primary_agent.prompt.strip() if primary_agent and primary_agent.prompt.strip() else ""
+        appendix = appendix_template.replace("{worker_catalog}", self._build_worker_catalog(workers))
+        return f"{base_prompt}\n\n{appendix}".strip() if base_prompt else appendix
+
+    def _build_workflow_catalog(self, workflows: list) -> str:
+        if not workflows:
+            return "（当前没有可用 Agent Workflow）"
+        items: list[str] = []
+        for workflow in workflows:
+            items.append(
+                "\n".join(
+                    [
+                        f"- id: {workflow.id}",
+                        f"  name: {workflow.name}",
+                        f"  description: {workflow.description or workflow.name}",
+                        f"  scenarios: {', '.join(workflow.scenarios) if workflow.scenarios else '未设置'}",
+                        f"  recommended_action: {workflow.recommended_action}",
+                        f"  selection_keywords: {', '.join(workflow.selection_keywords) if workflow.selection_keywords else '未设置'}",
+                        f"  step_agents: {', '.join(step.agent for step in workflow.steps) if workflow.steps else '无步骤'}",
+                    ]
+                )
+            )
+        return "\n".join(items)
+
+    def _build_primary_workflow_prompt(self, primary_agent, workflows: list) -> str:
+        base_prompt = primary_agent.prompt.strip() if primary_agent and primary_agent.prompt.strip() else ""
+        appendix = PRIMARY_ALERT_WORKFLOW_SELECTION_APPENDIX.replace(
+            "{workflow_catalog}",
+            self._build_workflow_catalog(workflows),
+        )
+        return f"{base_prompt}\n\n{appendix}".strip() if base_prompt else appendix
+
+    def _build_primary_synthesis_prompt(self, primary_agent, appendix_template: str) -> str:
+        base_prompt = primary_agent.prompt.strip() if primary_agent and primary_agent.prompt.strip() else ""
+        return f"{base_prompt}\n\n{appendix_template}".strip() if base_prompt else appendix_template
+
+    async def _summarize_worker_command(
+        self,
+        primary_agent,
+        command_text: str,
+        step_results: list[dict[str, Any]],
+        cancel_event=None,
+    ) -> dict[str, Any]:
+        latest = step_results[-1] if step_results else {}
+        synthesis_agent = replace(
+            primary_agent,
+            prompt=self._build_primary_synthesis_prompt(primary_agent, PRIMARY_COMMAND_SYNTHESIS_APPENDIX),
+        )
+        synthesis_payload = {
+            "eventIds": f"SUM-{uuid4().hex[:12].upper()}",
+            "alert_name": "子 Agent 执行结果汇总",
+            "payload": json.dumps(
+                {
+                    "user_command": command_text,
+                    "step_results": step_results,
+                    "latest_worker_agent": latest.get("worker_agent", ""),
+                    "latest_worker_final_response": latest.get("final_response", ""),
+                },
+                ensure_ascii=False,
+            ),
+            "alert_source": "agent_synthesis",
+        }
+        return await self._run_agent_graph(synthesis_agent, synthesis_payload, history=[], cancel_event=cancel_event)
+
+    async def _summarize_worker_alert(
+        self,
+        primary_agent,
+        alert: dict[str, Any],
+        action_hint: str | None,
+        step_results: list[dict[str, Any]],
+        cancel_event=None,
+    ) -> dict[str, Any]:
+        latest = step_results[-1] if step_results else {}
+        synthesis_agent = replace(
+            primary_agent,
+            prompt=self._build_primary_synthesis_prompt(primary_agent, PRIMARY_ALERT_SYNTHESIS_APPENDIX),
+        )
+        synthesis_payload = {
+            **dict(alert),
+            "handling_intent": action_hint or "",
+            "payload": json.dumps(
+                {
+                    "original_alert": alert,
+                    "step_results": step_results,
+                    "latest_worker_agent": latest.get("worker_agent", ""),
+                    "latest_worker_final_response": latest.get("final_response", ""),
+                },
+                ensure_ascii=False,
+            ),
+            "alert_source": "agent_synthesis",
+        }
+        return await self._run_agent_graph(synthesis_agent, synthesis_payload, history=[], cancel_event=cancel_event)
+
+    def _build_command_planner_payload(self, command_text: str, step_results: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "eventIds": f"PLAN-{uuid4().hex[:12].upper()}",
+            "alert_name": "主 Agent 调度",
+            "payload": json.dumps(
+                {
+                    "original_command": command_text,
+                    "completed_steps": step_results,
+                },
+                ensure_ascii=False,
+            ),
+            "alert_source": "human_command",
+        }
+
+    def _build_command_self_execute_payload(self, command_text: str, step_results: list[dict[str, Any]]) -> dict[str, Any]:
+        if not step_results:
+            payload = command_text
+        else:
+            payload = json.dumps(
+                {
+                    "original_command": command_text,
+                    "completed_steps": step_results,
+                    "instruction": "请结合上面的原始任务和已完成步骤结果，必要时继续使用你自己的技能，并直接给用户最终回复。",
+                },
+                ensure_ascii=False,
+            )
+        return {
+            "eventIds": f"CMD-{uuid4().hex[:12].upper()}",
+            "alert_name": "人工指令",
+            "payload": payload,
+            "alert_source": "human_command",
+        }
+
+    def _build_alert_planner_payload(self, alert: dict[str, Any], action_hint: str | None, step_results: list[dict[str, Any]]) -> dict[str, Any]:
+        planner_alert = dict(alert)
+        planner_alert["handling_intent"] = action_hint or ""
+        planner_alert["payload"] = json.dumps(
+            {
+                "original_alert": alert,
+                "handling_intent": action_hint or "",
+                "completed_steps": step_results,
+            },
+            ensure_ascii=False,
+        )
+        return planner_alert
+
+    def _build_alert_self_execute_payload(
+        self,
+        alert: dict[str, Any],
+        action_hint: str | None,
+        step_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not step_results:
+            delegated_alert = dict(alert)
+            if action_hint:
+                delegated_alert["handling_intent"] = action_hint
+            return delegated_alert
+        delegated_alert = dict(alert)
+        delegated_alert["handling_intent"] = action_hint or ""
+        delegated_alert["payload"] = json.dumps(
+            {
+                "original_alert": alert,
+                "handling_intent": action_hint or "",
+                "completed_steps": step_results,
+                "instruction": "请结合上面的原始告警和已完成步骤结果，必要时继续使用你自己的技能，并直接给出最终值班结论。",
+            },
+            ensure_ascii=False,
+        )
+        return delegated_alert
+
+    def _build_workflow_selection_payload(self, alert: dict[str, Any], workflows: list) -> dict[str, Any]:
+        return {
+            **dict(alert),
+            "payload": json.dumps(
+                {
+                    "original_alert": alert,
+                    "workflow_candidates": [
+                        {
+                            "id": workflow.id,
+                            "name": workflow.name,
+                            "description": workflow.description,
+                            "scenarios": workflow.scenarios,
+                            "selection_keywords": workflow.selection_keywords,
+                            "recommended_action": workflow.recommended_action,
+                        }
+                        for workflow in workflows
+                    ],
+                    "instruction": "请在这些固定 Agent Workflow 中选出最适合当前任务/告警场景的一条。",
+                },
+                ensure_ascii=False,
+            ),
+            "alert_source": "workflow_selection",
+        }
+
+    def _compact_worker_result(
+        self,
+        worker_name: str,
+        task_prompt: str,
+        reason: str,
+        worker_result: dict[str, Any],
+        step_index: int,
+    ) -> dict[str, Any]:
+        return {
+            "step": step_index,
+            "worker_agent": worker_name,
+            "task_prompt": task_prompt,
+            "delegation_reason": reason,
+            "route": worker_result.get("route", ""),
+            "final_response": worker_result.get("final_response", ""),
+            "tool_calls": worker_result.get("tool_calls", []),
+            "messages": worker_result.get("messages", []),
+            "success": worker_result.get("success", True),
+            "disposition": worker_result.get("disposition", ""),
+            "reason": worker_result.get("reason", ""),
+            "evidence": worker_result.get("evidence", []),
+            "actions": worker_result.get("actions", {}),
+        }
+
+    def _should_use_orchestrator(self, primary_agent, workers: list) -> bool:
+        if primary_agent is None or primary_agent.role != "primary":
+            return False
+        if not workers:
+            return False
+        return True
+
+    def _resolve_worker_max_steps(self, primary_agent) -> int:
+        raw_value = getattr(primary_agent, "worker_max_steps", 3)
+        if not isinstance(raw_value, int):
+            return 3
+        return max(1, raw_value)
+
+    def _serialize_orchestrator_result(
+        self,
+        final_state: dict[str, Any],
+        alert_data: dict[str, Any],
+        primary_agent,
+        action_hint: str | None,
+    ) -> dict[str, Any]:
+        """Deserialize the completed OrchestratorState into a result dict."""
+        messages = final_state.get("messages", [])
+
+        # Final supervisor response = last AI message with non-empty content
+        final_text = ""
+        for msg in reversed(messages):
+            msg_type = getattr(msg, "type", "")
+            content = getattr(msg, "content", "")
+            if msg_type == "ai" and content:
+                final_text = _clean_model_text(content)
+                break
+
+        # Worker results surfaced from ToolMessages
+        worker_results: list[dict[str, Any]] = []
+        for msg in messages:
+            try:
+                from langchain_core.messages import ToolMessage
+                if not isinstance(msg, ToolMessage):
+                    continue
+            except ModuleNotFoundError:
+                pass
+            content = getattr(msg, "content", "")
+            if not isinstance(content, str):
+                continue
+            try:
+                result = json.loads(content)
+                if isinstance(result, dict) and "worker" in result:
+                    worker_results.append(result)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Tool calls summary for upstream compatibility
+        tool_calls: list[dict[str, Any]] = []
+        for msg in messages:
+            for tc in (getattr(msg, "tool_calls", None) or []):
+                if isinstance(tc, dict):
+                    tool_calls.append(tc)
+
+        # Serialized message list
+        serialized_messages: list[dict[str, Any]] = []
+        for msg in messages:
+            msg_type = getattr(msg, "type", msg.__class__.__name__.lower())
+            content = getattr(msg, "content", "")
+            if isinstance(content, str):
+                content = _clean_model_text(content)
+            item: dict[str, Any] = {"type": msg_type, "content": content}
+            if getattr(msg, "tool_calls", None):
+                item["tool_calls"] = msg.tool_calls
+            if getattr(msg, "name", None):
+                item["name"] = msg.name
+            serialized_messages.append(item)
+
+        return {
+            "source": str(alert_data.get("payload") or alert_data.get("eventIds") or "").strip(),
+            "agent_name": primary_agent.name if primary_agent else "",
+            "final_response": final_text,
+            "messages": serialized_messages,
+            "tool_calls": tool_calls,
+            "event_id_ref": str(alert_data.get("eventIds", "")).strip(),
+            "orchestrated": True,
+            "orchestration_strategy": "subgraph_supervisor",
+            "primary_agent": primary_agent.name if primary_agent else "",
+            "worker_results": worker_results,
+            "worker_agent": worker_results[-1]["worker"] if worker_results else "",
+            "success": bool(final_text),
+        }
+
+    async def _orchestrate_command(
+        self,
+        primary_agent,
+        workers: list,
+        command_text: str,
+        history: list[dict[str, str]] | None,
+        cancel_event=None,
+        status_callback: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        from sentinelflow.agent.orchestrator_graph import build_orchestrator_graph
+
+        config = load_runtime_config()
+        effective_config = primary_agent.resolve_runtime_config(config)
+        max_steps = self._resolve_worker_max_steps(primary_agent)
+        alert_data = {
+            "eventIds": f"CMD-{uuid4().hex[:12].upper()}",
+            "alert_name": "人工指令",
+            "payload": command_text,
+            "alert_source": "human_command",
+        }
+        system_prompt = self._build_primary_prompt(
+            primary_agent, PRIMARY_COMMAND_ORCHESTRATION_APPENDIX, workers
+        )
+        if status_callback:
+            status_callback("正在构建多 Agent 编排图...")
+
+        orchestrator = build_orchestrator_graph(
+            primary_agent,
+            workers,
+            self.project_root,
+            self.skill_runtime,
+            effective_config,
+            alert_data=alert_data,
+            cancel_event=cancel_event,
+        )
+        initial_state = {
+            "alert_data": alert_data,
+            "action_hint": "",
+            "entry_type": "conversation",
+            "messages": [],
+            "conversation_history": list(history or []),
+            "worker_results": [],
+            "system_prompt_override": system_prompt,
+            "cancel_event": cancel_event,
+        }
+        if status_callback:
+            status_callback("主 Agent 正在分析任务并调度子 Agent...")
+        final_state = await orchestrator.ainvoke(
+            initial_state,
+            {"recursion_limit": max(10, max_steps * 4 + 4)},
+        )
+        return self._serialize_orchestrator_result(final_state, alert_data, primary_agent, action_hint=None)
+
+    async def _orchestrate_alert(
+        self,
+        primary_agent,
+        workers: list,
+        alert: dict[str, Any],
+        action_hint: str | None,
+        cancel_event=None,
+        status_callback: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        from sentinelflow.agent.orchestrator_graph import build_orchestrator_graph
+
+        config = load_runtime_config()
+        effective_config = primary_agent.resolve_runtime_config(config)
+        max_steps = self._resolve_worker_max_steps(primary_agent)
+
+        alert_data = dict(alert)
+        if action_hint:
+            alert_data["handling_intent"] = action_hint
+
+        system_prompt = self._build_primary_prompt(
+            primary_agent, PRIMARY_ALERT_ORCHESTRATION_APPENDIX, workers
+        )
+        orchestrator = build_orchestrator_graph(
+            primary_agent,
+            workers,
+            self.project_root,
+            self.skill_runtime,
+            effective_config,
+            alert_data=alert_data,
+            cancel_event=cancel_event,
+        )
+        initial_state = {
+            "alert_data": alert_data,
+            "action_hint": action_hint or "",
+            "entry_type": "alert",
+            "messages": [],
+            "conversation_history": [],
+            "worker_results": [],
+            "system_prompt_override": system_prompt,
+            "cancel_event": cancel_event,
+        }
+        if status_callback:
+            status_callback("主 Agent 正在分析告警并调度子 Agent...")
+        final_state = await orchestrator.ainvoke(
+            initial_state,
+            {"recursion_limit": max(10, max_steps * 4 + 4)},
+        )
+        graph_result = self._serialize_orchestrator_result(final_state, alert, primary_agent, action_hint)
+        return self._serialize_alert_result(alert, graph_result, action_hint)
+
+
+    async def run_command(
+        self,
+        command_text: str,
+        history: list[dict[str, str]] | None = None,
+        cancel_event=None,
+        agent_name: str | None = None,
+        status_callback: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        config = load_runtime_config()
+        agent_definition = resolve_default_agent(self.agent_root, agent_name)
+        workers = self._resolve_worker_candidates(agent_definition, entry_type="conversation")
+        if self._should_use_orchestrator(agent_definition, workers):
+            return await self._orchestrate_command(agent_definition, workers, command_text, history, cancel_event, status_callback=status_callback)
+        alert = {
+            "eventIds": f"CMD-{uuid4().hex[:12].upper()}",
+            "alert_name": "人工指令",
+            "payload": command_text,
+            "alert_source": "human_command",
+        }
+        return await self._run_agent_graph(agent_definition, alert, history=history, cancel_event=cancel_event)
+
+    async def run_alert(
+        self,
+        alert: dict[str, Any],
+        action_hint: str | None = None,
+        cancel_event=None,
+        agent_name: str | None = None,
+        status_callback: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        agent_definition = resolve_default_agent(self.agent_root, agent_name)
+        workers = self._resolve_worker_candidates(agent_definition, entry_type="alert")
+        if self._should_use_orchestrator(agent_definition, workers):
+            return await self._orchestrate_alert(agent_definition, workers, alert, action_hint, cancel_event, status_callback=status_callback)
+        alert_payload = dict(alert)
+        if action_hint:
+            alert_payload["handling_intent"] = action_hint
+        serialized = await self._run_agent_graph(agent_definition, alert_payload, history=[], cancel_event=cancel_event)
+        return self._serialize_alert_result(alert, serialized, action_hint)
+
+    async def resolve_alert_workflow(self, alert: dict[str, Any], workflow_root: Path) -> tuple[str | None, dict[str, Any]]:
+        workflows = [workflow for workflow in list_agent_workflows(workflow_root) if workflow.enabled]
+        if not workflows:
+            return None, {"strategy": "direct", "reason": "当前没有可用的 Agent Workflow。"}
+
+        primary_agent = resolve_default_agent(self.agent_root, None)
+        if primary_agent is None or primary_agent.role != "primary":
+            return None, {"strategy": "direct", "reason": "当前没有可用主 Agent。"}
+
+        if not self.is_configured(primary_agent.name):
+            fallback = workflows[0]
+            return fallback.id, {"strategy": "workflow", "workflow_id": fallback.id, "reason": "主 Agent 未配置，回退到默认 workflow。"}
+
+        available, _reason = self.is_available()
+        if not available:
+            fallback = workflows[0]
+            return fallback.id, {"strategy": "workflow", "workflow_id": fallback.id, "reason": "Agent Runtime 不可用，回退到默认 workflow。"}
+
+        planner_agent = replace(
+            primary_agent,
+            prompt=self._build_primary_workflow_prompt(primary_agent, workflows),
+        )
+        planner_result = await self._run_planner_graph(
+            planner_agent,
+            self._build_workflow_selection_payload(alert, workflows),
+            history=[],
+            cancel_event=None,
+        )
+        try:
+            plan = json.loads(str(planner_result.get("final_response", "{}")))
+        except (json.JSONDecodeError, TypeError):
+            plan = {}
+        strategy = str(plan.get("strategy", "")).strip()
+        workflow_id = str(plan.get("workflow_id", "")).strip()
+        workflow = next((item for item in workflows if item.id == workflow_id), None)
+        if strategy == "workflow" and workflow is not None:
+            return workflow.id, plan
+        if strategy == "direct":
+            return None, {
+                "strategy": "direct",
+                "reason": str(plan.get("reason", "")).strip() or "主 Agent 判断当前任务更适合自由 ReAct 处理。",
+            }
+
+        fallback = workflows[0]
+        return fallback.id, {
+            "strategy": "workflow",
+            "workflow_id": fallback.id,
+            "reason": str(plan.get("reason", "")).strip() or "主 Agent 未命中明确 workflow，回退到默认 workflow。",
+        }
+
+    def _serialize_graph_result(self, source: str, state: dict[str, Any], agent_name: str = "") -> dict[str, Any]:
+        messages = state.get("messages", [])
+        final_text = ""
+        serialized_messages: list[dict[str, Any]] = []
+        tool_calls: list[dict[str, Any]] = []
+
+        for msg in messages:
+            msg_type = getattr(msg, "type", msg.__class__.__name__.lower())
+            content = getattr(msg, "content", "")
+            if isinstance(content, str):
+                content = _clean_model_text(content)
+            item: dict[str, Any] = {"type": msg_type, "content": content}
+            if getattr(msg, "tool_calls", None):
+                item["tool_calls"] = msg.tool_calls
+                tool_calls.extend(msg.tool_calls)
+            if getattr(msg, "name", None):
+                item["name"] = msg.name
+            serialized_messages.append(item)
+            if msg_type == "ai" and content:
+                final_text = content
+
+        return {
+            "source": source,
+            "agent_name": agent_name,
+            "final_response": final_text,
+            "messages": serialized_messages,
+            "tool_calls": tool_calls,
+            "event_id_ref": state.get("event_id_ref", ""),
+        }
+
+    def _serialize_alert_result(
+        self,
+        alert: dict[str, Any],
+        graph_result: dict[str, Any],
+        action_hint: str | None,
+    ) -> dict[str, Any]:
+        skill_runs = self._extract_skill_runs(graph_result)
+        fallback_judgment = self.triage_service.analyze_alert(alert)
+        final_text = str(graph_result.get("final_response", "")).strip()
+        disposition = self._infer_disposition(final_text, fallback_judgment.disposition.value)
+        summary = self._infer_summary(final_text, fallback_judgment.summary)
+        reason = self._infer_reason(final_text, alert, fallback_judgment)
+        if not summary or summary in {"--", "-", "—"}:
+            summary = reason or fallback_judgment.summary
+        evidence = self._infer_evidence(final_text, alert, fallback_judgment)
+        enrichment = self._first_enrichment_payload(skill_runs)
+        closure_result = self._first_closure_payload(skill_runs)
+        actions = self._build_actions(skill_runs)
+        closure_success = bool(closure_result) and not bool(closure_result.get("error"))
+        disposal_success = any(not bool(payload.get("error")) for payload in actions.values() if isinstance(payload, dict))
+        success = closure_success or (action_hint == "triage_dispose" and disposal_success)
+
+        return {
+            **graph_result,
+            "event_ids": str(alert.get("eventIds", "")).strip(),
+            "disposition": disposition,
+            "summary": summary,
+            "reason": reason,
+            "evidence": evidence,
+            "memo": self._infer_closure_field(skill_runs, "memo", self.triage_service.build_memo(summary)),
+            "detail_msg": self._infer_closure_field(skill_runs, "detailMsg", self._default_detail_msg(disposition)),
+            "closure_status": self._infer_closure_field(skill_runs, "status", self._default_closure_status(disposition)),
+            "enrichment": enrichment,
+            "closure_result": closure_result,
+            "actions": actions,
+            "success": success,
+            "execution_mode": "agent",
+            "used_agent": True,
+            "has_close_action": bool(closure_result),
+            "has_disposal_action": bool(actions),
+        }
+
+    def _extract_skill_runs(self, graph_result: dict[str, Any]) -> list[dict[str, Any]]:
+        tool_calls = [item for item in graph_result.get("tool_calls", []) if isinstance(item, dict)]
+        tool_messages = [
+            item
+            for item in graph_result.get("messages", [])
+            if isinstance(item, dict) and str(item.get("type", "")).strip() == "tool"
+        ]
+        runs: list[dict[str, Any]] = []
+        tool_index = 0
+        for call in tool_calls:
+            if str(call.get("name", "")).strip() != "execute_skill":
+                continue
+            args = call.get("args", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {}
+            if not isinstance(args, dict):
+                args = {}
+            skill_name = str(args.get("skill_name", "")).strip()
+            arguments = args.get("arguments", {})
+            if not isinstance(arguments, dict):
+                arguments = {}
+
+            payload: dict[str, Any] = {}
+            while tool_index < len(tool_messages):
+                tool_message = tool_messages[tool_index]
+                tool_index += 1
+                content = tool_message.get("content", "")
+                if isinstance(content, str):
+                    try:
+                        decoded = json.loads(content)
+                    except json.JSONDecodeError:
+                        decoded = {"raw": content}
+                elif isinstance(content, dict):
+                    decoded = content
+                else:
+                    decoded = {"result": content}
+                if isinstance(decoded, dict):
+                    payload = decoded
+                break
+
+            merged_payload = dict(payload)
+            for key, value in arguments.items():
+                merged_payload.setdefault(key, value)
+            runs.append(
+                {
+                    "skill_name": skill_name,
+                    "arguments": arguments,
+                    "payload": merged_payload,
+                    "success": not bool(merged_payload.get("error")),
+                }
+            )
+        return runs
+
+    def _build_actions(self, skill_runs: list[dict[str, Any]]) -> dict[str, Any]:
+        actions: dict[str, Any] = {}
+        for run in skill_runs:
+            skill_name = str(run.get("skill_name", "")).strip()
+            if not skill_name or self._is_closure_run(run) or self._is_enrichment_run(run):
+                continue
+            payload = run.get("payload", {})
+            if isinstance(payload, dict) and payload:
+                actions[skill_name.replace("-", "_")] = payload
+        return actions
+
+    def _first_closure_payload(self, skill_runs: list[dict[str, Any]]) -> dict[str, Any]:
+        for run in skill_runs:
+            if self._is_closure_run(run):
+                payload = run.get("payload", {})
+                return payload if isinstance(payload, dict) else {}
+        return {}
+
+    def _first_enrichment_payload(self, skill_runs: list[dict[str, Any]]) -> dict[str, Any]:
+        for run in skill_runs:
+            if self._is_enrichment_run(run):
+                payload = run.get("payload", {})
+                return payload if isinstance(payload, dict) else {}
+        return {}
+
+    def _is_closure_run(self, run: dict[str, Any]) -> bool:
+        payload = run.get("payload", {})
+        arguments = run.get("arguments", {})
+        payload = payload if isinstance(payload, dict) else {}
+        arguments = arguments if isinstance(arguments, dict) else {}
+        combined_keys = set(payload.keys()) | set(arguments.keys())
+        required = {"status", "memo", "detailMsg"}
+        return required.issubset(combined_keys)
+
+    def _is_enrichment_run(self, run: dict[str, Any]) -> bool:
+        if self._is_closure_run(run):
+            return False
+        payload = run.get("payload", {})
+        arguments = run.get("arguments", {})
+        payload = payload if isinstance(payload, dict) else {}
+        arguments = arguments if isinstance(arguments, dict) else {}
+        combined_keys = set(payload.keys()) | set(arguments.keys())
+        ip_markers = {"ip", "source_ip", "sip", "target_ip", "dest_ip", "dip"}
+        detail_markers = {"country", "province", "city", "asn", "isp", "risk_level"}
+        return bool(combined_keys & ip_markers) and bool(combined_keys & detail_markers)
+
+    def _infer_disposition(self, final_text: str, fallback: str) -> str:
+        normalized = _clean_model_text(final_text).replace(" ", "")
+        if any(keyword in normalized for keyword in ("非真实攻击", "不是真实攻击", "并非真实攻击", "不是攻击")):
+            if "误报" in normalized:
+                return "false_positive"
+            return "business_trigger"
+        if any(keyword in normalized for keyword in ("规则误报", "误报")):
+            return "false_positive"
+        if any(keyword in normalized for keyword in ("业务触发", "测试触发", "正常业务", "测试流量", "业务流量", "业务测试")):
+            return "business_trigger"
+        if any(keyword in normalized for keyword in ("真实攻击", "恶意攻击", "确认攻击", "高危攻击")):
+            return "true_attack"
+        return fallback or "unknown"
+
+    def _infer_summary(self, final_text: str, fallback: str) -> str:
+        for line in final_text.splitlines():
+            stripped = _normalize_markdown_line(line)
+            if not stripped:
+                continue
+            if any(marker in stripped for marker in ("最终分类", "简短理由", "关键依据", "执行结果")):
+                continue
+            if stripped in {"--", "-", "—"}:
+                continue
+            if stripped:
+                return stripped[:120]
+        return fallback
+
+    def _infer_reason(self, final_text: str, alert: dict[str, Any], fallback_judgment) -> str:
+        for raw_line in final_text.splitlines():
+            normalized = _normalize_markdown_line(raw_line)
+            if not normalized or normalized in {"--", "-", "—"}:
+                continue
+            lowered = normalized.lower()
+            if any(marker in lowered for marker in ("简短理由", "原因", "理由")):
+                parts = re.split(r"[:：]", normalized, maxsplit=1)
+                candidate = parts[1].strip() if len(parts) > 1 else normalized
+                candidate = candidate.replace("简短理由", "").replace("理由", "").replace("原因", "").strip("：: ").strip()
+                if candidate and candidate not in {"--", "-", "—"}:
+                    return candidate[:120]
+
+        current = str(alert.get("current_judgment", "")).strip()
+        history = str(alert.get("history_judgment", "")).strip()
+        alert_name = str(alert.get("alert_name", "")).strip() or "该告警"
+        if current:
+            return f"{alert_name} 的当前研判信息显示：{current[:90]}"
+        if history:
+            return f"{alert_name} 的历史处置记录显示：{history[:90]}"
+        return fallback_judgment.summary
+
+    def _infer_evidence(self, final_text: str, alert: dict[str, Any], fallback_judgment) -> list[str]:
+        evidence: list[str] = []
+        capture = False
+        for raw_line in final_text.splitlines():
+            normalized = _normalize_markdown_line(raw_line)
+            if not normalized:
+                if capture and evidence:
+                    break
+                continue
+            lowered = normalized.lower()
+            if any(marker in lowered for marker in ("关键依据", "依据", "证据")):
+                capture = True
+                parts = re.split(r"[:：]", normalized, maxsplit=1)
+                trailing = parts[1].strip() if len(parts) > 1 else ""
+                trailing = trailing.replace("关键依据", "").replace("依据", "").replace("证据", "").strip("：: ").strip()
+                if trailing and trailing not in {"--", "-", "—"}:
+                    evidence.append(trailing[:160])
+                continue
+            if capture:
+                if any(marker in normalized for marker in ("执行结果", "最终分类", "简短理由")):
+                    break
+                if normalized in {"--", "-", "—"}:
+                    continue
+                evidence.append(normalized[:160])
+                if len(evidence) >= 3:
+                    break
+
+        if evidence:
+            return evidence[:3]
+
+        fallback = list(getattr(fallback_judgment, "evidence", []) or [])
+        if fallback:
+            return [str(item).strip()[:160] for item in fallback if str(item).strip()][:3]
+
+        current = str(alert.get("current_judgment", "")).strip()
+        history = str(alert.get("history_judgment", "")).strip()
+        result: list[str] = []
+        if current:
+            result.append(f"当前研判：{current[:140]}")
+        if history:
+            result.append(f"历史处置：{history[:140]}")
+        return result[:3]
+
+    def _infer_closure_field(self, skill_runs: list[dict[str, Any]], field_name: str, fallback: str) -> str:
+        for run in skill_runs:
+            if not self._is_closure_run(run):
+                continue
+            payload = run.get("payload", {})
+            if isinstance(payload, dict):
+                value = str(payload.get(field_name, "")).strip()
+                if value:
+                    return value
+            arguments = run.get("arguments", {})
+            if isinstance(arguments, dict):
+                value = str(arguments.get(field_name, "")).strip()
+                if value:
+                    return value
+        return fallback
+
+    def _default_detail_msg(self, disposition: str) -> str:
+        if disposition == "false_positive":
+            return "规则误报"
+        return "测试/业务触发" if disposition == "business_trigger" else "真实攻击"
+
+    def _default_closure_status(self, disposition: str) -> str:
+        return "4" if disposition == "false_positive" else "6"
+
+    def _build_history_messages(self, history: list[dict[str, str]]) -> list[Any]:
+        try:
+            from langchain_core.messages import AIMessage, HumanMessage
+        except ModuleNotFoundError:
+            return []
+
+        messages: list[Any] = []
+        for item in history[-12:]:
+            role = str(item.get("role", "")).strip().lower()
+            content = str(item.get("content", "")).strip()
+            if not content:
+                continue
+            if role == "user":
+                messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                messages.append(AIMessage(content=content))
+        return messages

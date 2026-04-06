@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+env/
+venv/
+.pytest_cache/
+.DS_Store
+.env
+.sentinelflow/
+webui/node_modules/
+webui/dist/
+runtime/.sentinelflow/
+runtime/.hisoc/
+runtime/*.db
+runtime/*.sqlite

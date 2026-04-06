@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="sentinelflow-favicon-gradient" x1="12" y1="10" x2="52" y2="54" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14B8A6" />
+      <stop offset="1" stop-color="#0EA5E9" />
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#sentinelflow-favicon-gradient)" />
+  <path
+    d="M32 15L44 20V29C44 37.5 38.8 44.9 32 48C25.2 44.9 20 37.5 20 29V20L32 15Z"
+    stroke="white"
+    stroke-width="3.5"
+    stroke-linejoin="round"
+  />
+</svg>

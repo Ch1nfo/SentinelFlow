@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinelflow"
+version = "0.1.0"
+description = "SentinelFlow platform runtime and local development tooling."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "SentinelFlow contributors" }
+]
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn>=0.30,<1.0",
+  "pydantic>=2.9,<3.0",
+  "requests>=2.32,<3.0",
+  "python-dotenv>=1.0,<2.0",
+  "langchain-core>=0.3,<1.0",
+  "langchain-openai>=0.2,<1.0",
+  "langgraph>=0.2,<1.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<9.0"
+]
+
+[project.scripts]
+sentinelflow = "sentinelflow.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "runtime"}
+
+[tool.setuptools.packages.find]
+where = ["runtime"]
+include = ["sentinelflow*"]

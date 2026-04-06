@@ -1,0 +1,3 @@
+name: soc-duty-agent
+description: SentinelFlow demo coordination agent for notifications and human follow-up.
+mode: subagent

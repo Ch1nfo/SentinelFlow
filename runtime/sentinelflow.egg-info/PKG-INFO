@@ -1,0 +1,100 @@
+Metadata-Version: 2.4
+Name: sentinelflow
+Version: 0.1.0
+Summary: SentinelFlow platform runtime and local development tooling.
+Author: SentinelFlow contributors
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi<1.0,>=0.115
+Requires-Dist: uvicorn<1.0,>=0.30
+Requires-Dist: pydantic<3.0,>=2.9
+Requires-Dist: requests<3.0,>=2.32
+Requires-Dist: python-dotenv<2.0,>=1.0
+Requires-Dist: langchain-core<1.0,>=0.3
+Requires-Dist: langchain-openai<1.0,>=0.2
+Requires-Dist: langgraph<1.0,>=0.2
+Provides-Extra: dev
+Requires-Dist: pytest<9.0,>=8.0; extra == "dev"
+
+## SentinelFlow
+
+SentinelFlow is a full-stack security workflow platform with:
+
+- a Python runtime and API under `runtime/`
+- a React WebUI under `webui/`
+- local developer entrypoints under `scripts/`
+- sample tasks and plugin assets under `examples/`
+
+The repository is organized so open-source contributors can understand the product surface quickly while still having a simple local startup flow.
+
+## Repository Layout
+
+```text
+.
+├─ pyproject.toml          # Python package and CLI metadata
+├─ scripts/                # Local dev entrypoints and utility scripts
+├─ runtime/                # Python runtime package and tests
+│  ├─ sentinelflow/
+│  └─ tests/
+├─ webui/                  # React + Vite frontend
+└─ examples/               # Example tasks, agents, and plugin assets
+```
+
+## Quick Start
+
+### 1. Install Python dependencies
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+### 2. Install WebUI dependencies
+
+```bash
+cd webui
+pnpm install
+cd ..
+```
+
+### 3. Run the full local stack
+
+```bash
+python scripts/dev.py dev
+```
+
+This starts:
+
+- backend API on `http://127.0.0.1:8001`
+- web UI on `http://127.0.0.1:5173`
+
+## Common Commands
+
+```bash
+python scripts/dev.py backend
+python scripts/dev.py webui-dev
+python scripts/dev.py webui-build
+python scripts/dev.py webui-serve
+```
+
+After editable installation, you can also use:
+
+```bash
+sentinelflow dev
+sentinelflow backend
+```
+
+## Open Source Structure Notes
+
+- `scripts/dev.py` is the recommended contributor entrypoint for local development.
+- `runtime/sentinelflow/cli.py` contains the actual reusable CLI logic.
+- runtime state and generated files should stay outside source control.
+- examples belong in `examples/`, not mixed into runtime code.
+
+## Contribution Priorities
+
+- keep package boundaries clear between `runtime/`, `webui/`, and `examples/`
+- avoid adding new root-level one-off scripts when a command belongs in the package CLI or `scripts/`
+- prefer standard packaging and documented entrypoints over `PYTHONPATH`-based startup
