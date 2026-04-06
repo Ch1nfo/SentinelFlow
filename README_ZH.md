@@ -260,8 +260,13 @@ pytest runtime/tests/ -v
 ### 1. 安装 Python 依赖
 
 ```bash
+# Linux/Mac
 python -m venv .venv
 source .venv/bin/activate
+pip install -e ".[dev]"
+# Windows CMD
+python -m venv .venv
+.venv\Scripts\activate.bat
 pip install -e ".[dev]"
 ```
 
@@ -278,6 +283,7 @@ cd ..
 ```bash
 cp .env.example .env
 # 编辑 .env，填写 LLM API Key、API 地址和模型名称
+# 或在WebUI中配置
 ```
 
 ### 4. 启动全栈开发环境

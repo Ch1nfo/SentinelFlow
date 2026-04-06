@@ -260,8 +260,13 @@ pytest runtime/tests/ -v
 ### 1. Install Python Dependencies
 
 ```bash
+# Linux/Mac
 python -m venv .venv
 source .venv/bin/activate
+pip install -e ".[dev]"
+# Windows CMD
+python -m venv .venv
+.venv\Scripts\activate.bat
 pip install -e ".[dev]"
 ```
 
@@ -278,6 +283,7 @@ cd ..
 ```bash
 cp .env.example .env
 # Edit .env with your LLM API key, base URL, and model name
+# Or you can config in WebUI.
 ```
 
 ### 4. Start the Full Stack
