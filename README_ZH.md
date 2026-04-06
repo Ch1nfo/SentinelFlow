@@ -31,9 +31,17 @@
 
 ## 界面预览
 
-|                        告警研判仪表板                        |                        Agent 对话面板                        |
+|                        态势总览仪表盘                        |                        Agent 对话面板                        |
 | :----------------------------------------------------------: | :----------------------------------------------------------: |
-| ![image-20260405225903594](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260406140717712.png) | ![image-20260405231100920](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260406140803364.png) |
+| ![image-20260405225720016](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405225720053.png) | ![image-20260405231100920](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260406140803364.png) |
+
+|                        告警工作台                        |                        Skills新建面板                        |
+| :----------------------------------------------------------: | :----------------------------------------------------------: |
+| ![image-20260405225903594](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405225903635.png)| ![image-20260405230107750](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405230107788.png) |
+
+|                        子Agent新建面板                         |                        Agentsflow                        |
+| :----------------------------------------------------------: | :----------------------------------------------------------: |
+| ![image-20260405230145352](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405230145399.png) | ![image-20260405230315299](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405230315341.png) |
 
 ## 功能特性
 
@@ -436,3 +444,15 @@ steps:
 ## 许可证
 
 Apache License 2.0 © SentinelFlow 贡献者
+
+## 联系方式
+
+- 📧 Email: ch1nfo@foxmail.com
+
+---
+
+<div align="center">
+
+**⭐ 如果这个项目对你有帮助，请给一个 Star！⭐**
+
+</div>

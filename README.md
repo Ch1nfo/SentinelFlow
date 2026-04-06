@@ -31,9 +31,17 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 
 ## Screenshots
 
-|                    Alert Triage Dashboard                    |                   Agent Conversation Panel                   |
+|                        Security Overview Dashboard                        |                        Agent Chat Panel                        |
 | :----------------------------------------------------------: | :----------------------------------------------------------: |
-| ![image-20260405225903594](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260406140931256.png) | ![image-20260405231100920](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260406140908416.png) |
+| ![image-20260405225720016](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405225720053.png) | ![image-20260405231100920](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260406140803364.png) |
+
+|                        Alert Triage                        |                        Skill Creation Panel                        |
+| :----------------------------------------------------------: | :----------------------------------------------------------: |
+| ![image-20260405225903594](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405225903635.png)| ![image-20260405230107750](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405230107788.png) |
+
+|                        Sub-Agent Creation Panel                         |                        Agentsflow                        |
+| :----------------------------------------------------------: | :----------------------------------------------------------: |
+| ![image-20260405230145352](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405230145399.png) | ![image-20260405230315299](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405230315341.png) |
 
 ## Features
 
@@ -436,3 +444,15 @@ For new features, please open an Issue for discussion before submitting a PR.
 ## License
 
 Apache License 2.0 © SentinelFlow contributors
+
+## Contact
+
+- 📧 Email: ch1nfo@foxmail.com
+
+---
+
+<div align="center">
+
+**⭐ If this project is helpful to you, please give it a Star! ⭐**
+
+</div>
