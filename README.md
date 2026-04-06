@@ -10,7 +10,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#)
 [![Built with LangGraph](https://img.shields.io/badge/built%20with-LangGraph-orange.svg)](https://github.com/langchain-ai/langgraph)
 
-[English](README.md) | [中文](README_ZH.md)
+English | [中文](README_ZH.md)
 
 </div>
 
