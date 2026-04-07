@@ -88,7 +88,10 @@ def _walk_path(value: Any, path: str) -> Any:
             current = current[index]
             continue
         if not isinstance(current, dict):
-            return None
+            if isinstance(current, str):
+                current = parse_jsonish(current)
+            if not isinstance(current, dict):
+                return None
         current = current.get(part)
     return current
 
