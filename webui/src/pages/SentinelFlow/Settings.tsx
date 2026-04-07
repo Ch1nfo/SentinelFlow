@@ -363,7 +363,7 @@ export default function SentinelFlowSettingsPage() {
             </button>
           </div>
           {parserSaveMessage ? <div className={`mt-4 sentinelflow-message-block ${parserSaveTone === 'success' ? 'sentinelflow-message-success' : 'sentinelflow-message-error'}`}>{parserSaveMessage}</div> : null}
-          {parserMessage && !fetchPreview ? <div className="mt-4 sentinelflow-message-block">{parserMessage}</div> : null}
+          {parserMessage ? <div className="mt-4 sentinelflow-message-block">{parserMessage}</div> : null}
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
               <div className="mb-2 text-sm font-semibold text-gray-900">当前解析规则</div>
