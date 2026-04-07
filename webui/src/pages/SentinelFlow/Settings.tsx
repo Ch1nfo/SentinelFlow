@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, type ChangeEvent } from 'react'
 import { RotateCcw, Save, Settings as SettingsIcon } from 'lucide-react'
 import {
   fetchHealth,
@@ -96,6 +96,30 @@ export default function SentinelFlowSettingsPage() {
   const [testingParse, setTestingParse] = useState(false)
   const [generatingParser, setGeneratingParser] = useState(false)
   const [fetchPreview, setFetchPreview] = useState<unknown>(null)
+  const [fetchPreviewExpanded, setFetchPreviewExpanded] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const fetchPreviewStr = fetchPreview ? JSON.stringify(fetchPreview, null, 2) : ''
+  const fetchPreviewLines = fetchPreviewStr.split('\n')
+  const isLongPreview = fetchPreviewLines.length > 20
+
+  function handleImportRuleFromFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string
+        const parsed = JSON.parse(text)
+        updateDraft('alertParserRule', parsed)
+        setParserMessage('导入规则成功，请在下方预览确认无误后点击“保存解析规则”。')
+      } catch (err) {
+        setParserMessage('导入失败：该文件不是合法的 JSON 格式。')
+      }
+    }
+    reader.readAsText(file)
+    event.target.value = ''
+  }
 
   useEffect(() => {
     if (!settings) return
@@ -332,8 +356,17 @@ export default function SentinelFlowSettingsPage() {
           {fetchMessage ? <div className={`mt-4 sentinelflow-message-block ${fetchMessageTone === 'success' ? 'sentinelflow-message-success' : 'sentinelflow-message-error'}`}>{fetchMessage}</div> : null}
           {fetchPreview ? (
             <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4">
-              <div className="mb-2 text-sm font-semibold text-gray-900">原始接口响应预览</div>
-              <pre className="overflow-x-auto whitespace-pre-wrap text-xs text-gray-700">{JSON.stringify(fetchPreview, null, 2)}</pre>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-semibold text-gray-900">原始接口响应预览</span>
+                {isLongPreview ? (
+                  <button type="button" className="text-xs font-medium text-sky-600 hover:text-sky-800" onClick={() => setFetchPreviewExpanded(!fetchPreviewExpanded)}>
+                    {fetchPreviewExpanded ? '收起' : '展开全文'}
+                  </button>
+                ) : null}
+              </div>
+              <pre className="overflow-x-auto whitespace-pre-wrap text-xs text-gray-700">
+                {fetchPreviewExpanded || !isLongPreview ? fetchPreviewStr : fetchPreviewLines.slice(0, 20).join('\n') + '\n...'}
+              </pre>
             </div>
           ) : null}
           <div className="mt-4 flex flex-wrap gap-2">
@@ -354,6 +387,10 @@ export default function SentinelFlowSettingsPage() {
           <div className="mt-4 flex flex-wrap gap-2">
             <button type="button" className="flex items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-4 py-2 text-sky-700 transition-colors hover:bg-sky-100" onClick={() => void handleGenerateParser()} disabled={generatingParser}>
               {generatingParser ? '分析中...' : '自动解析告警格式'}
+            </button>
+            <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={handleImportRuleFromFile} />
+            <button type="button" className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-gray-700 transition-colors hover:bg-gray-50" onClick={() => fileInputRef.current?.click()}>
+              导入已有规则
             </button>
             <button type="button" className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-gray-700 transition-colors hover:bg-gray-50" onClick={() => void handleTestParser()} disabled={testingParse}>
               {testingParse ? '测试中...' : '测试解析结果'}
