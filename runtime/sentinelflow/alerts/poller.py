@@ -39,7 +39,7 @@ class AlertPollingService:
         if response.get("demo_mode") and not alerts and not response.get("fallback_triggered"):
             self.dispatch_service.clear_demo_tasks()
 
-        queued_tasks, skipped, errors = await self.dispatch_service.dispatch(alerts)
+        queued_tasks, skipped, updated, completed, errors = await self.dispatch_service.dispatch(alerts)
         
         fallback_errors = []
         if response.get("fallback_triggered") and response.get("fallback_reason"):
@@ -50,6 +50,8 @@ class AlertPollingService:
         return PollingDispatchResult(
             fetched_count=len(alerts),
             queued_count=len(queued_tasks),
+            updated_count=updated,
+            completed_count=len(completed),
             skipped_count=skipped,
             failed_count=len(combined_errors),
             tasks=self.dispatch_service.list_tasks(),

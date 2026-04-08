@@ -335,6 +335,11 @@
     @apply bg-sky-50;
   }
 
+  .sentinelflow-alert-queue-scroll {
+    @apply overflow-y-auto;
+    max-height: 25rem;
+  }
+
   .sentinelflow-primary-button,
   .sentinelflow-ghost-button {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors;

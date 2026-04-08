@@ -6,6 +6,7 @@ import {
   handleAlertAction,
   type AlertActionResponse,
   type AlertTask,
+  type PollAlertsResponse,
 } from '@/api/sentinelflow'
 import JsonPreview from '@/components/sentinelflow/JsonPreview'
 import StatusBadge from '@/components/sentinelflow/StatusBadge'
@@ -21,8 +22,41 @@ function getDispositionLabel(value: string) {
   return value || '未明确'
 }
 
+function getTaskTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' {
+  if (task.status === 'failed') return 'danger'
+  if (task.status === 'running') return 'warn'
+  if (task.status === 'succeeded' || task.status === 'completed') return 'success'
+  return 'neutral'
+}
+
+function getTaskStatusLabel(task: AlertTask): string {
+  if (task.status === 'queued') return '排队中'
+  if (task.status === 'running') return '执行中'
+  if (task.status === 'completed') return '已被人工处置'
+  if (task.status === 'succeeded') return '已完成'
+  if (task.status === 'failed') return '失败'
+  return task.status
+}
+
+function toSortableTime(value: string | undefined): number {
+  const text = String(value ?? '').trim()
+  if (!text) return 0
+  const normalized = text.includes('T') ? text : text.replace(' ', 'T')
+  const timestamp = Date.parse(normalized)
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function formatAlertTime(value: string | undefined): string {
+  const text = String(value ?? '').trim()
+  return text || '未提供'
+}
+
+function getSelectedAlertPayload(task: AlertTask | null): Record<string, unknown> {
+  return (task?.payload?.alert_data as Record<string, unknown> | undefined) ?? {}
+}
+
 export default function SentinelFlowAlertsPage() {
-  const [data, setData] = useState<{ fetched_count: number; queued_count: number; skipped_count: number; failed_count: number; tasks: AlertTask[]; errors: string[] } | null>(null)
+  const [data, setData] = useState<PollAlertsResponse | null>(null)
   const [summary, setSummary] = useState<{
     judgment: {
       business_trigger: number
@@ -65,8 +99,9 @@ export default function SentinelFlowAlertsPage() {
     void loadTasks()
   }, [])
 
-  const tasks = data?.tasks ?? []
+  const tasks = [...(data?.tasks ?? [])].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
   const selectedTask = tasks.find((task) => task.task_id === selectedTaskId) ?? tasks[0] ?? null
+  const selectedPayload = getSelectedAlertPayload(selectedTask)
   const workflowSelection = (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ?? {}
   const selectedResult = (selectedTask?.last_result_data ?? {}) as Record<string, unknown>
   const selectedReason = String(selectedResult.reason ?? '').trim()
@@ -152,6 +187,8 @@ export default function SentinelFlowAlertsPage() {
           <div className="sentinelflow-inline-metrics">
             <span>拉取：{data?.fetched_count ?? 0}</span>
             <span>排队：{data?.queued_count ?? 0}</span>
+            <span>更新：{data?.updated_count ?? 0}</span>
+            <span>完成：{data?.completed_count ?? 0}</span>
             <span>跳过：{data?.skipped_count ?? 0}</span>
             <span>失败：{data?.failed_count ?? 0}</span>
             <span>已结单：{summary?.operations.closed_success ?? 0}</span>
@@ -164,28 +201,30 @@ export default function SentinelFlowAlertsPage() {
         <div className="sentinelflow-grid-2">
           <div className="sentinelflow-detail-panel">
             <h3>告警队列</h3>
-            <table className="sentinelflow-data-table">
-              <thead>
-                <tr><th>告警</th><th>事件号</th><th>状态</th><th>流转</th></tr>
-              </thead>
-              <tbody>
-                {loading ? <tr><td colSpan={4}>正在加载...</td></tr> : null}
-                {error ? <tr><td colSpan={4}>加载失败：{error}</td></tr> : null}
-                {!loading && !error && tasks.length === 0 ? <tr><td colSpan={4}>当前没有新的待处理告警任务。</td></tr> : null}
-                {!loading && !error ? tasks.map((task) => (
-                  <tr
-                    key={task.task_id}
-                    className={selectedTask?.task_id === task.task_id ? 'sentinelflow-table-row-active' : ''}
-                    onClick={() => setSelectedTaskId(task.task_id)}
-                  >
-                    <td>{task.title}</td>
-                    <td>{task.event_ids}</td>
-                    <td><StatusBadge tone={task.status === 'failed' ? 'danger' : task.status === 'running' ? 'warn' : task.status === 'succeeded' ? 'success' : 'neutral'}>{task.status}</StatusBadge></td>
-                    <td>{task.workflow_name}</td>
-                  </tr>
-                )) : null}
-              </tbody>
-            </table>
+            <div className="sentinelflow-alert-queue-scroll">
+              <table className="sentinelflow-data-table">
+                <thead>
+                  <tr><th>告警</th><th>告警时间</th><th>状态</th><th>流转</th></tr>
+                </thead>
+                <tbody>
+                  {loading ? <tr><td colSpan={4}>正在加载...</td></tr> : null}
+                  {error ? <tr><td colSpan={4}>加载失败：{error}</td></tr> : null}
+                  {!loading && !error && tasks.length === 0 ? <tr><td colSpan={4}>当前没有新的待处理告警任务。</td></tr> : null}
+                  {!loading && !error ? tasks.map((task) => (
+                    <tr
+                      key={task.task_id}
+                      className={selectedTask?.task_id === task.task_id ? 'sentinelflow-table-row-active' : ''}
+                      onClick={() => setSelectedTaskId(task.task_id)}
+                    >
+                      <td>{task.title}</td>
+                      <td>{formatAlertTime(task.alert_time)}</td>
+                      <td><StatusBadge tone={getTaskTone(task)}>{getTaskStatusLabel(task)}</StatusBadge></td>
+                      <td>{task.workflow_name}</td>
+                    </tr>
+                  )) : null}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div className="sentinelflow-detail-panel">
@@ -193,15 +232,29 @@ export default function SentinelFlowAlertsPage() {
             {selectedTask ? (
               <div className="sentinelflow-response-stack">
                 <div className="sentinelflow-response-row">
-                  <StatusBadge tone={selectedTask.status === 'failed' ? 'danger' : selectedTask.status === 'running' ? 'warn' : selectedTask.status === 'succeeded' ? 'success' : 'neutral'}>{selectedTask.status}</StatusBadge>
-                  <span>{selectedTask.event_ids}</span>
+                  <StatusBadge tone={getTaskTone(selectedTask)}>{getTaskStatusLabel(selectedTask)}</StatusBadge>
+                  <span>{formatAlertTime(selectedTask.alert_time)}</span>
                   <span>{selectedTask.workflow_name}</span>
                 </div>
                 <p className="sentinelflow-muted-text">{selectedTask.description}</p>
+                <div className="sentinelflow-context-grid">
+                  <div className="sentinelflow-context-card"><strong>告警名称</strong><span>{String(selectedPayload.alert_name ?? selectedTask.title ?? '未提供')}</span></div>
+                  <div className="sentinelflow-context-card"><strong>告警时间</strong><span>{formatAlertTime(selectedTask.alert_time)}</span></div>
+                  <div className="sentinelflow-context-card"><strong>事件号</strong><span>{selectedTask.event_ids || '未提供'}</span></div>
+                  <div className="sentinelflow-context-card"><strong>来源</strong><span>{String(selectedPayload.alert_source ?? '未提供')}</span></div>
+                  <div className="sentinelflow-context-card"><strong>源 IP</strong><span>{String(selectedPayload.sip ?? '未提供')}</span></div>
+                  <div className="sentinelflow-context-card"><strong>目的 IP</strong><span>{String(selectedPayload.dip ?? '未提供')}</span></div>
+                  <div className="sentinelflow-context-card"><strong>当前研判</strong><span>{String(selectedPayload.current_judgment ?? '未提供')}</span></div>
+                  <div className="sentinelflow-context-card"><strong>历史研判</strong><span>{String(selectedPayload.history_judgment ?? '未提供')}</span></div>
+                </div>
+                {String(selectedPayload.payload ?? '').trim() ? (
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">告警 Payload</div>
+                    <pre className="overflow-x-auto whitespace-pre-wrap text-xs leading-6 text-slate-700">{String(selectedPayload.payload ?? '')}</pre>
+                  </div>
+                ) : null}
                 <div className="sentinelflow-action-bar">
-                  <button type="button" className="sentinelflow-primary-button" onClick={() => void runAction('triage_close')} disabled={actionState.running}>研判并结单</button>
-                  <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('triage_dispose')} disabled={actionState.running}>处置并结单</button>
-                  <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('notify')} disabled={actionState.running}>通知值班</button>
+                  <button type="button" className="sentinelflow-primary-button" onClick={() => void runAction('triage_dispose')} disabled={actionState.running}>处置当前告警</button>
                   {selectedTask.status === 'failed' ? (
                     <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('retry_task')} disabled={actionState.running}>重试任务</button>
                   ) : null}

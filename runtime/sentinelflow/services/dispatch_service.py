@@ -35,6 +35,7 @@ class AlertDispatchService:
                     workflow_name TEXT,
                     title TEXT,
                     description TEXT,
+                    alert_time TEXT,
                     status TEXT,
                     retry_count INTEGER,
                     last_action TEXT,
@@ -44,49 +45,119 @@ class AlertDispatchService:
                     payload TEXT
                 )
             ''')
+            self._ensure_schema(conn)
+
+    def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(alert_tasks)").fetchall()}
+        if "alert_time" not in columns:
+            conn.execute("ALTER TABLE alert_tasks ADD COLUMN alert_time TEXT DEFAULT ''")
+            conn.commit()
 
     def _get_conn(self) -> sqlite3.Connection:
         return sqlite3.connect(str(DB_PATH), check_same_thread=False)
 
     def _row_to_task(self, row) -> AlertHandlingTask:
+        has_alert_time = len(row) > 12
+        status_index = 6 if has_alert_time else 5
+        retry_index = 7 if has_alert_time else 6
+        action_index = 8 if has_alert_time else 7
+        success_index = 9 if has_alert_time else 8
+        error_index = 10 if has_alert_time else 9
+        result_index = 11 if has_alert_time else 10
+        payload_index = 12 if has_alert_time else 11
         return AlertHandlingTask(
             task_id=row[0],
             event_ids=row[1],
             workflow_name=row[2],
             title=row[3],
             description=row[4],
-            status=row[5],
-            retry_count=row[6],
-            last_action=row[7],
-            last_result_success=bool(row[8]) if row[8] is not None else None,
-            last_result_error=row[9],
-            last_result_data=json.loads(row[10]) if row[10] else {},
-            payload=json.loads(row[11]) if row[11] else {}
+            alert_time=row[5] if has_alert_time else "",
+            status=row[status_index],
+            retry_count=row[retry_index],
+            last_action=row[action_index],
+            last_result_success=bool(row[success_index]) if row[success_index] is not None else None,
+            last_result_error=row[error_index],
+            last_result_data=json.loads(row[result_index]) if row[result_index] else {},
+            payload=json.loads(row[payload_index]) if row[payload_index] else {},
         )
 
     def _save_task(self, task: AlertHandlingTask) -> None:
         with self.lock, self._get_conn() as conn:
             conn.execute('''
                 INSERT OR REPLACE INTO alert_tasks
-                (task_id, event_ids, workflow_name, title, description, status, retry_count, last_action, last_result_success, last_result_error, last_result_data, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (task_id, event_ids, workflow_name, title, description, alert_time, status, retry_count, last_action, last_result_success, last_result_error, last_result_data, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 task.task_id, task.event_ids, task.workflow_name, task.title, task.description,
-                task.status, task.retry_count, task.last_action, 
+                task.alert_time, task.status, task.retry_count, task.last_action, 
                 1 if task.last_result_success else (0 if task.last_result_success is False else None),
                 task.last_result_error, json.dumps(task.last_result_data), json.dumps(task.payload)
             ))
             conn.commit()
 
-    async def dispatch(self, alerts: list[dict]) -> tuple[list[AlertHandlingTask], int, list[str]]:
+    def _update_existing_queued_task(self, existing: AlertHandlingTask, alert: dict, workflow_selection: dict[str, Any] | None = None) -> AlertHandlingTask:
+        alert_name = str(alert.get("alert_name", "未知告警")).strip() or "未知告警"
+        workflow_name = str(existing.workflow_name or "agent_react").strip() or "agent_react"
+        payload = dict(existing.payload) if isinstance(existing.payload, dict) else {}
+        payload["alert_data"] = alert
+        if workflow_selection is not None:
+            payload["workflow_selection"] = workflow_selection
+        existing.title = f"{alert_name} [{existing.event_ids}]"
+        existing.description = f"Handle alert {existing.event_ids} through workflow {workflow_name}."
+        existing.alert_time = str(alert.get("alert_time", "")).strip()
+        existing.payload = payload
+        self._save_task(existing)
+        self.audit_service.record(
+            "alert_task_updated",
+            f"Updated queued alert task for {existing.event_ids} with latest payload.",
+            {"eventIds": existing.event_ids, "taskId": existing.task_id, "workflow": workflow_name},
+        )
+        return existing
+
+    def _complete_missing_queued_tasks(self, active_event_ids: set[str]) -> list[AlertHandlingTask]:
+        completed: list[AlertHandlingTask] = []
+        for task in self.list_tasks():
+            if task.status != "queued":
+                continue
+            if task.event_ids in active_event_ids:
+                continue
+            task.status = "completed"
+            task.last_action = "refresh_poll"
+            task.last_result_success = True
+            task.last_result_error = None
+            task.last_result_data = {
+                "summary": "已被人工处置",
+                "reason": "本次轮询未再发现该 queued 告警，按人工处置完成收口。",
+                "disposition": "handled_manually",
+            }
+            self._save_task(task)
+            self.dedup.mark_done(task.event_ids)
+            self.audit_service.record(
+                "alert_task_completed_externally",
+                f"Marked queued alert {task.event_ids} as completed because it disappeared from the latest poll.",
+                {"eventIds": task.event_ids, "taskId": task.task_id},
+            )
+            completed.append(task)
+        return completed
+
+    async def dispatch(self, alerts: list[dict]) -> tuple[list[AlertHandlingTask], int, int, list[AlertHandlingTask], list[str]]:
         queued: list[AlertHandlingTask] = []
         skipped = 0
+        updated = 0
         errors: list[str] = []
+        active_event_ids: set[str] = set()
 
         for alert in alerts:
             event_id = str(alert.get("eventIds", "")).strip()
             if not event_id:
                 errors.append("Skipping alert with empty eventIds.")
+                continue
+            active_event_ids.add(event_id)
+            existing = self.get_task_by_event_id(event_id)
+            if existing and existing.status == "queued":
+                workflow_selection = existing.payload.get("workflow_selection", {}) if isinstance(existing.payload, dict) else {}
+                self._update_existing_queued_task(existing, alert, workflow_selection if isinstance(workflow_selection, dict) else {})
+                updated += 1
                 continue
             if not self.dedup.mark_processing(event_id):
                 skipped += 1
@@ -115,7 +186,8 @@ class AlertDispatchService:
                     {"eventIds": event_id, "error": str(exc)},
                 )
 
-        return queued, skipped, errors
+        completed = self._complete_missing_queued_tasks(active_event_ids)
+        return queued, skipped, updated, completed, errors
 
     def list_queued_tasks(self) -> list[AlertHandlingTask]:
         return self.list_tasks()

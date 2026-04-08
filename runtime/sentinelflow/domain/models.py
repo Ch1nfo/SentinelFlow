@@ -82,6 +82,7 @@ class AlertHandlingTask:
     workflow_name: str
     title: str
     description: str
+    alert_time: str = ""
     status: str = "queued"
     retry_count: int = 0
     last_action: str = ""
@@ -95,6 +96,8 @@ class AlertHandlingTask:
 class PollingDispatchResult:
     fetched_count: int = 0
     queued_count: int = 0
+    updated_count: int = 0
+    completed_count: int = 0
     skipped_count: int = 0
     failed_count: int = 0
     tasks: list[AlertHandlingTask] = field(default_factory=list)

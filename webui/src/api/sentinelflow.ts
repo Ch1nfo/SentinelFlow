@@ -1,10 +1,13 @@
+export type AlertTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'completed'
+
 export type AlertTask = {
   task_id: string
   event_ids: string
   workflow_name: string
   title: string
   description: string
-  status: string
+  alert_time?: string
+  status: AlertTaskStatus | string
   retry_count: number
   last_action: string
   last_result_success?: boolean | null
@@ -16,6 +19,8 @@ export type AlertTask = {
 export type PollAlertsResponse = {
   fetched_count: number
   queued_count: number
+  updated_count: number
+  completed_count: number
   skipped_count: number
   failed_count: number
   tasks: AlertTask[]

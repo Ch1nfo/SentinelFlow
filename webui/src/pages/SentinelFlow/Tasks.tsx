@@ -10,7 +10,7 @@ import { useSentinelFlowAsyncData } from '@/hooks/useSentinelFlowAsyncData'
 import { readSessionValue, writeSessionValue } from '@/utils/sentinelflowLocalState'
 import { publishRuntimeActivity, readRuntimeActivity, subscribeRuntimeActivity, type RuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
 
-type TaskFilter = 'all' | 'queued' | 'running' | 'succeeded' | 'failed'
+type TaskFilter = 'all' | 'queued' | 'running' | 'succeeded' | 'completed' | 'failed'
 const TASK_FILTER_KEY = 'sentinelflow:tasks:filter'
 
 const TASK_FILTER_LABELS: Record<TaskFilter, string> = {
@@ -18,6 +18,7 @@ const TASK_FILTER_LABELS: Record<TaskFilter, string> = {
   queued: '排队中',
   running: '执行中',
   succeeded: '已完成',
+  completed: '已完成',
   failed: '失败',
 }
 
@@ -25,6 +26,7 @@ function getTaskStatusLabel(status: TaskFilter | AlertTask['status']) {
   if (status === 'queued') return '排队中'
   if (status === 'running') return '执行中'
   if (status === 'succeeded') return '已完成'
+  if (status === 'completed') return '已被人工处置'
   if (status === 'failed') return '失败'
   return '全部'
 }
@@ -38,6 +40,7 @@ function getDispositionLabel(value: string) {
 
 function getTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' {
   if (task.status === 'succeeded') return 'success'
+  if (task.status === 'completed') return 'success'
   if (task.status === 'failed') return 'danger'
   if (task.status === 'running') return 'warn'
   return 'neutral'
@@ -164,11 +167,11 @@ export default function SentinelFlowTasksPage() {
             <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => task.status === 'running').length}</div>
           </div>
           <div className="rounded-xl border border-gray-200 bg-white p-5">
-            <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2 flex items-center justify-between">
               <span className="text-sm text-gray-500">已完成</span>
               <ShieldCheck className="h-4 w-4 text-emerald-500" />
             </div>
-            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => task.status === 'succeeded').length}</div>
+            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => task.status === 'succeeded' || task.status === 'completed').length}</div>
           </div>
           <div className="rounded-xl border border-gray-200 bg-white p-5">
             <div className="mb-2 flex items-center justify-between">
@@ -181,7 +184,7 @@ export default function SentinelFlowTasksPage() {
 
         <div className="mt-4 mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex gap-1 rounded-lg bg-gray-100 p-1">
-            {(['all', 'queued', 'running', 'succeeded', 'failed'] as TaskFilter[]).map((item) => (
+            {(['all', 'queued', 'running', 'succeeded', 'completed', 'failed'] as TaskFilter[]).map((item) => (
               <button key={item} type="button" className={`px-4 py-2 text-sm rounded-md transition-colors ${filter === item ? 'bg-white text-slate-800 shadow-sm font-medium' : 'text-gray-600 hover:text-gray-900'}`} onClick={() => setFilter(item)}>
                 {TASK_FILTER_LABELS[item]}
               </button>
