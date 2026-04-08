@@ -1,12 +1,12 @@
 import sqlite3
 import json
 import threading
-from pathlib import Path
 from typing import Any
 
 from sentinelflow.alerts.dedup import AlertDedupStore
 from sentinelflow.domain.models import AlertHandlingTask
 from sentinelflow.services.audit_service import AuditService
+from sentinelflow.services.sqlite_support import open_sqlite_connection, sqlite_transaction
 from sentinelflow.services.triage_service import TriageService
 from sentinelflow.config.runtime import CONFIG_DIR
 
@@ -51,10 +51,9 @@ class AlertDispatchService:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(alert_tasks)").fetchall()}
         if "alert_time" not in columns:
             conn.execute("ALTER TABLE alert_tasks ADD COLUMN alert_time TEXT DEFAULT ''")
-            conn.commit()
 
     def _get_conn(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        return open_sqlite_connection(DB_PATH)
 
     def _row_to_task(self, row) -> AlertHandlingTask:
         has_alert_time = len(row) > 12
@@ -82,7 +81,7 @@ class AlertDispatchService:
         )
 
     def _save_task(self, task: AlertHandlingTask) -> None:
-        with self.lock, self._get_conn() as conn:
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
             conn.execute('''
                 INSERT OR REPLACE INTO alert_tasks
                 (task_id, event_ids, workflow_name, title, description, alert_time, status, retry_count, last_action, last_result_success, last_result_error, last_result_data, payload)
@@ -93,7 +92,6 @@ class AlertDispatchService:
                 1 if task.last_result_success else (0 if task.last_result_success is False else None),
                 task.last_result_error, json.dumps(task.last_result_data), json.dumps(task.payload)
             ))
-            conn.commit()
 
     def _refresh_existing_task(
         self,
@@ -239,7 +237,7 @@ class AlertDispatchService:
         return self.list_tasks()
 
     def list_tasks(self) -> list[AlertHandlingTask]:
-        with self.lock, self._get_conn() as conn:
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
             rows = conn.execute("SELECT * FROM alert_tasks").fetchall()
             return [self._row_to_task(row) for row in rows]
 
@@ -252,9 +250,8 @@ class AlertDispatchService:
             alert_data = payload.get("alert_data") if isinstance(payload.get("alert_data"), dict) else {}
             if str(alert_data.get("alert_source", "")).strip() == "sentinelflow_demo":
                 removed_event_ids.append(task.event_ids)
-                with self.lock, self._get_conn() as conn:
+                with self.lock, sqlite_transaction(DB_PATH) as conn:
                     conn.execute("DELETE FROM alert_tasks WHERE task_id = ?", (task.task_id,))
-                    conn.commit()
         
         for event_id in removed_event_ids:
             self.dedup.forget(event_id)
@@ -262,14 +259,14 @@ class AlertDispatchService:
         return len(removed_event_ids)
 
     def get_task(self, task_id: str) -> AlertHandlingTask | None:
-        with self.lock, self._get_conn() as conn:
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
             row = conn.execute("SELECT * FROM alert_tasks WHERE task_id = ?", (task_id,)).fetchone()
             if row:
                 return self._row_to_task(row)
         return None
 
     def get_task_by_event_id(self, event_id: str) -> AlertHandlingTask | None:
-        with self.lock, self._get_conn() as conn:
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
             row = conn.execute("SELECT * FROM alert_tasks WHERE event_ids = ? ORDER BY rowid DESC LIMIT 1", (event_id,)).fetchone()
             if row:
                 return self._row_to_task(row)

@@ -1,8 +1,8 @@
 import sqlite3
 import threading
-from pathlib import Path
 
 from sentinelflow.config.runtime import CONFIG_DIR
+from sentinelflow.services.sqlite_support import open_sqlite_connection, sqlite_transaction
 
 DB_PATH = CONFIG_DIR / "sys_queue.db"
 
@@ -19,42 +19,41 @@ class AlertDedupStore:
                     status TEXT NOT NULL
                 )
             ''')
-            
+
     def _get_conn(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        return open_sqlite_connection(DB_PATH)
 
     def mark_processing(self, event_id: str) -> bool:
-        with self.lock, self._get_conn() as conn:
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
             try:
                 conn.execute("INSERT INTO alert_dedup (event_id, status) VALUES (?, ?)", (event_id, "processing"))
-                conn.commit()
                 return True
             except sqlite3.IntegrityError:
                 return False
 
     def mark_done(self, event_id: str) -> None:
-        with self.lock, self._get_conn() as conn:
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
             conn.execute("INSERT OR REPLACE INTO alert_dedup (event_id, status) VALUES (?, ?)", (event_id, "completed"))
 
     def mark_failed(self, event_id: str) -> None:
-        with self.lock, self._get_conn() as conn:
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
             conn.execute("DELETE FROM alert_dedup WHERE event_id = ?", (event_id,))
 
     def is_processing(self, event_id: str) -> bool:
-        with self.lock, self._get_conn() as conn:
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
             row = conn.execute("SELECT status FROM alert_dedup WHERE event_id = ?", (event_id,)).fetchone()
             return row is not None and row[0] == "processing"
 
     def is_completed(self, event_id: str) -> bool:
-        with self.lock, self._get_conn() as conn:
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
             row = conn.execute("SELECT status FROM alert_dedup WHERE event_id = ?", (event_id,)).fetchone()
             return row is not None and row[0] == "completed"
 
     def seen(self, event_id: str) -> bool:
-        with self.lock, self._get_conn() as conn:
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
             row = conn.execute("SELECT status FROM alert_dedup WHERE event_id = ?", (event_id,)).fetchone()
             return row is not None
 
     def forget(self, event_id: str) -> None:
-        with self.lock, self._get_conn() as conn:
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
             conn.execute("DELETE FROM alert_dedup WHERE event_id = ?", (event_id,))
