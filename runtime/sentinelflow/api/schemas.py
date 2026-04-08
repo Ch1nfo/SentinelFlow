@@ -38,6 +38,7 @@ class RuntimeConfigRequest(BaseModel):
     alert_parser_rule: dict[str, Any] | None = Field(default=None, alias="alertParserRule")
     alert_script_code: str | None = Field(default=None, alias="alertScriptCode")
     alert_script_timeout: int | None = Field(default=None, alias="alertScriptTimeout")
+    auto_execute_enabled: bool | None = Field(default=None, alias="autoExecuteEnabled")
 
     def to_payload(self) -> dict[str, Any]:
         payload = {
@@ -63,6 +64,7 @@ class RuntimeConfigRequest(BaseModel):
             "alert_parser_rule": self.alert_parser_rule if isinstance(self.alert_parser_rule, dict) else None,
             "alert_script_code": self.alert_script_code,
             "alert_script_timeout": self.alert_script_timeout,
+            "auto_execute_enabled": self.auto_execute_enabled,
         }
         return {key: value for key, value in payload.items() if value is not None}
 

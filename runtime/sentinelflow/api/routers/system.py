@@ -3,7 +3,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, HTTPException
 from sentinelflow.api.schemas import RuntimeConfigRequest, AlertSourceParserGenerateRequest, AlertSourceParserPreviewRequest
 from sentinelflow.config.runtime import load_runtime_config, read_persisted_runtime_config, reset_runtime_config, save_runtime_config
-from sentinelflow.api.deps import agent_service, branding, audit_service, polling_service, alert_parser_generator, _serialize
+from sentinelflow.api.deps import agent_service, branding, audit_service, polling_service, alert_parser_generator, _serialize, auto_execution_service
 from sentinelflow.alerts.client import SOCAlertApiClient
 from sentinelflow.alerts.parser_runtime import parse_jsonish
 from sentinelflow.api.utils import VISIBLE_RUNTIME_OVERRIDE_KEYS
@@ -47,6 +47,7 @@ def runtime_settings() -> dict[str, Any]:
             "poll_interval_seconds": str(runtime_config.poll_interval_seconds),
             "workflow_engine": branding.workflow_engine_label,
             "agent_enabled": runtime_config.agent_enabled,
+            "auto_execute_enabled": runtime_config.auto_execute_enabled,
         },
         "llm": {
             "api_base_url": runtime_config.llm_api_base_url,
@@ -92,6 +93,7 @@ def save_settings(payload: RuntimeConfigRequest) -> dict[str, Any]:
         next_payload["llm_api_key"] = current.llm_api_key
     save_runtime_config(next_payload)
     polling_service.refresh_schedule()
+    auto_execution_service.apply_persisted_state(load_runtime_config().auto_execute_enabled)
     return runtime_settings()
 
 
@@ -99,6 +101,7 @@ def save_settings(payload: RuntimeConfigRequest) -> dict[str, Any]:
 def reset_settings() -> dict[str, Any]:
     reset_runtime_config()
     polling_service.refresh_schedule()
+    auto_execution_service.apply_persisted_state(load_runtime_config().auto_execute_enabled)
     return runtime_settings()
 
 

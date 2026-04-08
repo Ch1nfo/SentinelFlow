@@ -25,6 +25,72 @@ class AlertTaskRunnerService:
         self.agent_workflow_runner = agent_workflow_runner
         self.workflow_root = workflow_root
 
+    def _finalize_success(self, task, selected_action: str, result_data: dict[str, Any]) -> dict[str, Any]:
+        task = self.dispatch_service.finalize_task(task.task_id, selected_action, True, result_data, None)
+        return {
+            "action": selected_action,
+            "success": True,
+            "task_id": task.task_id if task else "",
+            "event_ids": str(result_data.get("event_ids", "")).strip(),
+            "data": result_data,
+            "task": task,
+            "error": None,
+        }
+
+    def _finalize_failure(self, task, selected_action: str, error: str) -> dict[str, Any]:
+        task = self.dispatch_service.finalize_task(task.task_id, selected_action, False, {}, error)
+        return {
+            "action": selected_action,
+            "success": False,
+            "task_id": task.task_id if task else "",
+            "event_ids": str((task.event_ids if task else "")),
+            "data": {},
+            "task": task,
+            "error": error,
+        }
+
+    async def _run_agent_react(self, task, alert: dict[str, Any], selected_action: str) -> dict[str, Any]:
+        try:
+            agent_result = await self.agent_service.run_alert(alert, selected_action)
+        except Exception as exc:
+            self.audit_service.record("agent_react_task_failed", "Agent ReAct runtime failed.", {"error": str(exc)})
+            return self._finalize_failure(task, selected_action, f"主 Agent 执行失败：{exc}")
+
+        if bool(agent_result.get("success")):
+            return self._finalize_success(task, selected_action, agent_result)
+        return self._finalize_failure(task, selected_action, "主 Agent 未返回成功结果。")
+
+    async def _run_workflow_or_fallback(self, task, alert: dict[str, Any], selected_action: str) -> dict[str, Any]:
+        if selected_action not in {"triage_close", "triage_dispose"}:
+            return self._finalize_failure(task, selected_action, "当前动作不支持工作流执行。")
+        if not self.agent_service.is_configured():
+            return self._finalize_failure(task, selected_action, "当前未完成系统主 Agent 配置。")
+
+        try:
+            workflow_definition = load_agent_workflow(self.workflow_root, task.workflow_name)
+        except FileNotFoundError:
+            try:
+                agent_result = await self.agent_service.run_alert(alert, selected_action)
+            except Exception as exc:
+                self.audit_service.record("agent_task_failed", f"Agent runtime failed during {selected_action}.", {"error": str(exc)})
+                return self._finalize_failure(task, selected_action, f"主 Agent 执行失败：{exc}")
+            if bool(agent_result.get("success")):
+                return self._finalize_success(task, selected_action, agent_result)
+            return self._finalize_failure(task, selected_action, "主 Agent 未返回成功结果。")
+        except Exception as exc:
+            self.audit_service.record("agent_workflow_task_failed", f"Workflow failed during {selected_action}.", {"error": str(exc)})
+            return self._finalize_failure(task, selected_action, f"Workflow 加载失败：{exc}")
+
+        try:
+            agent_result = await self.agent_workflow_runner.run_alert_workflow(workflow_definition, alert, selected_action)
+        except Exception as exc:
+            self.audit_service.record("agent_workflow_task_failed", f"Workflow failed during {selected_action}.", {"error": str(exc)})
+            return self._finalize_failure(task, selected_action, f"Workflow 执行失败：{exc}")
+
+        if bool(agent_result.get("success")):
+            return self._finalize_success(task, selected_action, agent_result)
+        return self._finalize_failure(task, selected_action, "Workflow 未返回成功结果。")
+
     async def run_task(self, task, action: str | None = None) -> dict[str, Any]:
         alert = {}
         if isinstance(task.payload, dict):
@@ -58,64 +124,10 @@ class AlertTaskRunnerService:
         self.dispatch_service.mark_task_running(task.task_id, selected_action)
 
         agent_available, _agent_error = self.agent_service.is_available()
-        if task.workflow_name == "agent_react" and self.agent_service.is_configured() and agent_available:
-            try:
-                agent_result = await self.agent_service.run_alert(alert, selected_action)
-                if bool(agent_result.get("success")):
-                    task = self.dispatch_service.finalize_task(task.task_id, selected_action, True, agent_result, None)
-                    return {
-                        "action": selected_action,
-                        "success": True,
-                        "task_id": task.task_id if task else "",
-                        "event_ids": str(agent_result.get("event_ids", "")).strip(),
-                        "data": agent_result,
-                        "task": task,
-                        "error": None,
-                    }
-            except Exception as exc:
-                self.audit_service.record("agent_react_task_failed", "Agent ReAct runtime failed.", {"error": str(exc)})
-
-        if selected_action in {"triage_close", "triage_dispose"} and self.agent_service.is_configured() and agent_available:
-            try:
-                workflow_definition = load_agent_workflow(self.workflow_root, task.workflow_name)
-                agent_result = await self.agent_workflow_runner.run_alert_workflow(workflow_definition, alert, selected_action)
-                if bool(agent_result.get("success")):
-                    task = self.dispatch_service.finalize_task(task.task_id, selected_action, True, agent_result, None)
-                    return {
-                        "action": selected_action,
-                        "success": True,
-                        "task_id": task.task_id if task else "",
-                        "event_ids": str(agent_result.get("event_ids", "")).strip(),
-                        "data": agent_result,
-                        "task": task,
-                        "error": None,
-                    }
-            except FileNotFoundError:
-                try:
-                    agent_result = await self.agent_service.run_alert(alert, selected_action)
-                    if bool(agent_result.get("success")):
-                        task = self.dispatch_service.finalize_task(task.task_id, selected_action, True, agent_result, None)
-                        return {
-                            "action": selected_action,
-                            "success": True,
-                            "task_id": task.task_id if task else "",
-                            "event_ids": str(agent_result.get("event_ids", "")).strip(),
-                            "data": agent_result,
-                            "task": task,
-                            "error": None,
-                        }
-                except Exception as exc:
-                    self.audit_service.record("agent_task_failed", f"Agent runtime failed during {selected_action}.", {"error": str(exc)})
-            except Exception as exc:
-                self.audit_service.record("agent_workflow_task_failed", f"Workflow failed during {selected_action}.", {"error": str(exc)})
-
-        task = self.dispatch_service.finalize_task(task.task_id, selected_action, False, {}, "当前任务没有可用的 Agent Workflow，且主 Agent 处理未成功。")
-        return {
-            "action": selected_action,
-            "success": False,
-            "task_id": task.task_id if task else "",
-            "event_ids": str(alert.get("eventIds", "")).strip(),
-            "data": {},
-            "task": task,
-            "error": "当前任务没有可用的 Agent Workflow，且主 Agent 处理未成功。",
-        }
+        if not agent_available:
+            return self._finalize_failure(task, selected_action, f"当前 Agent Runtime 不可用：{_agent_error or 'unknown'}")
+        if task.workflow_name == "agent_react":
+            if not self.agent_service.is_configured():
+                return self._finalize_failure(task, selected_action, "当前未完成系统主 Agent 配置。")
+            return await self._run_agent_react(task, alert, selected_action)
+        return await self._run_workflow_or_fallback(task, alert, selected_action)

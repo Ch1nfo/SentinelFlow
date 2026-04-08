@@ -197,6 +197,14 @@ class AlertDispatchService:
                     {"eventIds": event_id, "taskId": existing.task_id},
                 )
                 continue
+            if existing and existing.status in {"succeeded", "completed"}:
+                skipped += 1
+                self.audit_service.record(
+                    "alert_dispatch_skipped_finished",
+                    f"Skipped duplicate alert {event_id} because the original task has already been finalized.",
+                    {"eventIds": event_id, "taskId": existing.task_id, "status": existing.status},
+                )
+                continue
             if not self.dedup.mark_processing(event_id):
                 skipped += 1
                 self.audit_service.record(

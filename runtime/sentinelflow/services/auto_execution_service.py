@@ -65,6 +65,10 @@ class AlertAutoExecutionService:
             "running": self._running,
         }
 
+    def apply_persisted_state(self, enabled: bool) -> None:
+        self._enabled = bool(enabled)
+        self._wake_event.set()
+
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
             if not self._enabled:

@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from sentinelflow.api.schemas import CommandDispatchRequest, AlertActionRequest
 from sentinelflow.api.deps import agent_service, dispatch_service, audit_service, polling_service, skill_runtime, _serialize, auto_execution_service, task_runner_service, WORKFLOW_ROOT
 from sentinelflow.api.utils import _extract_alert_payload, _resolve_task
+from sentinelflow.config.runtime import load_runtime_config, save_runtime_config
 
 router = APIRouter(prefix="/api/sentinelflow")
 
@@ -150,6 +151,7 @@ async def handle_alert(payload: AlertActionRequest) -> dict[str, Any]:
         }
 
     if payload.action == "auto_execute_start":
+        save_runtime_config({"auto_execute_enabled": True})
         auto_execution_service.enable()
         return {
             "action": payload.action,
@@ -162,6 +164,7 @@ async def handle_alert(payload: AlertActionRequest) -> dict[str, Any]:
         }
 
     if payload.action == "auto_execute_stop":
+        save_runtime_config({"auto_execute_enabled": False})
         auto_execution_service.disable()
         return {
             "action": payload.action,

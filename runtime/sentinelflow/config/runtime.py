@@ -53,6 +53,7 @@ class SentinelFlowRuntimeConfig:
     alert_parser_rule: dict[str, Any]
     alert_script_code: str
     alert_script_timeout: int
+    auto_execute_enabled: bool
     poll_interval_seconds: int
 
 
@@ -79,6 +80,7 @@ def _default_values() -> dict[str, Any]:
         "alert_parser_rule": {},
         "alert_script_code": os.getenv("SENTINELFLOW_ALERT_SCRIPT_CODE", "").strip(),
         "alert_script_timeout": int(os.getenv("SENTINELFLOW_ALERT_SCRIPT_TIMEOUT", "30")),
+        "auto_execute_enabled": _read_env_bool("SENTINELFLOW_AUTO_EXECUTE_ENABLED", False),
         "poll_interval_seconds": int(os.getenv("SENTINELFLOW_POLL_INTERVAL_SECONDS", "60")),
     }
 
@@ -106,6 +108,7 @@ def _normalize_config(values: dict[str, Any]) -> SentinelFlowRuntimeConfig:
         alert_parser_rule=values.get("alert_parser_rule", {}) if isinstance(values.get("alert_parser_rule", {}), dict) else {},
         alert_script_code=str(values.get("alert_script_code", "")),
         alert_script_timeout=int(values.get("alert_script_timeout", 30)),
+        auto_execute_enabled=_read_bool_value(values.get("auto_execute_enabled"), False),
         poll_interval_seconds=int(values.get("poll_interval_seconds", 60)),
     )
 

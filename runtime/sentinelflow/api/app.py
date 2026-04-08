@@ -18,6 +18,7 @@ from sentinelflow.alerts.parser_generator import AlertParserGenerator
 from sentinelflow.alerts.poller import AlertPollingService
 from sentinelflow.agent.service import SentinelFlowAgentService
 from sentinelflow.config.branding import load_branding_config
+from sentinelflow.config.runtime import load_runtime_config
 from sentinelflow.services.audit_service import AuditService
 from sentinelflow.services.auto_execution_service import AlertAutoExecutionService
 from sentinelflow.services.dispatch_service import AlertDispatchService
@@ -87,6 +88,7 @@ alert_parser_generator = AlertParserGenerator()
 async def lifespan(_app: FastAPI):
     await polling_service.start()
     await auto_execution_service.start()
+    auto_execution_service.apply_persisted_state(load_runtime_config().auto_execute_enabled)
     try:
         yield
     finally:
