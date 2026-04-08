@@ -121,7 +121,19 @@ class AlertTaskRunnerService:
                 except Exception:
                     selected_action = "triage_close"
 
-        self.dispatch_service.mark_task_running(task.task_id, selected_action)
+        running_task = self.dispatch_service.mark_task_running(task.task_id, selected_action)
+        if not running_task:
+            latest_task = self.dispatch_service.get_task(task.task_id)
+            return {
+                "action": selected_action,
+                "success": False,
+                "task_id": latest_task.task_id if latest_task else task.task_id,
+                "event_ids": latest_task.event_ids if latest_task else task.event_ids,
+                "data": {},
+                "task": latest_task,
+                "error": "任务状态已变化，当前无法进入运行态。",
+            }
+        task = running_task
 
         agent_available, _agent_error = self.agent_service.is_available()
         if not agent_available:

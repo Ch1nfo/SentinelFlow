@@ -1,7 +1,7 @@
 import sqlite3
 import json
 import threading
-from typing import Any
+from typing import Any, Iterable
 
 from sentinelflow.alerts.dedup import AlertDedupStore
 from sentinelflow.domain.models import AlertHandlingTask
@@ -93,6 +93,33 @@ class AlertDispatchService:
                 task.last_result_error, json.dumps(task.last_result_data), json.dumps(task.payload)
             ))
 
+    def _update_task_columns(
+        self,
+        task_id: str,
+        updates: dict[str, Any],
+        *,
+        expected_statuses: Iterable[str] | None = None,
+    ) -> AlertHandlingTask | None:
+        if not updates:
+            return self.get_task(task_id)
+
+        assignments = ", ".join(f"{column} = ?" for column in updates)
+        params: list[Any] = list(updates.values())
+        query = f"UPDATE alert_tasks SET {assignments} WHERE task_id = ?"
+        params.append(task_id)
+        if expected_statuses:
+            status_list = list(expected_statuses)
+            placeholders = ", ".join("?" for _ in status_list)
+            query += f" AND status IN ({placeholders})"
+            params.extend(status_list)
+
+        with self.lock, sqlite_transaction(DB_PATH) as conn:
+            cursor = conn.execute(query, tuple(params))
+            if cursor.rowcount <= 0:
+                return None
+            row = conn.execute("SELECT * FROM alert_tasks WHERE task_id = ?", (task_id,)).fetchone()
+            return self._row_to_task(row) if row else None
+
     def _refresh_existing_task(
         self,
         existing: AlertHandlingTask,
@@ -107,30 +134,42 @@ class AlertDispatchService:
         payload["alert_data"] = alert
         if workflow_selection is not None:
             payload["workflow_selection"] = workflow_selection
-        existing.title = alert_name
-        existing.description = f"Handle alert {existing.event_ids} through workflow {workflow_name}."
-        existing.alert_time = str(alert.get("alert_time", "")).strip()
-        existing.payload = payload
+
+        updates: dict[str, Any] = {
+            "title": alert_name,
+            "description": f"Handle alert {existing.event_ids} through workflow {workflow_name}.",
+            "alert_time": str(alert.get("alert_time", "")).strip(),
+            "payload": json.dumps(payload),
+        }
+        expected_statuses = ["queued"]
         if reset_to_queued:
-            existing.status = "queued"
-            existing.last_action = "refresh_poll"
-            existing.last_result_success = None
-            existing.last_result_error = None
-            existing.last_result_data = {}
+            expected_statuses = ["failed"]
+            updates.update(
+                {
+                    "status": "queued",
+                    "last_action": "refresh_poll",
+                    "last_result_success": None,
+                    "last_result_error": None,
+                    "last_result_data": json.dumps({}),
+                }
+            )
             self.dedup.mark_processing(existing.event_ids)
-        self._save_task(existing)
+        updated_task = self._update_task_columns(existing.task_id, updates, expected_statuses=expected_statuses)
+        if not updated_task:
+            latest = self.get_task(existing.task_id)
+            return latest or existing
         self.audit_service.record(
             "alert_task_updated",
             f"Updated alert task for {existing.event_ids} with latest payload.",
             {
                 "eventIds": existing.event_ids,
-                "taskId": existing.task_id,
+                "taskId": updated_task.task_id,
                 "workflow": workflow_name,
                 "resetToQueued": reset_to_queued,
-                "status": existing.status,
+                "status": updated_task.status,
             },
         )
-        return existing
+        return updated_task
 
     def _complete_missing_queued_tasks(self, active_event_ids: set[str]) -> list[AlertHandlingTask]:
         completed: list[AlertHandlingTask] = []
@@ -139,23 +178,32 @@ class AlertDispatchService:
                 continue
             if task.event_ids in active_event_ids:
                 continue
-            task.status = "completed"
-            task.last_action = "refresh_poll"
-            task.last_result_success = True
-            task.last_result_error = None
-            task.last_result_data = {
-                "summary": "已被人工处置",
-                "reason": "本次轮询未再发现该 queued 告警，按人工处置完成收口。",
-                "disposition": "handled_manually",
-            }
-            self._save_task(task)
+            updated_task = self._update_task_columns(
+                task.task_id,
+                {
+                    "status": "completed",
+                    "last_action": "refresh_poll",
+                    "last_result_success": 1,
+                    "last_result_error": None,
+                    "last_result_data": json.dumps(
+                        {
+                            "summary": "已被人工处置",
+                            "reason": "本次轮询未再发现该 queued 告警，按人工处置完成收口。",
+                            "disposition": "handled_manually",
+                        }
+                    ),
+                },
+                expected_statuses=["queued"],
+            )
+            if not updated_task:
+                continue
             self.dedup.mark_done(task.event_ids)
             self.audit_service.record(
                 "alert_task_completed_externally",
                 f"Marked queued alert {task.event_ids} as completed because it disappeared from the latest poll.",
                 {"eventIds": task.event_ids, "taskId": task.task_id},
             )
-            completed.append(task)
+            completed.append(updated_task)
         return completed
 
     async def dispatch(self, alerts: list[dict]) -> tuple[list[AlertHandlingTask], int, int, list[AlertHandlingTask], list[str]]:
@@ -273,15 +321,18 @@ class AlertDispatchService:
         return None
 
     def mark_task_running(self, task_id: str, action: str) -> AlertHandlingTask | None:
-        task = self.get_task(task_id)
+        task = self._update_task_columns(
+            task_id,
+            {
+                "status": "running",
+                "last_action": action,
+                "last_result_error": None,
+                "last_result_data": json.dumps({}),
+            },
+            expected_statuses=["queued"],
+        )
         if not task:
             return None
-        task.status = "running"
-        task.last_action = action
-        task.last_result_error = None
-        task.last_result_data = {}
-        self._save_task(task)
-        
         self.audit_service.record(
             "task_running",
             f"Task {task_id} entered running state.",
@@ -293,19 +344,26 @@ class AlertDispatchService:
         task = self.get_task(task_id)
         if not task:
             return None
-        task.status = "queued"
-        task.retry_count += 1
-        task.last_result_error = None
-        task.last_result_success = None
-        task.last_result_data = {}
-        self._save_task(task)
+        updated_task = self._update_task_columns(
+            task_id,
+            {
+                "status": "queued",
+                "retry_count": task.retry_count + 1,
+                "last_result_error": None,
+                "last_result_success": None,
+                "last_result_data": json.dumps({}),
+            },
+            expected_statuses=["failed"],
+        )
+        if not updated_task:
+            return None
         
         self.audit_service.record(
             "task_retry_prepared",
             f"Task {task_id} prepared for retry.",
-            {"taskId": task_id, "eventIds": task.event_ids, "retryCount": task.retry_count},
+            {"taskId": task_id, "eventIds": updated_task.event_ids, "retryCount": updated_task.retry_count},
         )
-        return task
+        return updated_task
 
     def finalize_task(
         self,
@@ -318,27 +376,34 @@ class AlertDispatchService:
         task = self.get_task(task_id)
         if not task:
             return None
-        task.status = "succeeded" if success else "failed"
-        task.last_action = action
-        task.last_result_success = success
-        task.last_result_error = error
-        task.last_result_data = result_data or {}
-        self._save_task(task)
+        updated_task = self._update_task_columns(
+            task_id,
+            {
+                "status": "succeeded" if success else "failed",
+                "last_action": action,
+                "last_result_success": 1 if success else 0,
+                "last_result_error": error,
+                "last_result_data": json.dumps(result_data or {}),
+            },
+            expected_statuses=["running"],
+        )
+        if not updated_task:
+            return self.get_task(task_id)
         
         if success:
-            self.dedup.mark_done(task.event_ids)
+            self.dedup.mark_done(updated_task.event_ids)
         else:
-            self.dedup.mark_failed(task.event_ids)
+            self.dedup.mark_failed(updated_task.event_ids)
             
         self.audit_service.record(
             "task_finished",
             f"Task {task_id} finished execution. Success: {success}",
             {
                 "taskId": task_id,
-                "eventIds": task.event_ids,
+                "eventIds": updated_task.event_ids,
                 "success": success,
                 "error": error,
                 "action": action,
             },
         )
-        return task
+        return updated_task
