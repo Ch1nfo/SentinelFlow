@@ -3,11 +3,14 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 RUNTIME_ROOT = Path(__file__).resolve().parents[1]
 if str(RUNTIME_ROOT) not in sys.path:
     sys.path.insert(0, str(RUNTIME_ROOT))
 
+from sentinelflow.alerts import client as alert_client
 from sentinelflow.alerts.client import SOCAlertApiClient
 from sentinelflow.config.runtime import SentinelFlowRuntimeConfig
 
@@ -41,8 +44,11 @@ def _build_runtime_config(script_code: str) -> SentinelFlowRuntimeConfig:
 
 class AlertScriptClientTest(unittest.TestCase):
     def test_fetch_script_alerts_normalizes_standard_output(self) -> None:
-        config = _build_runtime_config(
-            """
+        with TemporaryDirectory() as tmp_dir:
+            script_dir = Path(tmp_dir)
+            script_path = script_dir / "custom_fetch.py"
+            config = _build_runtime_config(
+                """
 import json
 
 print(json.dumps([
@@ -61,28 +67,34 @@ print(json.dumps([
     }
 ], ensure_ascii=False))
 """.strip()
-        )
-        client = SOCAlertApiClient()
+            )
+            client = SOCAlertApiClient()
 
-        result = client.fetch_script_alerts(config)
+            with patch.object(alert_client, "ALERT_SOURCE_SCRIPT_DIR", script_dir), patch.object(alert_client, "ALERT_SOURCE_SCRIPT_PATH", script_path):
+                result = client.fetch_script_alerts(config)
 
-        self.assertNotIn("error", result)
-        self.assertEqual(result["count"], 1)
-        first = result["alerts"][0]
-        self.assertEqual(first["eventIds"], "E-1")
-        self.assertEqual(first["alert_name"], "demo-alert")
-        self.assertEqual(first["response_body"], "world")
-        self.assertEqual(first["alert_source"], "custom-source")
-        self.assertEqual(first["raw_data"], {"source": "script"})
+            self.assertNotIn("error", result)
+            self.assertEqual(result["count"], 1)
+            self.assertTrue(script_path.exists())
+            first = result["alerts"][0]
+            self.assertEqual(first["eventIds"], "E-1")
+            self.assertEqual(first["alert_name"], "demo-alert")
+            self.assertEqual(first["response_body"], "world")
+            self.assertEqual(first["alert_source"], "custom-source")
+            self.assertEqual(first["raw_data"], {"source": "script"})
 
     def test_fetch_script_alerts_rejects_invalid_json(self) -> None:
-        config = _build_runtime_config("print('not-json')")
-        client = SOCAlertApiClient()
+        with TemporaryDirectory() as tmp_dir:
+            script_dir = Path(tmp_dir)
+            script_path = script_dir / "custom_fetch.py"
+            config = _build_runtime_config("print('not-json')")
+            client = SOCAlertApiClient()
 
-        result = client.fetch_script_alerts(config)
+            with patch.object(alert_client, "ALERT_SOURCE_SCRIPT_DIR", script_dir), patch.object(alert_client, "ALERT_SOURCE_SCRIPT_PATH", script_path):
+                result = client.fetch_script_alerts(config)
 
-        self.assertIn("error", result)
-        self.assertIn("stdout 不是合法 JSON", str(result["error"]))
+            self.assertIn("error", result)
+            self.assertIn("stdout 不是合法 JSON", str(result["error"]))
 
 
 if __name__ == "__main__":

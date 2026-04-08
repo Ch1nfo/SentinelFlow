@@ -9,6 +9,8 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / ".sentinelflow"
 CONFIG_PATH = CONFIG_DIR / "runtime.json"
+ALERT_SOURCE_SCRIPT_DIR = CONFIG_DIR / "alert_sources"
+ALERT_SOURCE_SCRIPT_PATH = ALERT_SOURCE_SCRIPT_DIR / "custom_fetch.py"
 
 
 def _read_bool_value(value: Any, default: bool = False) -> bool:

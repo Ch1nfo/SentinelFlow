@@ -3,14 +3,19 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import tempfile
 from typing import Any
 
 import requests
 import urllib3
 
 from sentinelflow.alerts.parser_runtime import AlertParserRuntime, parse_jsonish
-from sentinelflow.config.runtime import PROJECT_ROOT, SentinelFlowRuntimeConfig, load_runtime_config
+from sentinelflow.config.runtime import (
+    ALERT_SOURCE_SCRIPT_DIR,
+    ALERT_SOURCE_SCRIPT_PATH,
+    PROJECT_ROOT,
+    SentinelFlowRuntimeConfig,
+    load_runtime_config,
+)
 
 
 def _build_headers(user_headers: Any) -> dict[str, str]:
@@ -178,16 +183,15 @@ class SOCAlertApiClient:
             return {"error": "当前未配置告警接入脚本。"}
 
         try:
-            with tempfile.NamedTemporaryFile("w", suffix=".py", encoding="utf-8", delete=True) as script_file:
-                script_file.write(code)
-                script_file.flush()
-                completed = subprocess.run(
-                    [sys.executable, script_file.name],
-                    cwd=str(PROJECT_ROOT),
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout or runtime.alert_script_timeout,
-                )
+            ALERT_SOURCE_SCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+            ALERT_SOURCE_SCRIPT_PATH.write_text(code + ("" if code.endswith("\n") else "\n"), encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, str(ALERT_SOURCE_SCRIPT_PATH)],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=self.timeout or runtime.alert_script_timeout,
+            )
         except subprocess.TimeoutExpired:
             return {"error": f"脚本执行超时（>{self.timeout or runtime.alert_script_timeout}s）。"}
         except OSError as exc:
