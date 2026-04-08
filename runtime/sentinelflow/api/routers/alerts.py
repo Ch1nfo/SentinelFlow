@@ -8,7 +8,7 @@ from uuid import uuid4
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from sentinelflow.api.schemas import CommandDispatchRequest, AlertActionRequest
-from sentinelflow.api.deps import dispatch_service, audit_service, polling_service, skill_runtime, _serialize, auto_execution_service, task_runner_service
+from sentinelflow.api.deps import dispatch_service, audit_service, polling_service, skill_runtime, _serialize, auto_execution_service, task_runner_service, WORKFLOW_ROOT
 from sentinelflow.api.utils import _extract_alert_payload, _resolve_task
 
 router = APIRouter(prefix="/api/sentinelflow")
