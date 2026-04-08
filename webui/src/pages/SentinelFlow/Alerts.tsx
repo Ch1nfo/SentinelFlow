@@ -67,6 +67,7 @@ export default function SentinelFlowAlertsPage() {
     operations: {
       closed_success: number
       disposed_success: number
+      manual_completed: number
       banned_ip_count: number
       banned_ips: string[]
     }
@@ -76,28 +77,51 @@ export default function SentinelFlowAlertsPage() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [actionState, setActionState] = useState<{ action: string; running: boolean }>({ action: '', running: false })
   const [actionResult, setActionResult] = useState<AlertActionResponse | null>(null)
+  const autoExecuteEnabled = Boolean(data?.auto_execute_enabled)
+  const autoExecuteRunning = Boolean(data?.auto_execute_running)
 
-  async function loadTasks() {
-    setLoading(true)
-    setError(null)
+  async function loadTasks(options?: { silent?: boolean }) {
+    const silent = options?.silent ?? false
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
     try {
-      const [result, dashboard] = await Promise.all([fetchPollAlerts(), fetchDashboardSummary()])
+      const result = await fetchPollAlerts()
       setData(result)
-      setSummary({
-        judgment: dashboard.judgment,
-        operations: dashboard.operations,
-      })
       setSelectedTaskId((current) => current ?? result.tasks[0]?.task_id ?? null)
+      if (!silent) {
+        setLoading(false)
+      }
+      void fetchDashboardSummary()
+        .then((dashboard) => {
+          setSummary({
+            judgment: dashboard.judgment,
+            operations: dashboard.operations,
+          })
+        })
+        .catch(() => {
+          // Keep the queue responsive even if the summary request is slower.
+        })
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Unknown error')
-    } finally {
-      setLoading(false)
+      if (!silent) {
+        setLoading(false)
+      }
     }
   }
 
   useEffect(() => {
     void loadTasks()
   }, [])
+
+  useEffect(() => {
+    if (!autoExecuteEnabled) return
+    const timer = window.setInterval(() => {
+      void loadTasks({ silent: true })
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [autoExecuteEnabled])
 
   const tasks = [...(data?.tasks ?? [])].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
   const selectedTask = tasks.find((task) => task.task_id === selectedTaskId) ?? tasks[0] ?? null
@@ -116,7 +140,7 @@ export default function SentinelFlowAlertsPage() {
   async function runAction(action: string) {
     setActionState({ action, running: true })
     try {
-      const result = action === 'refresh_poll' || action === 'auto_run_pending'
+      const result = action === 'refresh_poll' || action === 'auto_run_pending' || action === 'auto_execute_start' || action === 'auto_execute_stop'
         ? await handleAlertAction(action)
         : selectedTask
           ? await handleAlertAction(action, selectedTask)
@@ -191,11 +215,20 @@ export default function SentinelFlowAlertsPage() {
             <span>完成：{data?.completed_count ?? 0}</span>
             <span>跳过：{data?.skipped_count ?? 0}</span>
             <span>失败：{data?.failed_count ?? 0}</span>
+            <span>自动执行：{autoExecuteEnabled ? (autoExecuteRunning ? '自动执行中' : '已开启') : '未开启'}</span>
             <span>已结单：{summary?.operations.closed_success ?? 0}</span>
             <span>已处置：{summary?.operations.disposed_success ?? 0}</span>
+            <span>人工处置：{summary?.operations.manual_completed ?? 0}</span>
           </div>
           <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('refresh_poll')} disabled={actionState.running}>重新轮询</button>
-          <button type="button" className="sentinelflow-primary-button" onClick={() => void runAction('auto_run_pending')} disabled={actionState.running}>自动执行待处理</button>
+          <button
+            type="button"
+            className={autoExecuteEnabled ? 'sentinelflow-ghost-button' : 'sentinelflow-primary-button'}
+            onClick={() => void runAction(autoExecuteEnabled ? 'auto_execute_stop' : 'auto_execute_start')}
+            disabled={actionState.running}
+          >
+            {autoExecuteEnabled ? (autoExecuteRunning ? '自动执行中' : '停止自动执行') : '开始自动执行'}
+          </button>
         </div>
 
         <div className="sentinelflow-grid-2">
@@ -216,7 +249,7 @@ export default function SentinelFlowAlertsPage() {
                       className={selectedTask?.task_id === task.task_id ? 'sentinelflow-table-row-active' : ''}
                       onClick={() => setSelectedTaskId(task.task_id)}
                     >
-                      <td>{task.title}</td>
+                      <td>{task.title || '未命名告警'}</td>
                       <td>{formatAlertTime(task.alert_time)}</td>
                       <td><StatusBadge tone={getTaskTone(task)}>{getTaskStatusLabel(task)}</StatusBadge></td>
                       <td>{task.workflow_name}</td>
@@ -329,6 +362,10 @@ export default function SentinelFlowAlertsPage() {
               <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
                 <div className="text-xs text-blue-800">成功处置</div>
                 <div className="mt-1 text-2xl font-bold text-blue-950">{summary?.operations.disposed_success ?? 0}</div>
+              </div>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <div className="text-xs text-amber-800">人工处置</div>
+                <div className="mt-1 text-2xl font-bold text-amber-950">{summary?.operations.manual_completed ?? 0}</div>
               </div>
             </div>
             <div className="mt-4">

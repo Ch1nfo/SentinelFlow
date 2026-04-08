@@ -100,6 +100,8 @@ class PollingDispatchResult:
     completed_count: int = 0
     skipped_count: int = 0
     failed_count: int = 0
+    auto_execute_enabled: bool = False
+    auto_execute_running: bool = False
     tasks: list[AlertHandlingTask] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 

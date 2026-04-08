@@ -1,7 +1,24 @@
+import { useMemo, useState } from 'react'
+
 type JsonPreviewProps = {
   value: unknown
 }
 
 export default function JsonPreview({ value }: JsonPreviewProps) {
-  return <pre className="sentinelflow-code-block">{JSON.stringify(value, null, 2)}</pre>
+  const [expanded, setExpanded] = useState(false)
+  const text = useMemo(() => JSON.stringify(value, null, 2), [value])
+  const lines = useMemo(() => text.split('\n'), [text])
+  const exceedsLimit = lines.length > 20
+  const preview = exceedsLimit && !expanded ? `${lines.slice(0, 20).join('\n')}\n...` : text
+
+  return (
+    <div className="space-y-3">
+      <pre className="sentinelflow-code-block">{preview}</pre>
+      {exceedsLimit ? (
+        <button type="button" className="sentinelflow-ghost-button" onClick={() => setExpanded((current) => !current)}>
+          {expanded ? '收起动作结果' : '展开更多'}
+        </button>
+      ) : null}
+    </div>
+  )
 }

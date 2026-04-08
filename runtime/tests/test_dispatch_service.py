@@ -79,7 +79,7 @@ class DispatchServiceTest(unittest.TestCase):
         assert task is not None
         self.assertEqual(task.status, "queued")
         self.assertEqual(task.alert_time, "2026-04-08 11:00:00")
-        self.assertEqual(task.title, "new [E-1]")
+        self.assertEqual(task.title, "new")
         self.assertEqual(task.payload["alert_data"]["payload"], "new-payload")
 
     def test_dispatch_completes_missing_queued_task(self) -> None:

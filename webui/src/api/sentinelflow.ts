@@ -23,6 +23,8 @@ export type PollAlertsResponse = {
   completed_count: number
   skipped_count: number
   failed_count: number
+  auto_execute_enabled: boolean
+  auto_execute_running: boolean
   tasks: AlertTask[]
   errors: string[]
 }
@@ -182,8 +184,13 @@ export type DashboardSummaryResponse = {
   operations: {
     closed_success: number
     disposed_success: number
+    manual_completed: number
     banned_ip_count: number
     banned_ips: string[]
+  }
+  automation?: {
+    enabled: boolean
+    running: boolean
   }
   recent_results: Array<{
     task_id: string
@@ -321,7 +328,7 @@ export async function fetchDashboardSummary(): Promise<DashboardSummaryResponse>
 }
 
 export async function fetchPollAlerts(): Promise<PollAlertsResponse> {
-  return getJson('/api/sentinelflow/alerts/poll')
+  return getJson('/api/sentinelflow/alerts/state')
 }
 
 export async function handleAlertAction(action: string, task?: AlertTask, alert?: Record<string, unknown>) {

@@ -91,12 +91,14 @@ def save_settings(payload: RuntimeConfigRequest) -> dict[str, Any]:
     if not payload.llm_api_key:
         next_payload["llm_api_key"] = current.llm_api_key
     save_runtime_config(next_payload)
+    polling_service.refresh_schedule()
     return runtime_settings()
 
 
 @router.post("/runtime/settings/reset")
 def reset_settings() -> dict[str, Any]:
     reset_runtime_config()
+    polling_service.refresh_schedule()
     return runtime_settings()
 
 

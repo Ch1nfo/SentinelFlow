@@ -7,6 +7,7 @@ Route handlers live in separate router modules (routers/).
 from __future__ import annotations
 
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -18,7 +19,9 @@ from sentinelflow.alerts.poller import AlertPollingService
 from sentinelflow.agent.service import SentinelFlowAgentService
 from sentinelflow.config.branding import load_branding_config
 from sentinelflow.services.audit_service import AuditService
+from sentinelflow.services.auto_execution_service import AlertAutoExecutionService
 from sentinelflow.services.dispatch_service import AlertDispatchService
+from sentinelflow.services.task_runner_service import AlertTaskRunnerService
 from sentinelflow.services.triage_service import TriageService
 from sentinelflow.skills.adapters import SentinelFlowSkillRuntime
 from sentinelflow.workflows.agent_workflow_runner import SentinelFlowAgentWorkflowRunner
@@ -33,7 +36,6 @@ PLATFORM_PLUGIN_ROOT = PLATFORM_ROOT / ".sentinelflow" / "plugins"
 
 # ── Branding & App ───────────────────────────────────────────────────────────
 branding = load_branding_config()
-app = FastAPI(title=branding.api_title, version="0.1.0")
 
 # ── Service singletons ───────────────────────────────────────────────────────
 skill_runtime = SentinelFlowSkillRuntime(SKILL_ROOT)
@@ -66,7 +68,33 @@ polling_service = AlertPollingService(
     dedup=dispatch_service.dedup,
     dispatch_service=dispatch_service,
 )
+task_runner_service = AlertTaskRunnerService(
+    dispatch_service=dispatch_service,
+    audit_service=audit_service,
+    agent_service=agent_service,
+    agent_workflow_runner=agent_workflow_runner,
+    workflow_root=WORKFLOW_ROOT,
+)
+auto_execution_service = AlertAutoExecutionService(
+    dispatch_service=dispatch_service,
+    task_runner_service=task_runner_service,
+    audit_service=audit_service,
+)
 alert_parser_generator = AlertParserGenerator()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await polling_service.start()
+    await auto_execution_service.start()
+    try:
+        yield
+    finally:
+        await auto_execution_service.stop()
+        await polling_service.stop()
+
+
+app = FastAPI(title=branding.api_title, version="0.1.0", lifespan=lifespan)
 
 # ── Router registration ──────────────────────────────────────────────────────
 from sentinelflow.api.routers import system, plugins, alerts  # noqa: E402

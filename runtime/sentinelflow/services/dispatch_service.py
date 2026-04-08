@@ -102,7 +102,7 @@ class AlertDispatchService:
         payload["alert_data"] = alert
         if workflow_selection is not None:
             payload["workflow_selection"] = workflow_selection
-        existing.title = f"{alert_name} [{existing.event_ids}]"
+        existing.title = alert_name
         existing.description = f"Handle alert {existing.event_ids} through workflow {workflow_name}."
         existing.alert_time = str(alert.get("alert_time", "")).strip()
         existing.payload = payload

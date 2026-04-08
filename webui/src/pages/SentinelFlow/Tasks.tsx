@@ -47,7 +47,7 @@ function getTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' {
 }
 
 export default function SentinelFlowTasksPage() {
-  const { data: poll, loading, error, reload: reloadPoll } = useSentinelFlowAsyncData(fetchPollAlerts, [])
+  const { data: poll, loading, error, reload: reloadPoll, setData: setPollData } = useSentinelFlowAsyncData(fetchPollAlerts, [])
   const { data: audit, reload: reloadAudit } = useSentinelFlowAsyncData(fetchAuditEvents, [])
   const { data: settings } = useSentinelFlowAsyncData(fetchRuntimeSettings, [])
   const [activity, setActivity] = useState<RuntimeActivity | null>(() => readRuntimeActivity())
@@ -56,6 +56,8 @@ export default function SentinelFlowTasksPage() {
   const [filter, setFilter] = useState<TaskFilter>(() => readSessionValue<TaskFilter>(TASK_FILTER_KEY, 'all'))
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const tasks = poll?.tasks ?? []
+  const autoExecuteEnabled = Boolean(poll?.auto_execute_enabled)
+  const autoExecuteRunning = Boolean(poll?.auto_execute_running)
 
   useEffect(() => {
     writeSessionValue(TASK_FILTER_KEY, filter)
@@ -73,6 +75,16 @@ export default function SentinelFlowTasksPage() {
     setSelectedTaskId((current) => current ?? tasks[0]?.task_id ?? null)
   }, [tasks])
 
+  useEffect(() => {
+    if (!autoExecuteEnabled) return
+    const timer = window.setInterval(() => {
+      void fetchPollAlerts().then((next) => {
+        setPollData(next)
+      })
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [autoExecuteEnabled, setPollData])
+
   const filteredTasks = useMemo(() => (filter === 'all' ? tasks : tasks.filter((task) => task.status === filter)), [filter, tasks])
   const failedTasks = tasks.filter((task) => task.status === 'failed')
   const selectedTask =
@@ -82,15 +94,16 @@ export default function SentinelFlowTasksPage() {
     tasks[0] ??
     null
 
-  async function handleRunPending() {
-    setRunningAction('auto_run_pending')
+  async function handleAutoExecuteToggle() {
+    const action = autoExecuteEnabled ? 'auto_execute_stop' : 'auto_execute_start'
+    setRunningAction(action)
     try {
-      const result = await handleAlertAction('auto_run_pending')
+      const result = await handleAlertAction(action)
       setBulkResult(result)
       const next: RuntimeActivity = {
         type: 'alert_action',
-        title: '自动执行待处理任务',
-        detail: result.success ? `已执行 ${result.data.count ?? 0} 条待处理任务。` : result.error ?? '自动执行失败。',
+        title: autoExecuteEnabled ? '停止自动执行' : '开始自动执行',
+        detail: result.success ? (autoExecuteEnabled ? '后台自动执行已停止。' : '后台自动执行已开启。') : result.error ?? '自动执行失败。',
         success: result.success,
         timestamp: new Date().toISOString(),
       }
@@ -143,9 +156,14 @@ export default function SentinelFlowTasksPage() {
         description="按状态查看任务流转、失败聚合、重试动作和最近审计。"
         icon={<ListTodo className="w-8 h-8" />}
         action={
-          <button type="button" className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-white transition-colors hover:bg-red-700" onClick={() => void handleRunPending()} disabled={runningAction !== ''}>
+          <button
+            type="button"
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 transition-colors ${autoExecuteEnabled ? 'border border-red-200 bg-white text-red-600 hover:bg-red-50' : 'bg-red-600 text-white hover:bg-red-700'}`}
+            onClick={() => void handleAutoExecuteToggle()}
+            disabled={runningAction !== ''}
+          >
             <RotateCcw className="h-4 w-4" />
-            自动执行待处理
+            {autoExecuteEnabled ? (autoExecuteRunning ? '自动执行中' : '停止自动执行') : '开始自动执行'}
           </button>
         }
       />
@@ -192,6 +210,7 @@ export default function SentinelFlowTasksPage() {
           </div>
           <div className="sentinelflow-inline-metrics">
             <span>mode: {settings?.runtime.agent_enabled ? 'Agent' : 'Basic'}</span>
+            <span>自动执行: {autoExecuteEnabled ? (autoExecuteRunning ? '自动执行中' : '已开启') : '未开启'}</span>
             <button type="button" className="sentinelflow-ghost-button" onClick={() => void Promise.all([reloadPoll(), reloadAudit()])}>刷新任务视图</button>
           </div>
         </div>

@@ -8,11 +8,8 @@ from uuid import uuid4
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from sentinelflow.api.schemas import CommandDispatchRequest, AlertActionRequest
-from sentinelflow.api.deps import agent_service, dispatch_service, audit_service, polling_service, skill_runtime, _serialize, WORKFLOW_ROOT
+from sentinelflow.api.deps import dispatch_service, audit_service, polling_service, skill_runtime, _serialize, auto_execution_service, task_runner_service
 from sentinelflow.api.utils import _extract_alert_payload, _resolve_task
-from sentinelflow.workflows.agent_workflow_registry import load_agent_workflow
-from sentinelflow.workflows.agent_workflow_runner import SentinelFlowAgentWorkflowRunner
-from sentinelflow.api.deps import agent_workflow_runner
 
 router = APIRouter(prefix="/api/sentinelflow")
 
@@ -30,6 +27,7 @@ def _dashboard_summary() -> dict[str, Any]:
     }
     closed_success = 0
     disposed_success = 0
+    manual_completed = 0
     banned_ips: set[str] = set()
     recent_results: list[dict[str, Any]] = []
 
@@ -44,6 +42,8 @@ def _dashboard_summary() -> dict[str, Any]:
                 closed_success += 1
             if task.last_action == "triage_dispose":
                 disposed_success += 1
+        if task.status == "completed":
+            manual_completed += 1
 
         actions = result.get("actions")
         if isinstance(actions, dict):
@@ -81,6 +81,7 @@ def _dashboard_summary() -> dict[str, Any]:
         "operations": {
             "closed_success": closed_success,
             "disposed_success": disposed_success,
+            "manual_completed": manual_completed,
             "banned_ip_count": len(banned_ips),
             "banned_ips": sorted(banned_ips),
         },
@@ -90,98 +91,27 @@ def _dashboard_summary() -> dict[str, Any]:
 
 @router.get("/dashboard/summary")
 def dashboard_summary() -> dict[str, Any]:
-    return _dashboard_summary()
+    summary = _dashboard_summary()
+    summary["automation"] = auto_execution_service.state()
+    return summary
 
 
 @router.get("/alerts/poll")
 async def poll_alerts() -> dict[str, Any]:
     result = await polling_service.poll_once()
+    auto_state = auto_execution_service.state()
+    result.auto_execute_enabled = auto_state["enabled"]
+    result.auto_execute_running = auto_state["running"]
     return _serialize(result)
 
 
-async def _run_task(task, action: str | None = None) -> dict[str, Any]:
-    alert = {}
-    if isinstance(task.payload, dict):
-        payload_alert = task.payload.get("alert_data")
-        if isinstance(payload_alert, dict):
-            alert = payload_alert
-
-    if not alert:
-        task = dispatch_service.finalize_task(task.task_id, action or "unknown", False, {}, "任务缺少告警上下文。")
-        return {
-            "action": action or "unknown",
-            "success": False,
-            "task_id": task.task_id if task else "",
-            "event_ids": "",
-            "data": {},
-            "task": _serialize(task) if task else None,
-            "error": "任务缺少告警上下文。",
-        }
-
-    selected_action = action
-    if not selected_action:
-        if task.workflow_name == "agent_react":
-            selected_action = "triage_close"
-        else:
-            try:
-                workflow_definition = load_agent_workflow(WORKFLOW_ROOT, task.workflow_name)
-                selected_action = workflow_definition.recommended_action
-            except Exception:
-                selected_action = "triage_close"
-
-    dispatch_service.mark_task_running(task.task_id, selected_action)
-
-    agent_available, _agent_error = agent_service.is_available()
-    if task.workflow_name == "agent_react" and agent_service.is_configured() and agent_available:
-        try:
-            agent_result = await agent_service.run_alert(alert, selected_action)
-            if bool(agent_result.get("success")):
-                task = dispatch_service.finalize_task(task.task_id, selected_action, True, _serialize(agent_result), None)
-                return {
-                    "action": selected_action, "success": True,
-                    "task_id": task.task_id if task else "",
-                    "event_ids": str(agent_result.get("event_ids", "")).strip(),
-                    "data": _serialize(agent_result), "task": _serialize(task) if task else None, "error": None,
-                }
-        except Exception as exc:
-            audit_service.record("agent_react_task_failed", "Agent ReAct runtime failed.", {"error": str(exc)})
-
-    if selected_action in {"triage_close", "triage_dispose"} and agent_service.is_configured() and agent_available:
-        try:
-            workflow_definition = load_agent_workflow(WORKFLOW_ROOT, task.workflow_name)
-            agent_result = await agent_workflow_runner.run_alert_workflow(workflow_definition, alert, selected_action)
-            if bool(agent_result.get("success")):
-                task = dispatch_service.finalize_task(task.task_id, selected_action, True, _serialize(agent_result), None)
-                return {
-                    "action": selected_action, "success": True,
-                    "task_id": task.task_id if task else "",
-                    "event_ids": str(agent_result.get("event_ids", "")).strip(),
-                    "data": _serialize(agent_result), "task": _serialize(task) if task else None, "error": None,
-                }
-        except FileNotFoundError:
-            try:
-                agent_result = await agent_service.run_alert(alert, selected_action)
-                if bool(agent_result.get("success")):
-                    task = dispatch_service.finalize_task(task.task_id, selected_action, True, _serialize(agent_result), None)
-                    return {
-                        "action": selected_action, "success": True,
-                        "task_id": task.task_id if task else "",
-                        "event_ids": str(agent_result.get("event_ids", "")).strip(),
-                        "data": _serialize(agent_result), "task": _serialize(task) if task else None, "error": None,
-                    }
-            except Exception as exc:
-                audit_service.record("agent_task_failed", f"Agent runtime failed during {selected_action}.", {"error": str(exc)})
-        except Exception as exc:
-            audit_service.record("agent_workflow_task_failed", f"Workflow failed during {selected_action}.", {"error": str(exc)})
-
-    task = dispatch_service.finalize_task(task.task_id, selected_action, False, {}, "当前任务没有可用的 Agent Workflow，且主 Agent 处理未成功。")
-    return {
-        "action": selected_action, "success": False,
-        "task_id": task.task_id if task else "",
-        "event_ids": str(alert.get("eventIds", "")).strip(),
-        "data": {}, "task": _serialize(task) if task else None,
-        "error": "当前任务没有可用的 Agent Workflow，且主 Agent 处理未成功。",
-    }
+@router.get("/alerts/state")
+def alerts_state() -> dict[str, Any]:
+    result = polling_service.get_latest_result()
+    auto_state = auto_execution_service.state()
+    result.auto_execute_enabled = auto_state["enabled"]
+    result.auto_execute_running = auto_state["running"]
+    return _serialize(result)
 
 
 
@@ -208,13 +138,37 @@ async def handle_alert(payload: AlertActionRequest) -> dict[str, Any]:
         for queued_task in dispatch_service.list_tasks():
             if queued_task.status != "queued":
                 continue
-            results.append(await _run_task(queued_task))
+            results.append(_serialize(await task_runner_service.run_task(queued_task)))
         return {
             "action": payload.action,
             "success": all(item.get("success", False) for item in results) if results else True,
             "task_id": "",
             "event_ids": "",
             "data": {"results": results, "count": len(results)},
+            "task": None,
+            "error": None,
+        }
+
+    if payload.action == "auto_execute_start":
+        auto_execution_service.enable()
+        return {
+            "action": payload.action,
+            "success": True,
+            "task_id": "",
+            "event_ids": "",
+            "data": {"auto_execution": auto_execution_service.state()},
+            "task": None,
+            "error": None,
+        }
+
+    if payload.action == "auto_execute_stop":
+        auto_execution_service.disable()
+        return {
+            "action": payload.action,
+            "success": True,
+            "task_id": "",
+            "event_ids": "",
+            "data": {"auto_execution": auto_execution_service.state()},
             "task": None,
             "error": None,
         }
@@ -227,13 +181,13 @@ async def handle_alert(payload: AlertActionRequest) -> dict[str, Any]:
                 "error": "未找到待重试任务。",
             }
         dispatch_service.prepare_retry(task.task_id)
-        return await _run_task(task)
+        return _serialize(await task_runner_service.run_task(task))
 
     if not alert:
         return {"action": payload.action, "success": False, "error": "未提供可处理的告警上下文。"}
 
     if task:
-        return await _run_task(task, payload.action)
+        return _serialize(await task_runner_service.run_task(task, payload.action))
 
     return {"action": payload.action, "success": False, "error": "当前动作需要绑定任务上下文。"}
 

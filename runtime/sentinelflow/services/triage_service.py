@@ -31,7 +31,7 @@ class TriageService:
             task_id=task_id,
             event_ids=event_ids,
             workflow_name=effective_workflow_name,
-            title=f"{alert_name} [{event_ids}]",
+            title=alert_name,
             description=f"Handle alert {event_ids} through workflow {effective_workflow_name}.",
             alert_time=str(alert.get("alert_time", "")).strip(),
             payload={"alert_data": alert, "workflow_selection": workflow_selection},

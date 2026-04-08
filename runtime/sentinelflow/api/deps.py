@@ -36,8 +36,9 @@ def __getattr__(name: str):
         "PROJECT_ROOT", "PLATFORM_ROOT", "SKILL_ROOT", "WORKFLOW_ROOT",
         "AGENT_ROOT", "PLATFORM_PLUGIN_ROOT", "branding",
         "skill_runtime", "audit_service", "agent_service",
-        "triage_service", "agent_workflow_runner",
+        "triage_service", "agent_workflow_runner", "task_runner_service",
         "dispatch_service", "polling_service", "alert_parser_generator",
+        "auto_execution_service",
     }
     if name in _EXPORTED:
         import sentinelflow.api.app as _app
