@@ -127,6 +127,48 @@ def _render_payload_template(item: dict[str, Any], template: str) -> str:
     return rendered.strip()
 
 
+def _normalize_alert_time_bucket(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return ""
+    if len(text) >= 16:
+        return text[:16]
+    return text
+
+
+def _stable_event_id(normalized: dict[str, Any], item: dict[str, Any], index: int) -> tuple[str, str | None]:
+    stable_fields = [
+        _stringify(normalized.get("alert_source")),
+        _stringify(normalized.get("alert_name")),
+        _stringify(normalized.get("sip")),
+        _stringify(normalized.get("dip")),
+        _normalize_alert_time_bucket(_stringify(normalized.get("alert_time"))),
+    ]
+    stable_parts = [part for part in stable_fields if part]
+    if len(stable_parts) >= 3:
+        digest = sha1("||".join(stable_parts).encode("utf-8")).hexdigest()[:16]
+        return f"STABLE-{digest}", "当前告警未提取到 eventIds，已回退为稳定字段组合指纹。建议尽快配置真正的唯一事件 ID。"
+
+    for candidate in (
+        "event_id",
+        "eventId",
+        "id",
+        "alert_id",
+        "alertId",
+        "alarm_id",
+        "alarmId",
+        "uuid",
+        "_id",
+    ):
+        candidate_value = _stringify(_walk_path(item, candidate))
+        if candidate_value:
+            digest = sha1(f"{candidate}:{candidate_value}".encode("utf-8")).hexdigest()[:16]
+            return f"FALLBACK-{digest}", f"当前告警未提取到 eventIds，已回退为原始字段 {candidate} 的指纹。建议尽快配置真正的唯一事件 ID。"
+
+    digest = sha1(_stringify(item).encode("utf-8")).hexdigest()[:12]
+    return f"AUTO-{index + 1}-{digest}", "当前告警未提取到 eventIds，且缺少稳定候选字段，已退回整条记录哈希。可能导致重复建单风险。"
+
+
 class AlertParserRuntime:
     def normalize(self, raw_payload: Any, parser_rule: Any) -> dict[str, Any]:
         rule, error = validate_and_prepare_parser_rule(parser_rule)
@@ -140,13 +182,16 @@ class AlertParserRuntime:
             return {"error": "解析规则未命中告警数组，请检查 items_path。", "alerts": []}
 
         alerts: list[dict[str, Any]] = []
+        warnings: list[str] = []
         for index, item in enumerate(source_items):
             if not isinstance(item, dict):
                 continue
-            normalized = self._normalize_item(item, rule, index)
+            normalized, warning = self._normalize_item(item, rule, index)
             if any(normalized.get(key) for key in ("eventIds", "alert_name", "sip", "dip", "payload")):
                 alerts.append(normalized)
-        return {"count": len(alerts), "alerts": alerts}
+            if warning and warning not in warnings:
+                warnings.append(warning)
+        return {"count": len(alerts), "alerts": alerts, "warnings": warnings}
 
     def preview(self, raw_payload: Any, parser_rule: Any, limit: int = 3) -> dict[str, Any]:
         result = self.normalize(raw_payload, parser_rule)
@@ -154,9 +199,10 @@ class AlertParserRuntime:
             "count": result.get("count", 0),
             "alerts": list(result.get("alerts", []))[:limit],
             "error": result.get("error"),
+            "warnings": list(result.get("warnings", [])),
         }
 
-    def _normalize_item(self, item: dict[str, Any], rule: dict[str, Any], index: int) -> dict[str, Any]:
+    def _normalize_item(self, item: dict[str, Any], rule: dict[str, Any], index: int) -> tuple[dict[str, Any], str | None]:
         field_mapping = rule["field_mapping"]
         defaults = rule["defaults"]
         payload_template = str(rule.get("payload_template", "")).strip()
@@ -178,7 +224,7 @@ class AlertParserRuntime:
         normalized["response_body"] = _stringify(item)[:4000]
         normalized["raw_data"] = item
         normalized["alert_source"] = normalized.get("alert_source") or _stringify(defaults.get("alert_source", "custom_alert_source"))
+        warning: str | None = None
         if not normalized.get("eventIds"):
-            digest = sha1(_stringify(item).encode("utf-8")).hexdigest()[:12]
-            normalized["eventIds"] = f"AUTO-{index + 1}-{digest}"
-        return normalized
+            normalized["eventIds"], warning = _stable_event_id(normalized, item, index)
+        return normalized, warning

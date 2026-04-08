@@ -159,6 +159,7 @@ export type AlertSourceParserGenerateResponse = {
   preview: {
     count: number
     alerts: Array<Record<string, unknown>>
+    warnings?: string[]
     error?: string | null
   }
 }

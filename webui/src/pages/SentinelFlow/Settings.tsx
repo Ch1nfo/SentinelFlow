@@ -98,6 +98,7 @@ export default function SentinelFlowSettingsPage() {
     }),
   )
   const [parserMessage, setParserMessage] = useState<string | null>(null)
+  const [parserWarnings, setParserWarnings] = useState<string[]>([])
   const [fetchMessage, setFetchMessage] = useState<string | null>(null)
   const [fetchMessageTone, setFetchMessageTone] = useState<'success' | 'error'>('success')
   const [parserPreview, setParserPreview] = useState<Array<Record<string, unknown>>>([])
@@ -196,6 +197,7 @@ export default function SentinelFlowSettingsPage() {
       setSaveMessageTone('success')
       setSaveMessage('项目级配置已重置为默认值。')
       setParserMessage(null)
+      setParserWarnings([])
       setParserPreview([])
       setFetchPreview(null)
     } catch (resetError) {
@@ -241,8 +243,10 @@ export default function SentinelFlowSettingsPage() {
       const generated = await generateAlertParser(draft.alertSourceSamplePayload)
       updateDraft('alertParserRule', generated.parser_rule)
       setParserPreview(generated.preview.alerts)
+      setParserWarnings(generated.preview.warnings ?? [])
       setParserMessage(generated.reason)
     } catch (generateError) {
+      setParserWarnings([])
       setParserMessage(generateError instanceof Error ? generateError.message : '自动解析失败')
     } finally {
       setGeneratingParser(false)
@@ -258,8 +262,14 @@ export default function SentinelFlowSettingsPage() {
         parserRule: draft.alertParserRule,
       })
       setParserPreview(preview.alerts)
-      setParserMessage(`解析成功，预览到 ${preview.count} 条告警。`)
+      setParserWarnings(preview.warnings ?? [])
+      setParserMessage(
+        preview.warnings?.length
+          ? `解析成功，预览到 ${preview.count} 条告警，并发现 ${preview.warnings.length} 条需要关注的解析风险。`
+          : `解析成功，预览到 ${preview.count} 条告警。`,
+      )
     } catch (previewError) {
+      setParserWarnings([])
       setParserMessage(previewError instanceof Error ? previewError.message : '测试解析失败')
     } finally {
       setTestingParse(false)
@@ -432,6 +442,19 @@ export default function SentinelFlowSettingsPage() {
           </div>
           {parserSaveMessage ? <div className={`mt-4 sentinelflow-message-block ${parserSaveTone === 'success' ? 'sentinelflow-message-success' : 'sentinelflow-message-error'}`}>{parserSaveMessage}</div> : null}
           {parserMessage ? <div className="mt-4 sentinelflow-message-block">{parserMessage}</div> : null}
+          {parserWarnings.length ? (
+            <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-4 text-amber-900">
+              <div className="mb-2 text-sm font-semibold">解析风险提醒</div>
+              <div className="mb-3 text-sm leading-6">
+                当前解析规则可以跑通，但存在会影响去重或稳定性的风险。尤其是 `eventIds` 使用 fallback 生成时，可能导致重复建单。
+              </div>
+              <ul className="list-disc space-y-1 pl-5 text-sm leading-6">
+                {parserWarnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
               <div className="mb-2 text-sm font-semibold text-gray-900">当前解析规则</div>
