@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import tempfile
 from typing import Any
 
 import requests
 import urllib3
 
 from sentinelflow.alerts.parser_runtime import AlertParserRuntime, parse_jsonish
-from sentinelflow.config.runtime import SentinelFlowRuntimeConfig, load_runtime_config
+from sentinelflow.config.runtime import PROJECT_ROOT, SentinelFlowRuntimeConfig, load_runtime_config
 
 
 def _build_headers(user_headers: Any) -> dict[str, str]:
@@ -28,6 +31,64 @@ def _build_payload(text: str) -> Any:
     return parsed if parsed is not None else (text.strip() or None)
 
 
+def _stringify(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return str(value)
+
+
+def _normalize_script_alert(alert: dict[str, Any], index: int) -> dict[str, Any]:
+    event_ids = _stringify(alert.get("eventIds") or alert.get("event_ids") or alert.get("id"))
+    normalized = {
+        "eventIds": event_ids or f"SCRIPT-{index + 1}",
+        "alert_name": _stringify(alert.get("alert_name") or alert.get("alertName") or alert.get("title") or alert.get("name")),
+        "sip": _stringify(alert.get("sip") or alert.get("source_ip") or alert.get("sourceIp")),
+        "dip": _stringify(alert.get("dip") or alert.get("destination_ip") or alert.get("destinationIp")),
+        "payload": _stringify(alert.get("payload")),
+        "response_body": _stringify(alert.get("response_body") or alert.get("responseBody")),
+        "alert_time": _stringify(alert.get("alert_time") or alert.get("alertTime") or alert.get("timestamp")),
+        "alert_source": _stringify(alert.get("alert_source") or alert.get("alertSource")),
+        "current_judgment": _stringify(alert.get("current_judgment") or alert.get("currentJudgment")),
+        "history_judgment": _stringify(alert.get("history_judgment") or alert.get("historyJudgment")),
+        "raw_data": alert.get("raw_data") if isinstance(alert.get("raw_data"), dict) else dict(alert),
+    }
+    if not normalized["payload"]:
+        normalized["payload"] = _stringify(alert)[:4000]
+    if not normalized["response_body"]:
+        normalized["response_body"] = _stringify(alert)[:4000]
+    if not normalized["alert_source"]:
+        normalized["alert_source"] = "custom_script"
+    return normalized
+
+
+def _normalize_script_result(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, list):
+        alerts = payload
+    elif isinstance(payload, dict):
+        alerts = payload.get("alerts", [])
+    else:
+        raise ValueError("脚本输出必须是 JSON 对象或数组。")
+
+    if not isinstance(alerts, list):
+        raise ValueError("脚本输出中的 alerts 字段必须是数组。")
+
+    normalized_alerts: list[dict[str, Any]] = []
+    for index, item in enumerate(alerts):
+        if not isinstance(item, dict):
+            continue
+        normalized = _normalize_script_alert(item, index)
+        if any(normalized.get(key) for key in ("eventIds", "alert_name", "sip", "dip", "payload")):
+            normalized_alerts.append(normalized)
+    return {"count": len(normalized_alerts), "alerts": normalized_alerts}
+
+
 class SOCAlertApiClient:
     """Fetches alerts from a single configured alert source and normalizes them."""
 
@@ -41,6 +102,14 @@ class SOCAlertApiClient:
             return self._demo_alerts()
         if not config.alert_source_enabled:
             return {"error": "当前未启用告警接入配置。"}
+        if config.alert_source_type == "script":
+            fetched = self.fetch_script_alerts(config)
+            if "error" in fetched:
+                if config.demo_fallback:
+                    return self._demo_alerts(error=str(fetched["error"]))
+                return fetched
+            return fetched
+
         if not config.alert_source_url:
             return {"error": "当前未配置告警接入 URL。"}
         if not config.alert_parser_rule:
@@ -101,6 +170,50 @@ class SOCAlertApiClient:
 
     def preview_parse(self, raw_payload: Any, parser_rule: Any) -> dict[str, Any]:
         return self.parser_runtime.preview(raw_payload, parser_rule)
+
+    def fetch_script_alerts(self, config: SentinelFlowRuntimeConfig | None = None) -> dict[str, Any]:
+        runtime = config or load_runtime_config()
+        code = runtime.alert_script_code.strip()
+        if not code:
+            return {"error": "当前未配置告警接入脚本。"}
+
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".py", encoding="utf-8", delete=True) as script_file:
+                script_file.write(code)
+                script_file.flush()
+                completed = subprocess.run(
+                    [sys.executable, script_file.name],
+                    cwd=str(PROJECT_ROOT),
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout or runtime.alert_script_timeout,
+                )
+        except subprocess.TimeoutExpired:
+            return {"error": f"脚本执行超时（>{self.timeout or runtime.alert_script_timeout}s）。"}
+        except OSError as exc:
+            return {"error": f"脚本执行失败：{exc}"}
+
+        if completed.returncode != 0:
+            stderr = (completed.stderr or completed.stdout or "").strip()
+            return {"error": f"脚本执行失败（退出码 {completed.returncode}）：{stderr or '无错误输出'}"}
+
+        stdout = completed.stdout.strip()
+        if not stdout:
+            return {"error": "脚本没有输出任何内容，请向 stdout 打印标准 JSON。"}
+
+        try:
+            decoded = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            return {"error": f"脚本 stdout 不是合法 JSON：{exc}"}
+
+        try:
+            normalized = _normalize_script_result(decoded)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {
+            **normalized,
+            "raw_payload": decoded,
+        }
 
     def _demo_alerts(self, error: str | None = None) -> dict[str, Any]:
         result: dict[str, Any] = {"count": 0, "alerts": [], "demo_mode": True}

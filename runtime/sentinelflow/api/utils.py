@@ -10,9 +10,10 @@ from sentinelflow.agent.registry import SYSTEM_PRIMARY_AGENT_NAME, list_agent_de
 VISIBLE_RUNTIME_OVERRIDE_KEYS = {
     "poll_interval_seconds", "agent_enabled", "llm_api_base_url", "llm_api_key",
     "llm_model", "llm_temperature", "llm_timeout", "alert_source_enabled",
-    "alert_source_url", "alert_source_method", "alert_source_headers",
-    "alert_source_query", "alert_source_body", "alert_source_timeout",
-    "alert_source_sample_payload", "alert_parser_rule",
+    "alert_source_type", "alert_source_url", "alert_source_method",
+    "alert_source_headers", "alert_source_query", "alert_source_body",
+    "alert_source_timeout", "alert_source_sample_payload", "alert_parser_rule",
+    "alert_script_code", "alert_script_timeout",
 }
 
 

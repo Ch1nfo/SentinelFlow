@@ -29,6 +29,7 @@ type SettingsDraft = {
   llmTemperature: string
   llmTimeout: string
   alertSourceEnabled: boolean
+  alertSourceType: string
   alertSourceUrl: string
   alertSourceMethod: string
   alertSourceHeaders: string
@@ -37,6 +38,8 @@ type SettingsDraft = {
   alertSourceTimeout: string
   alertSourceSamplePayload: string
   alertParserRule: Record<string, unknown>
+  alertScriptCode: string
+  alertScriptTimeout: string
 }
 
 function buildDraft(settings: RuntimeSettingsResponse): SettingsDraft {
@@ -49,6 +52,7 @@ function buildDraft(settings: RuntimeSettingsResponse): SettingsDraft {
     llmTemperature: String(settings.llm.temperature),
     llmTimeout: String(settings.llm.timeout),
     alertSourceEnabled: settings.alert_source.enabled,
+    alertSourceType: settings.alert_source.type,
     alertSourceUrl: settings.alert_source.url,
     alertSourceMethod: settings.alert_source.method,
     alertSourceHeaders: settings.alert_source.headers,
@@ -57,6 +61,8 @@ function buildDraft(settings: RuntimeSettingsResponse): SettingsDraft {
     alertSourceTimeout: String(settings.alert_source.timeout),
     alertSourceSamplePayload: settings.alert_source.sample_payload,
     alertParserRule: settings.alert_source.parser_rule,
+    alertScriptCode: settings.alert_source.script_code,
+    alertScriptTimeout: String(settings.alert_source.script_timeout),
   }
 }
 
@@ -78,6 +84,7 @@ export default function SentinelFlowSettingsPage() {
       llmTemperature: '0',
       llmTimeout: '60',
       alertSourceEnabled: false,
+      alertSourceType: 'api',
       alertSourceUrl: '',
       alertSourceMethod: 'GET',
       alertSourceHeaders: '{}',
@@ -86,6 +93,8 @@ export default function SentinelFlowSettingsPage() {
       alertSourceTimeout: '15',
       alertSourceSamplePayload: '',
       alertParserRule: {},
+      alertScriptCode: '',
+      alertScriptTimeout: '30',
     }),
   )
   const [parserMessage, setParserMessage] = useState<string | null>(null)
@@ -102,6 +111,7 @@ export default function SentinelFlowSettingsPage() {
   const fetchPreviewStr = fetchPreview ? JSON.stringify(fetchPreview, null, 2) : ''
   const fetchPreviewLines = fetchPreviewStr.split('\n')
   const isLongPreview = fetchPreviewLines.length > 20
+  const isScriptMode = draft.alertSourceType === 'script'
 
   function handleImportRuleFromFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
@@ -202,20 +212,23 @@ export default function SentinelFlowSettingsPage() {
     try {
       const result = await testAlertSourceFetch({
         alertSourceEnabled: draft.alertSourceEnabled,
+        alertSourceType: draft.alertSourceType,
         alertSourceUrl: draft.alertSourceUrl,
         alertSourceMethod: draft.alertSourceMethod,
         alertSourceHeaders: draft.alertSourceHeaders,
         alertSourceQuery: draft.alertSourceQuery,
         alertSourceBody: draft.alertSourceBody,
         alertSourceTimeout: draft.alertSourceTimeout,
+        alertScriptCode: draft.alertScriptCode,
+        alertScriptTimeout: draft.alertScriptTimeout,
       })
-      setFetchPreview(result.raw_payload ?? result.raw_response ?? null)
+      setFetchPreview(result.raw_payload ?? result.alerts ?? result.raw_response ?? result ?? null)
       setFetchMessageTone('success')
-      setFetchMessage('接口测试成功，已经拿到原始告警响应。')
+      setFetchMessage(isScriptMode ? `脚本执行成功，返回 ${result.count ?? result.alerts?.length ?? 0} 条标准化告警。` : '接口测试成功，已经拿到原始告警响应。')
     } catch (testError) {
       setFetchPreview(null)
       setFetchMessageTone('error')
-      setFetchMessage(testError instanceof Error ? testError.message : '接口测试失败')
+      setFetchMessage(testError instanceof Error ? testError.message : isScriptMode ? '脚本测试失败' : '接口测试失败')
     } finally {
       setTestingFetch(false)
     }
@@ -275,8 +288,10 @@ export default function SentinelFlowSettingsPage() {
           <div className="text-2xl font-bold text-gray-900">{health?.status ?? 'unknown'}</div>
         </div>
         <div className="rounded-xl border border-gray-200 bg-white p-5">
-          <div className="mb-2 text-sm font-semibold text-gray-900">解析规则</div>
-          <div className="text-2xl font-bold text-gray-900">{settings?.alert_source.parser_configured ? '已配置' : '未配置'}</div>
+          <div className="mb-2 text-sm font-semibold text-gray-900">{settings?.alert_source.type === 'script' ? '接入方式' : '解析规则'}</div>
+          <div className="text-2xl font-bold text-gray-900">
+            {settings?.alert_source.type === 'script' ? '脚本' : settings?.alert_source.parser_configured ? '已配置' : '未配置'}
+          </div>
         </div>
       </div>
 
@@ -292,7 +307,7 @@ export default function SentinelFlowSettingsPage() {
                   { label: '产品名称', value: settings.branding.product_name || brand.productName },
                   { label: '控制台标题', value: settings.branding.console_title || brand.consoleTitle },
                   { label: '轮询周期', value: `${settings.runtime.poll_interval_seconds} 秒` },
-                  { label: '告警接入', value: settings.alert_source.enabled ? '已启用' : '未启用' },
+                  { label: '告警接入', value: settings.alert_source.enabled ? `已启用 · ${settings.alert_source.type === 'script' ? '脚本' : '接口'}` : '未启用' },
                 ]}
               />
             </div>
@@ -342,22 +357,38 @@ export default function SentinelFlowSettingsPage() {
         <div className="mt-6 rounded-2xl border border-gray-200 bg-gray-50 p-5">
           <div className="mb-4">
             <h3 className="text-lg font-semibold text-gray-900">告警接入配置</h3>
-            <p className="mt-1 text-sm text-gray-600">第一版只支持单个告警源。这里直接配置接口、轮询参数和解析规则，不需要额外创建 Skill。</p>
+            <p className="mt-1 text-sm text-gray-600">支持直接请求上游接口，或者在页面里粘贴 Python 脚本并输出标准告警 JSON。</p>
           </div>
           <div className="sentinelflow-settings-form">
             <label className="sentinelflow-settings-field"><span>告警轮询间隔（秒）</span><input className="sentinelflow-settings-input" value={draft.pollIntervalSeconds} onChange={(event) => updateDraft('pollIntervalSeconds', event.target.value)} /></label>
-            <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>接口 URL</span><input className="sentinelflow-settings-input" value={draft.alertSourceUrl} onChange={(event) => updateDraft('alertSourceUrl', event.target.value)} placeholder="https://example.com/api/alerts" /></label>
-            <label className="sentinelflow-settings-field"><span>请求方法</span><select className="sentinelflow-settings-input" value={draft.alertSourceMethod} onChange={(event) => updateDraft('alertSourceMethod', event.target.value)}><option value="GET">GET</option><option value="POST">POST</option></select></label>
-            <label className="sentinelflow-settings-field"><span>接口超时（秒）</span><input className="sentinelflow-settings-input" value={draft.alertSourceTimeout} onChange={(event) => updateDraft('alertSourceTimeout', event.target.value)} /></label>
-            <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>Headers(JSON)</span><textarea className="sentinelflow-settings-input min-h-[120px]" value={draft.alertSourceHeaders} onChange={(event) => updateDraft('alertSourceHeaders', event.target.value)} /></label>
-            <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>Query(JSON)</span><textarea className="sentinelflow-settings-input min-h-[120px]" value={draft.alertSourceQuery} onChange={(event) => updateDraft('alertSourceQuery', event.target.value)} /></label>
-            <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>Body(JSON 或文本)</span><textarea className="sentinelflow-settings-input min-h-[120px]" value={draft.alertSourceBody} onChange={(event) => updateDraft('alertSourceBody', event.target.value)} /></label>
+            <label className="sentinelflow-settings-field"><span>接入方式</span><select className="sentinelflow-settings-input" value={draft.alertSourceType} onChange={(event) => updateDraft('alertSourceType', event.target.value)}><option value="api">接口接入</option><option value="script">脚本接入</option></select></label>
+            {!isScriptMode ? (
+              <>
+                <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>接口 URL</span><input className="sentinelflow-settings-input" value={draft.alertSourceUrl} onChange={(event) => updateDraft('alertSourceUrl', event.target.value)} placeholder="https://example.com/api/alerts" /></label>
+                <label className="sentinelflow-settings-field"><span>请求方法</span><select className="sentinelflow-settings-input" value={draft.alertSourceMethod} onChange={(event) => updateDraft('alertSourceMethod', event.target.value)}><option value="GET">GET</option><option value="POST">POST</option></select></label>
+                <label className="sentinelflow-settings-field"><span>接口超时（秒）</span><input className="sentinelflow-settings-input" value={draft.alertSourceTimeout} onChange={(event) => updateDraft('alertSourceTimeout', event.target.value)} /></label>
+                <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>Headers(JSON)</span><textarea className="sentinelflow-settings-input min-h-[120px]" value={draft.alertSourceHeaders} onChange={(event) => updateDraft('alertSourceHeaders', event.target.value)} /></label>
+                <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>Query(JSON)</span><textarea className="sentinelflow-settings-input min-h-[120px]" value={draft.alertSourceQuery} onChange={(event) => updateDraft('alertSourceQuery', event.target.value)} /></label>
+                <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>Body(JSON 或文本)</span><textarea className="sentinelflow-settings-input min-h-[120px]" value={draft.alertSourceBody} onChange={(event) => updateDraft('alertSourceBody', event.target.value)} /></label>
+              </>
+            ) : (
+              <>
+                <label className="sentinelflow-settings-field"><span>脚本超时（秒）</span><input className="sentinelflow-settings-input" value={draft.alertScriptTimeout} onChange={(event) => updateDraft('alertScriptTimeout', event.target.value)} /></label>
+                <label className="sentinelflow-settings-field sentinelflow-settings-field-full">
+                  <span>Python 脚本</span>
+                  <textarea className="sentinelflow-settings-input min-h-[320px] font-mono text-xs" value={draft.alertScriptCode} onChange={(event) => updateDraft('alertScriptCode', event.target.value)} placeholder={'import json\n\nprint(json.dumps({"count": 0, "alerts": []}, ensure_ascii=False))'} />
+                </label>
+                <div className="sentinelflow-message-block">
+                  脚本不读取 stdin。请在脚本内部完成拉取、过滤和解析，并且只向 stdout 打印最终 JSON；调试输出请写到 stderr。
+                </div>
+              </>
+            )}
           </div>
           {fetchMessage ? <div className={`mt-4 sentinelflow-message-block ${fetchMessageTone === 'success' ? 'sentinelflow-message-success' : 'sentinelflow-message-error'}`}>{fetchMessage}</div> : null}
           {fetchPreview ? (
             <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4">
               <div className="mb-2 flex items-center justify-between">
-                <span className="text-sm font-semibold text-gray-900">原始接口响应预览</span>
+                <span className="text-sm font-semibold text-gray-900">{isScriptMode ? '脚本输出预览' : '原始接口响应预览'}</span>
                 {isLongPreview ? (
                   <button type="button" className="text-xs font-medium text-sky-600 hover:text-sky-800" onClick={() => setFetchPreviewExpanded(!fetchPreviewExpanded)}>
                     {fetchPreviewExpanded ? '收起' : '展开全文'}
@@ -371,11 +402,11 @@ export default function SentinelFlowSettingsPage() {
           ) : null}
           <div className="mt-4 flex flex-wrap gap-2">
             <button type="button" className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-gray-700 transition-colors hover:bg-gray-100" onClick={() => void handleTestFetch()} disabled={testingFetch}>
-              {testingFetch ? '测试中...' : '测试接口拉取'}
+              {testingFetch ? '测试中...' : isScriptMode ? '测试脚本执行' : '测试接口拉取'}
             </button>
           </div>
         </div>
-        <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
+        {!isScriptMode ? <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-5">
           <div className="mb-4">
             <h3 className="text-lg font-semibold text-gray-900">告警解析规则配置</h3>
             <p className="mt-1 text-sm text-gray-600">把接口返回的告警样本粘贴进来，点击自动解析后，平台会调用大模型生成一套可复用的解析规则。</p>
@@ -411,7 +442,7 @@ export default function SentinelFlowSettingsPage() {
               <pre className="overflow-x-auto whitespace-pre-wrap text-xs text-gray-700">{JSON.stringify(parserPreview, null, 2)}</pre>
             </div>
           </div>
-        </div>
+        </div> : null}
         {settings && !settings.llm.agent_available ? <div className="sentinelflow-message-block sentinelflow-message-error">当前环境缺少 LangGraph/LLM 依赖：{settings.llm.agent_unavailable_reason || '未检测到相关依赖'}</div> : null}
       </Surface>
     </div>

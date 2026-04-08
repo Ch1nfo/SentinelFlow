@@ -23,6 +23,11 @@ def _read_env_bool(name: str, default: bool = False) -> bool:
     return _read_bool_value(os.getenv(name), default)
 
 
+def _normalize_alert_source_type(value: Any) -> str:
+    normalized = str(value or "api").strip().lower()
+    return normalized if normalized in {"api", "script"} else "api"
+
+
 @dataclass(frozen=True, slots=True)
 class SentinelFlowRuntimeConfig:
     demo_mode: bool
@@ -35,6 +40,7 @@ class SentinelFlowRuntimeConfig:
     llm_temperature: float
     llm_timeout: int
     alert_source_enabled: bool
+    alert_source_type: str
     alert_source_url: str
     alert_source_method: str
     alert_source_headers: str
@@ -43,6 +49,8 @@ class SentinelFlowRuntimeConfig:
     alert_source_timeout: int
     alert_source_sample_payload: str
     alert_parser_rule: dict[str, Any]
+    alert_script_code: str
+    alert_script_timeout: int
     poll_interval_seconds: int
 
 
@@ -58,6 +66,7 @@ def _default_values() -> dict[str, Any]:
         "llm_temperature": float(os.getenv("SENTINELFLOW_LLM_TEMPERATURE", "0")),
         "llm_timeout": int(os.getenv("SENTINELFLOW_LLM_TIMEOUT", "60")),
         "alert_source_enabled": _read_env_bool("SENTINELFLOW_ALERT_SOURCE_ENABLED", False),
+        "alert_source_type": os.getenv("SENTINELFLOW_ALERT_SOURCE_TYPE", "api").strip().lower() or "api",
         "alert_source_url": os.getenv("SENTINELFLOW_ALERT_SOURCE_URL", "").strip(),
         "alert_source_method": os.getenv("SENTINELFLOW_ALERT_SOURCE_METHOD", "GET").strip().upper(),
         "alert_source_headers": os.getenv("SENTINELFLOW_ALERT_SOURCE_HEADERS", "").strip(),
@@ -66,6 +75,8 @@ def _default_values() -> dict[str, Any]:
         "alert_source_timeout": int(os.getenv("SENTINELFLOW_ALERT_SOURCE_TIMEOUT", "15")),
         "alert_source_sample_payload": os.getenv("SENTINELFLOW_ALERT_SOURCE_SAMPLE_PAYLOAD", "").strip(),
         "alert_parser_rule": {},
+        "alert_script_code": os.getenv("SENTINELFLOW_ALERT_SCRIPT_CODE", "").strip(),
+        "alert_script_timeout": int(os.getenv("SENTINELFLOW_ALERT_SCRIPT_TIMEOUT", "30")),
         "poll_interval_seconds": int(os.getenv("SENTINELFLOW_POLL_INTERVAL_SECONDS", "60")),
     }
 
@@ -82,6 +93,7 @@ def _normalize_config(values: dict[str, Any]) -> SentinelFlowRuntimeConfig:
         llm_temperature=float(values.get("llm_temperature", 0)),
         llm_timeout=int(values.get("llm_timeout", 60)),
         alert_source_enabled=_read_bool_value(values.get("alert_source_enabled"), False),
+        alert_source_type=_normalize_alert_source_type(values.get("alert_source_type", "api")),
         alert_source_url=str(values.get("alert_source_url", "")).strip(),
         alert_source_method=str(values.get("alert_source_method", "GET")).strip().upper() or "GET",
         alert_source_headers=str(values.get("alert_source_headers", "")).strip(),
@@ -90,6 +102,8 @@ def _normalize_config(values: dict[str, Any]) -> SentinelFlowRuntimeConfig:
         alert_source_timeout=int(values.get("alert_source_timeout", 15)),
         alert_source_sample_payload=str(values.get("alert_source_sample_payload", "")).strip(),
         alert_parser_rule=values.get("alert_parser_rule", {}) if isinstance(values.get("alert_parser_rule", {}), dict) else {},
+        alert_script_code=str(values.get("alert_script_code", "")),
+        alert_script_timeout=int(values.get("alert_script_timeout", 30)),
         poll_interval_seconds=int(values.get("poll_interval_seconds", 60)),
     )
 

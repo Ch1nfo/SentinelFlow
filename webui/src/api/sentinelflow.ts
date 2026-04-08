@@ -114,6 +114,7 @@ export type RuntimeSettingsResponse = {
   }
   alert_source: {
     enabled: boolean
+    type: string
     url: string
     method: string
     headers: string
@@ -123,6 +124,8 @@ export type RuntimeSettingsResponse = {
     sample_payload: string
     parser_rule: Record<string, unknown>
     parser_configured: boolean
+    script_code: string
+    script_timeout: number
   }
   features: {
     natural_language_dispatch: boolean
@@ -135,6 +138,8 @@ export type RuntimeSettingsResponse = {
 }
 
 export type AlertSourceFetchResponse = {
+  count?: number
+  alerts?: Array<Record<string, unknown>>
   raw_payload?: Record<string, unknown> | unknown[]
   raw_response?: string
   status_code?: number
@@ -551,6 +556,7 @@ export async function saveRuntimeSettings(payload: {
   llmTemperature: string
   llmTimeout: string
   alertSourceEnabled?: boolean
+  alertSourceType?: string
   alertSourceUrl?: string
   alertSourceMethod?: string
   alertSourceHeaders?: string
@@ -559,6 +565,8 @@ export async function saveRuntimeSettings(payload: {
   alertSourceTimeout?: string
   alertSourceSamplePayload?: string
   alertParserRule?: Record<string, unknown>
+  alertScriptCode?: string
+  alertScriptTimeout?: string
 }) {
   return postJson<RuntimeSettingsResponse>('/api/sentinelflow/runtime/settings', payload)
 }
@@ -569,12 +577,15 @@ export async function resetRuntimeSettings() {
 
 export async function testAlertSourceFetch(payload: {
   alertSourceEnabled?: boolean
+  alertSourceType?: string
   alertSourceUrl?: string
   alertSourceMethod?: string
   alertSourceHeaders?: string
   alertSourceQuery?: string
   alertSourceBody?: string
   alertSourceTimeout?: string
+  alertScriptCode?: string
+  alertScriptTimeout?: string
 }) {
   return postJson<AlertSourceFetchResponse>('/api/sentinelflow/runtime/settings/alert-source/test-fetch', payload)
 }

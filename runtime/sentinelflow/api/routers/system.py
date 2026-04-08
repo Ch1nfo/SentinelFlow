@@ -61,6 +61,7 @@ def runtime_settings() -> dict[str, Any]:
         },
         "alert_source": {
             "enabled": runtime_config.alert_source_enabled,
+            "type": runtime_config.alert_source_type,
             "url": runtime_config.alert_source_url,
             "method": runtime_config.alert_source_method,
             "headers": runtime_config.alert_source_headers,
@@ -70,6 +71,8 @@ def runtime_settings() -> dict[str, Any]:
             "sample_payload": runtime_config.alert_source_sample_payload,
             "parser_rule": runtime_config.alert_parser_rule,
             "parser_configured": bool(runtime_config.alert_parser_rule),
+            "script_code": runtime_config.alert_script_code,
+            "script_timeout": runtime_config.alert_script_timeout,
         },
         "features": {
             "natural_language_dispatch": True,
@@ -106,7 +109,10 @@ def test_alert_source_fetch(payload: RuntimeConfigRequest) -> dict[str, Any]:
     }
     temp_config = type(current)(**merged_values)
     client = SOCAlertApiClient()
-    result = client.fetch_raw_alert_payload(temp_config)
+    if temp_config.alert_source_type == "script":
+        result = client.fetch_script_alerts(temp_config)
+    else:
+        result = client.fetch_raw_alert_payload(temp_config)
     if "error" in result:
         raise HTTPException(status_code=400, detail=str(result["error"]))
     return result

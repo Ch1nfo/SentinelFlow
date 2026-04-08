@@ -27,6 +27,7 @@ class RuntimeConfigRequest(BaseModel):
     llm_temperature: float | None = Field(default=None, alias="llmTemperature")
     llm_timeout: int | None = Field(default=None, alias="llmTimeout")
     alert_source_enabled: bool | None = Field(default=None, alias="alertSourceEnabled")
+    alert_source_type: str | None = Field(default=None, alias="alertSourceType")
     alert_source_url: str | None = Field(default=None, alias="alertSourceUrl")
     alert_source_method: str | None = Field(default=None, alias="alertSourceMethod")
     alert_source_headers: str | None = Field(default=None, alias="alertSourceHeaders")
@@ -35,6 +36,8 @@ class RuntimeConfigRequest(BaseModel):
     alert_source_timeout: int | None = Field(default=None, alias="alertSourceTimeout")
     alert_source_sample_payload: str | None = Field(default=None, alias="alertSourceSamplePayload")
     alert_parser_rule: dict[str, Any] | None = Field(default=None, alias="alertParserRule")
+    alert_script_code: str | None = Field(default=None, alias="alertScriptCode")
+    alert_script_timeout: int | None = Field(default=None, alias="alertScriptTimeout")
 
     def to_payload(self) -> dict[str, Any]:
         payload = {
@@ -49,6 +52,7 @@ class RuntimeConfigRequest(BaseModel):
             "llm_temperature": self.llm_temperature,
             "llm_timeout": self.llm_timeout,
             "alert_source_enabled": self.alert_source_enabled,
+            "alert_source_type": self.alert_source_type,
             "alert_source_url": self.alert_source_url,
             "alert_source_method": self.alert_source_method,
             "alert_source_headers": self.alert_source_headers,
@@ -57,6 +61,8 @@ class RuntimeConfigRequest(BaseModel):
             "alert_source_timeout": self.alert_source_timeout,
             "alert_source_sample_payload": self.alert_source_sample_payload,
             "alert_parser_rule": self.alert_parser_rule if isinstance(self.alert_parser_rule, dict) else None,
+            "alert_script_code": self.alert_script_code,
+            "alert_script_timeout": self.alert_script_timeout,
         }
         return {key: value for key, value in payload.items() if value is not None}
 
