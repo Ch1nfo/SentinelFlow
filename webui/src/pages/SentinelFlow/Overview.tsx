@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { BarChart3, BookOpen, ChevronRight, LayoutDashboard, ListTodo, MessageSquareText, ShieldAlert, Siren } from 'lucide-react'
-import { fetchAuditEvents, fetchDashboardSummary, fetchHealth, fetchPollAlerts, fetchSkills } from '@/api/sentinelflow'
+import { fetchDashboardSummary, fetchHealth, fetchPollAlerts, fetchSkills } from '@/api/sentinelflow'
 import Surface from '@/components/sentinelflow/Surface'
 import StatusBadge from '@/components/sentinelflow/StatusBadge'
 import PageHeader from '@/components/common/PageHeader'
@@ -13,20 +13,18 @@ export default function SentinelFlowOverviewPage() {
   const { data: health, reload: reloadHealth } = useSentinelFlowAsyncData(fetchHealth, [])
   const { data: poll, reload: reloadPoll } = useSentinelFlowAsyncData(fetchPollAlerts, [])
   const { data: skills, reload: reloadSkills } = useSentinelFlowAsyncData(fetchSkills, [])
-  const { data: audit, reload: reloadAudit } = useSentinelFlowAsyncData(fetchAuditEvents, [])
   const { data: summary, reload: reloadSummary } = useSentinelFlowAsyncData(fetchDashboardSummary, [])
   const [activity, setActivity] = useState<RuntimeActivity | null>(() => readRuntimeActivity())
 
   useEffect(() => {
     return subscribeRuntimeActivity((next) => {
       setActivity(next)
-      void Promise.all([reloadHealth(), reloadPoll(), reloadSkills(), reloadAudit(), reloadSummary()])
+      void Promise.all([reloadHealth(), reloadPoll(), reloadSkills(), reloadSummary()])
     })
-  }, [reloadAudit, reloadHealth, reloadPoll, reloadSkills, reloadSummary])
+  }, [reloadHealth, reloadPoll, reloadSkills, reloadSummary])
 
   const tasks = poll?.tasks ?? []
   const skillCount = skills?.skills?.length ?? 0
-  const auditCount = audit?.events?.length ?? 0
   const runningCount = tasks.filter((task) => task.status === 'running').length
   const failedCount = tasks.filter((task) => task.status === 'failed').length
 
@@ -86,8 +84,8 @@ export default function SentinelFlowOverviewPage() {
         <div className="sentinelflow-stat-grid">
           <div className="sentinelflow-stat-card"><span>当前轮询拉取</span><strong>{poll?.fetched_count ?? 0}</strong><em>最新一次拉取结果</em></div>
           <div className="sentinelflow-stat-card"><span>待处理任务</span><strong>{poll?.queued_count ?? 0}</strong><em>待值班处理队列</em></div>
-          <div className="sentinelflow-stat-card"><span>可用 Skills</span><strong>{skillCount}</strong><em>doc / exec / hybrid</em></div>
-          <div className="sentinelflow-stat-card"><span>审计事件</span><strong>{auditCount}</strong><em>本地运行时审计</em></div>
+          <div className="sentinelflow-stat-card"><span>可用 Skills</span><strong>{skillCount}</strong><em>纯文本 / 文本+可执行</em></div>
+          <div className="sentinelflow-stat-card"><span>可用 Agents</span><strong>{summary?.totals.agents ?? 0}</strong><em>当前可用的子 Agent 数量</em></div>
           <div className="sentinelflow-stat-card"><span>业务触发</span><strong>{summary?.judgment.business_trigger ?? 0}</strong><em>已识别业务/测试触发</em></div>
           <div className="sentinelflow-stat-card"><span>误报</span><strong>{summary?.judgment.false_positive ?? 0}</strong><em>已识别规则误报</em></div>
           <div className="sentinelflow-stat-card"><span>真实攻击</span><strong>{summary?.judgment.true_attack ?? 0}</strong><em>已识别真实攻击</em></div>
