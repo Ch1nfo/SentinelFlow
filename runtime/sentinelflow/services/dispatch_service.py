@@ -95,7 +95,14 @@ class AlertDispatchService:
             ))
             conn.commit()
 
-    def _update_existing_queued_task(self, existing: AlertHandlingTask, alert: dict, workflow_selection: dict[str, Any] | None = None) -> AlertHandlingTask:
+    def _refresh_existing_task(
+        self,
+        existing: AlertHandlingTask,
+        alert: dict,
+        workflow_selection: dict[str, Any] | None = None,
+        *,
+        reset_to_queued: bool = False,
+    ) -> AlertHandlingTask:
         alert_name = str(alert.get("alert_name", "未知告警")).strip() or "未知告警"
         workflow_name = str(existing.workflow_name or "agent_react").strip() or "agent_react"
         payload = dict(existing.payload) if isinstance(existing.payload, dict) else {}
@@ -106,11 +113,24 @@ class AlertDispatchService:
         existing.description = f"Handle alert {existing.event_ids} through workflow {workflow_name}."
         existing.alert_time = str(alert.get("alert_time", "")).strip()
         existing.payload = payload
+        if reset_to_queued:
+            existing.status = "queued"
+            existing.last_action = "refresh_poll"
+            existing.last_result_success = None
+            existing.last_result_error = None
+            existing.last_result_data = {}
+            self.dedup.mark_processing(existing.event_ids)
         self._save_task(existing)
         self.audit_service.record(
             "alert_task_updated",
-            f"Updated queued alert task for {existing.event_ids} with latest payload.",
-            {"eventIds": existing.event_ids, "taskId": existing.task_id, "workflow": workflow_name},
+            f"Updated alert task for {existing.event_ids} with latest payload.",
+            {
+                "eventIds": existing.event_ids,
+                "taskId": existing.task_id,
+                "workflow": workflow_name,
+                "resetToQueued": reset_to_queued,
+                "status": existing.status,
+            },
         )
         return existing
 
@@ -156,8 +176,26 @@ class AlertDispatchService:
             existing = self.get_task_by_event_id(event_id)
             if existing and existing.status == "queued":
                 workflow_selection = existing.payload.get("workflow_selection", {}) if isinstance(existing.payload, dict) else {}
-                self._update_existing_queued_task(existing, alert, workflow_selection if isinstance(workflow_selection, dict) else {})
+                self._refresh_existing_task(existing, alert, workflow_selection if isinstance(workflow_selection, dict) else {})
                 updated += 1
+                continue
+            if existing and existing.status == "failed":
+                workflow_selection = existing.payload.get("workflow_selection", {}) if isinstance(existing.payload, dict) else {}
+                self._refresh_existing_task(
+                    existing,
+                    alert,
+                    workflow_selection if isinstance(workflow_selection, dict) else {},
+                    reset_to_queued=True,
+                )
+                updated += 1
+                continue
+            if existing and existing.status == "running":
+                skipped += 1
+                self.audit_service.record(
+                    "alert_dispatch_skipped_running",
+                    f"Skipped duplicate alert {event_id} because the original task is still running.",
+                    {"eventIds": event_id, "taskId": existing.task_id},
+                )
                 continue
             if not self.dedup.mark_processing(event_id):
                 skipped += 1

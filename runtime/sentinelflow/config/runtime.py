@@ -58,7 +58,7 @@ class SentinelFlowRuntimeConfig:
 
 def _default_values() -> dict[str, Any]:
     return {
-        "demo_mode": _read_env_bool("SENTINELFLOW_DEMO_MODE", True),
+        "demo_mode": _read_env_bool("SENTINELFLOW_DEMO_MODE", False),
         "demo_fallback": _read_env_bool("SENTINELFLOW_DEMO_FALLBACK", True),
         "verify_ssl": _read_env_bool("SENTINELFLOW_VERIFY_SSL", True),
         "agent_enabled": _read_env_bool("SENTINELFLOW_AGENT_ENABLED", True),
@@ -85,7 +85,7 @@ def _default_values() -> dict[str, Any]:
 
 def _normalize_config(values: dict[str, Any]) -> SentinelFlowRuntimeConfig:
     return SentinelFlowRuntimeConfig(
-        demo_mode=_read_bool_value(values.get("demo_mode"), True),
+        demo_mode=_read_bool_value(values.get("demo_mode"), False),
         demo_fallback=_read_bool_value(values.get("demo_fallback"), True),
         verify_ssl=_read_bool_value(values.get("verify_ssl"), True),
         agent_enabled=_read_bool_value(values.get("agent_enabled"), True),

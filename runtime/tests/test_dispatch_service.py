@@ -100,6 +100,54 @@ class DispatchServiceTest(unittest.TestCase):
         self.assertEqual(task.last_result_success, True)
         self.assertEqual(task.last_result_data["summary"], "已被人工处置")
 
+    def test_dispatch_reuses_failed_task_and_resets_to_queued(self) -> None:
+        alert = {"eventIds": "E-3", "alert_name": "demo", "alert_time": "2026-04-08 12:00:00", "payload": "old"}
+        asyncio.run(self.service.dispatch([alert]))
+
+        task = self.service.get_task_by_event_id("E-3")
+        assert task is not None
+        self.service.finalize_task(task.task_id, "triage_dispose", False, {}, "failed")
+
+        updated_alert = {"eventIds": "E-3", "alert_name": "demo-new", "alert_time": "2026-04-08 12:10:00", "payload": "new"}
+        queued, skipped, updated, completed, errors = asyncio.run(self.service.dispatch([updated_alert]))
+
+        self.assertEqual(len(queued), 0)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(updated, 1)
+        self.assertEqual(len(completed), 0)
+        self.assertEqual(errors, [])
+
+        refreshed = self.service.get_task_by_event_id("E-3")
+        assert refreshed is not None
+        self.assertEqual(refreshed.task_id, task.task_id)
+        self.assertEqual(refreshed.status, "queued")
+        self.assertEqual(refreshed.title, "demo-new")
+        self.assertEqual(refreshed.payload["alert_data"]["payload"], "new")
+        self.assertIsNone(refreshed.last_result_success)
+        self.assertEqual(len(self.service.list_tasks()), 1)
+
+    def test_dispatch_does_not_duplicate_running_task(self) -> None:
+        alert = {"eventIds": "E-4", "alert_name": "demo", "alert_time": "2026-04-08 12:00:00"}
+        asyncio.run(self.service.dispatch([alert]))
+
+        task = self.service.get_task_by_event_id("E-4")
+        assert task is not None
+        self.service.mark_task_running(task.task_id, "triage_dispose")
+
+        queued, skipped, updated, completed, errors = asyncio.run(self.service.dispatch([alert]))
+
+        self.assertEqual(len(queued), 0)
+        self.assertEqual(skipped, 1)
+        self.assertEqual(updated, 0)
+        self.assertEqual(len(completed), 0)
+        self.assertEqual(errors, [])
+
+        running = self.service.get_task_by_event_id("E-4")
+        assert running is not None
+        self.assertEqual(running.task_id, task.task_id)
+        self.assertEqual(running.status, "running")
+        self.assertEqual(len(self.service.list_tasks()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

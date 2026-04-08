@@ -38,5 +38,5 @@ class RuntimeConfigTest(unittest.TestCase):
                 self.assertEqual(persisted["poll_interval_seconds"], 15)
 
                 reset = runtime_config.reset_runtime_config()
-                self.assertTrue(reset.demo_mode)
+                self.assertFalse(reset.demo_mode)
                 self.assertFalse(config_path.exists())
