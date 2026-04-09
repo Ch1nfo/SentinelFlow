@@ -174,14 +174,7 @@ def create_sentinelflow_agent(payload: AgentCreateRequest) -> dict[str, Any]:
     _assert_unique_plugin_name(payload.name, agent_name, "agent")
     if (PROJECT_ROOT / Path(".sentinelflow") / "plugins" / "agents" / agent_name).exists():
         raise HTTPException(status_code=409, detail=f'Agent 标识 "{agent_name}" 已存在。')
-    normalized = AgentCreateRequest(
-        name=agent_name, description=payload.description, description_cn=payload.description_cn, prompt=payload.prompt,
-        mode=payload.mode, role="worker", enabled=payload.enabled, color=payload.color, skills=payload.skills, tools=payload.tools,
-        doc_skill_mode=payload.doc_skill_mode, doc_skill_allowlist=payload.doc_skill_allowlist, doc_skill_denylist=payload.doc_skill_denylist,
-        hybrid_doc_allowlist=payload.hybrid_doc_allowlist, exec_skill_allowlist=payload.exec_skill_allowlist, worker_allowlist=payload.worker_allowlist,
-        worker_max_steps=payload.worker_max_steps, use_global_model=payload.use_global_model, llm_api_base_url=payload.llm_api_base_url,
-        llm_api_key=payload.llm_api_key, llm_model=payload.llm_model, llm_temperature=payload.llm_temperature, llm_timeout=payload.llm_timeout,
-    )
+    normalized = payload.model_copy(update={"name": agent_name, "role": "worker"})
     _assert_single_enabled_primary(normalized, current_name=agent_name if agent_name == SYSTEM_PRIMARY_AGENT_NAME else None)
     relative_dir = Path(".sentinelflow") / "plugins" / "agents" / agent_name
     _mirror_project_file(relative_dir / "agent.yaml", _build_agent_yaml(normalized))
@@ -200,13 +193,12 @@ def save_sentinelflow_agent(name: str, payload: AgentCreateRequest) -> dict[str,
         raise HTTPException(status_code=400, detail=f'"{target_name}" 已存在。')
     _assert_unique_plugin_name(payload.name, target_name, "agent", current_name=current_name)
     forced_role = "primary" if current_name == SYSTEM_PRIMARY_AGENT_NAME else "worker"
-    normalized = AgentCreateRequest(
-        name=target_name, description=payload.description, description_cn=payload.description_cn, prompt=payload.prompt,
-        mode=payload.mode, role=forced_role, enabled=payload.enabled, color=payload.color, skills=payload.skills, tools=payload.tools,
-        doc_skill_mode=payload.doc_skill_mode, doc_skill_allowlist=payload.doc_skill_allowlist, doc_skill_denylist=payload.doc_skill_denylist,
-        hybrid_doc_allowlist=payload.hybrid_doc_allowlist, exec_skill_allowlist=payload.exec_skill_allowlist, worker_allowlist=payload.worker_allowlist,
-        worker_max_steps=payload.worker_max_steps, use_global_model=payload.use_global_model, llm_api_base_url=payload.llm_api_base_url,
-        llm_api_key=payload.llm_api_key if payload.llm_api_key else existing_agent.llm_api_key, llm_model=payload.llm_model, llm_temperature=payload.llm_temperature, llm_timeout=payload.llm_timeout,
+    normalized = payload.model_copy(
+        update={
+            "name": target_name,
+            "role": forced_role,
+            "llm_api_key": payload.llm_api_key if payload.llm_api_key else existing_agent.llm_api_key,
+        }
     )
     _assert_single_enabled_primary(normalized, current_name=current_name)
     _mirror_project_file(target_relative_dir / "agent.yaml", _build_agent_yaml(normalized))
