@@ -278,6 +278,9 @@ function AgentForm({
         <div className="mt-4">
           <div className="mb-2 text-sm font-semibold text-gray-900">允许调度的子 Agent</div>
           <SkillChips items={workerAgents} selected={draft.workerAllowlist} onToggle={(name) => onChange((current) => ({ ...current, workerAllowlist: toggleName(current.workerAllowlist, name) }))} />
+          <div className="mt-2 text-sm leading-6 text-gray-500">
+            这里只允许主 Agent 调度被明确选中的子 Agent；如果一个都不选，主 Agent 将不会委派任何子 Agent。
+          </div>
         </div>
       ) : null}
 

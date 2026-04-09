@@ -534,11 +534,14 @@ class SentinelFlowAgentService:
         config = load_runtime_config()
         effective_config = primary_agent.resolve_runtime_config(config)
         max_steps = self._resolve_worker_max_steps(primary_agent)
+        readable_skills, executable_skills = self._resolve_skill_permissions(primary_agent)
         alert_data = {
             "eventIds": f"CMD-{uuid4().hex[:12].upper()}",
             "alert_name": "人工指令",
             "payload": command_text,
             "alert_source": "human_command",
+            "_primary_readable_skills": readable_skills,
+            "_primary_executable_skills": executable_skills,
         }
         system_prompt = self._build_primary_prompt(
             primary_agent, PRIMARY_COMMAND_ORCHESTRATION_APPENDIX, workers
@@ -564,6 +567,8 @@ class SentinelFlowAgentService:
             "worker_results": [],
             "system_prompt_override": system_prompt,
             "cancel_event": cancel_event,
+            "readable_skills": readable_skills,
+            "executable_skills": executable_skills,
         }
         if status_callback:
             status_callback("主 Agent 正在分析任务并调度子 Agent...")
@@ -587,10 +592,13 @@ class SentinelFlowAgentService:
         config = load_runtime_config()
         effective_config = primary_agent.resolve_runtime_config(config)
         max_steps = self._resolve_worker_max_steps(primary_agent)
+        readable_skills, executable_skills = self._resolve_skill_permissions(primary_agent)
 
         alert_data = dict(alert)
         if action_hint:
             alert_data["handling_intent"] = action_hint
+        alert_data["_primary_readable_skills"] = readable_skills
+        alert_data["_primary_executable_skills"] = executable_skills
 
         system_prompt = self._build_primary_prompt(
             primary_agent, PRIMARY_ALERT_ORCHESTRATION_APPENDIX, workers
@@ -613,6 +621,8 @@ class SentinelFlowAgentService:
             "worker_results": [],
             "system_prompt_override": system_prompt,
             "cancel_event": cancel_event,
+            "readable_skills": readable_skills,
+            "executable_skills": executable_skills,
         }
         if status_callback:
             status_callback("主 Agent 正在分析告警并调度子 Agent...")

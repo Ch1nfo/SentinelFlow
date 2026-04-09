@@ -33,5 +33,5 @@ def can_agent_delegate_to_worker(agent: SentinelFlowAgentDefinition, worker_name
     if agent.role != "primary":
         return False
     if not agent.worker_allowlist:
-        return True
+        return False
     return worker_name in agent.worker_allowlist

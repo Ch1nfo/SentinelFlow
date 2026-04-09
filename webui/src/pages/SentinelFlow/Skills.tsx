@@ -121,7 +121,11 @@ export default function SentinelFlowSkillsPage() {
       })
       await reload()
       setEditingSkillName(null)
+      setDebuggingSkillName(null)
       setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '' })
+      setDebugInput('{\n  "ip": "198.51.100.10"\n}')
+      setDebugOutput(null)
+      setDebugError(null)
     } catch (error) {
       setFormError(error instanceof Error ? error.message : '保存 Skill 失败。')
     } finally {

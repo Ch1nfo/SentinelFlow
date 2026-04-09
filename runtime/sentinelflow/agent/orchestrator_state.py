@@ -42,3 +42,5 @@ class OrchestratorState(TypedDict):
 
     # ── Cancellation signal ───────────────────────────────────────────────────
     cancel_event: NotRequired[Any]
+    readable_skills: NotRequired[list[str]]
+    executable_skills: NotRequired[list[str]]

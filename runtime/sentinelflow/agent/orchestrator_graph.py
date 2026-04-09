@@ -27,6 +27,7 @@ from typing import Any, Literal
 from sentinelflow.agent.graph import build_agent_graph
 from sentinelflow.agent.orchestrator_state import OrchestratorState
 from sentinelflow.agent.policy import can_agent_execute_skill, can_agent_read_skill
+from sentinelflow.agent.tools import build_agent_tools
 from sentinelflow.skills.adapters import SentinelFlowSkillRuntime
 
 try:
@@ -197,8 +198,16 @@ def build_orchestrator_graph(
         )
         for w in workers
     ]
+    readable_skills = list(alert_data.get("_primary_readable_skills", []) or [])
+    executable_skills = list(alert_data.get("_primary_executable_skills", []) or [])
+    primary_skill_tools = build_agent_tools(
+        skill_runtime,
+        enable_read_skill_document=bool(readable_skills),
+        enable_execute_skill=bool(executable_skills),
+    )
+    supervisor_tools = worker_tools + primary_skill_tools
 
-    # ── Build Supervisor LLM (bound with worker tools) ────────────────────────
+    # ── Build Supervisor LLM (bound with worker + primary skill tools) ───────
     supervisor_config = primary_agent.resolve_runtime_config(runtime_config)
     supervisor_llm = ChatOpenAI(
         model=supervisor_config.llm_model,
@@ -206,7 +215,7 @@ def build_orchestrator_graph(
         base_url=supervisor_config.llm_api_base_url,
         temperature=supervisor_config.llm_temperature,
         timeout=supervisor_config.llm_timeout,
-    ).bind_tools(worker_tools)
+    ).bind_tools(supervisor_tools)
 
     # ── Supervisor node ───────────────────────────────────────────────────────
     async def _supervisor_node(state: OrchestratorState) -> dict:
@@ -262,7 +271,7 @@ def build_orchestrator_graph(
     # ── Assemble the graph ────────────────────────────────────────────────────
     builder: StateGraph = StateGraph(OrchestratorState)
     builder.add_node("supervisor", _supervisor_node)
-    builder.add_node("tools", ToolNode(worker_tools))
+    builder.add_node("tools", ToolNode(supervisor_tools))
     builder.add_edge(START, "supervisor")
     builder.add_conditional_edges(
         "supervisor",
