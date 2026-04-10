@@ -171,13 +171,14 @@ class AlertDispatchService:
         )
         return updated_task
 
-    def _complete_missing_queued_tasks(self, active_event_ids: set[str]) -> list[AlertHandlingTask]:
+    def _complete_missing_polled_tasks(self, active_event_ids: set[str]) -> list[AlertHandlingTask]:
         completed: list[AlertHandlingTask] = []
         for task in self.list_tasks():
-            if task.status != "queued":
+            if task.status not in {"queued", "failed"}:
                 continue
             if task.event_ids in active_event_ids:
                 continue
+            previous_status = task.status
             updated_task = self._update_task_columns(
                 task.task_id,
                 {
@@ -188,20 +189,20 @@ class AlertDispatchService:
                     "last_result_data": json.dumps(
                         {
                             "summary": "已被人工处置",
-                            "reason": "本次轮询未再发现该 queued 告警，按人工处置完成收口。",
+                            "reason": f"本次轮询未再发现该 {previous_status} 告警，按人工处置完成收口。",
                             "disposition": "handled_manually",
                         }
                     ),
                 },
-                expected_statuses=["queued"],
+                expected_statuses=["queued", "failed"],
             )
             if not updated_task:
                 continue
             self.dedup.mark_done(task.event_ids)
             self.audit_service.record(
                 "alert_task_completed_externally",
-                f"Marked queued alert {task.event_ids} as completed because it disappeared from the latest poll.",
-                {"eventIds": task.event_ids, "taskId": task.task_id},
+                f"Marked {previous_status} alert {task.event_ids} as completed because it disappeared from the latest poll.",
+                {"eventIds": task.event_ids, "taskId": task.task_id, "previousStatus": previous_status},
             )
             completed.append(updated_task)
         return completed
@@ -278,7 +279,7 @@ class AlertDispatchService:
                     {"eventIds": event_id, "error": str(exc)},
                 )
 
-        completed = self._complete_missing_queued_tasks(active_event_ids)
+        completed = self._complete_missing_polled_tasks(active_event_ids)
         return queued, skipped, updated, completed, errors
 
     def list_queued_tasks(self) -> list[AlertHandlingTask]:
