@@ -291,20 +291,19 @@ function AgentForm({
       {draft.role === 'primary' ? (
         <div className="mt-4">
           <div className="mb-2 text-sm font-semibold text-gray-900">子 Agent 调用深度</div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <input
-              className="sentinelflow-settings-input"
-              placeholder="子 Agent 调用深度，默认 3"
-              value={draft.workerMaxSteps}
-              onChange={(event) => onChange((current) => ({ ...current, workerMaxSteps: event.target.value }))}
-            />
-            <input
-              className="sentinelflow-settings-input"
-              placeholder="单次并行调度上限，默认 3"
-              value={draft.workerParallelLimit}
-              onChange={(event) => onChange((current) => ({ ...current, workerParallelLimit: event.target.value }))}
-            />
-          </div>
+          <input
+            className="sentinelflow-settings-input"
+            placeholder="子 Agent 调用深度，默认 3"
+            value={draft.workerMaxSteps}
+            onChange={(event) => onChange((current) => ({ ...current, workerMaxSteps: event.target.value }))}
+          />
+          <div className="mt-3 mb-2 text-sm font-semibold text-gray-900">单次并行调度上限</div>
+          <input
+            className="sentinelflow-settings-input"
+            placeholder="单次并行调度上限，默认 3"
+            value={draft.workerParallelLimit}
+            onChange={(event) => onChange((current) => ({ ...current, workerParallelLimit: event.target.value }))}
+          />
           <div className="mt-2 text-sm leading-6 text-gray-500">
             一次并行委派会同时调用多个子 Agent，但整体只算一层“子 Agent 调用深度”。这里用于限制单层最多并发多少个子 Agent。
           </div>
