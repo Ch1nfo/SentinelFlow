@@ -11,6 +11,7 @@ DEFAULT_ALERT_SYSTEM_PROMPT = """\
 执行规则：
 - 使用技能前，优先调用 `read_skill_document`
 - 如需真正执行技能，使用 `execute_skill`
+- 如果某个技能不需要任何入参，优先使用 `execute_skill_no_args`
 - 对证据不足的情况，不要夸大结论
 - 如输入是自然语言人工指令，优先理解操作意图并直接完成任务
 - 输出结论时要简洁，必须包含以下 4 项：
@@ -54,6 +55,7 @@ DEFAULT_COMMAND_SYSTEM_PROMPT = """\
 
 规则：
 - 调用技能前，优先读取技能说明
+- 无入参技能优先使用 `execute_skill_no_args`
 - 一次只做一步，拿到工具结果后再继续
 - 回答使用中文，简洁明确
 
@@ -75,6 +77,7 @@ SYSTEM_PRIMARY_DEFAULT_PROMPT = """\
 执行原则：
 - 你默认不直接执行可运行代码类 Skill，除非明确给你授权
 - 你可以读取默认开放的文本类 Skill
+- 无入参技能优先使用 `execute_skill_no_args`
 - 分派给子 Agent 时，要给出具体、可执行的任务指令
 - 回答始终使用中文
 - 不要把内部调度过程暴露给最终用户，除非系统明确要求展示
@@ -103,6 +106,7 @@ PRIMARY_COMMAND_ORCHESTRATION_APPENDIX = """\
 - 每次只调用一个子 Agent，拿到结果后再评估下一步
 - 如果多个子任务彼此独立、可以并行收集信息，优先调用 `delegate_parallel`
 - `delegate_parallel` 只适合相互独立的任务；强依赖前一步结果的任务仍应串行处理
+- 对无入参技能，优先使用 `execute_skill_no_args`
 - 给子 Agent 的 task_prompt 必须具体、可操作，不要笼统
 - 当信息足够时，停止调用任何工具，直接输出最终回复给用户
 - 回复语言必须是中文
@@ -127,6 +131,7 @@ PRIMARY_ALERT_ORCHESTRATION_APPENDIX = """\
 - 每次只调用一个子 Agent，拿到结果后再评估下一步
 - 如果多个子任务彼此独立、可以并行收集信息，优先调用 `delegate_parallel`
 - `delegate_parallel` 只适合相互独立的任务；强依赖前一步结果的任务仍应串行处理
+- 对无入参技能，优先使用 `execute_skill_no_args`
 - 给子 Agent 的 task_prompt 必须具体、可操作
 - 最终结论必须包含：最终分类、简短理由、关键依据、执行结果
 - 当信息足够时，停止调用任何工具，直接输出最终中文结论

@@ -785,7 +785,7 @@ class SentinelFlowAgentService:
         enrichment = self._first_enrichment_payload(skill_runs)
         closure_result = self._first_closure_payload(skill_runs)
         actions = self._build_actions(skill_runs)
-        closure_success = bool(closure_result) and not bool(closure_result.get("error"))
+        closure_success = any(self._is_successful_closure_run(run) for run in skill_runs)
         disposal_success = any(not bool(payload.get("error")) for payload in actions.values() if isinstance(payload, dict))
         success = closure_success or (action_hint == "triage_dispose" and disposal_success)
 
@@ -805,7 +805,7 @@ class SentinelFlowAgentService:
             "success": success,
             "execution_mode": "agent",
             "used_agent": True,
-            "has_close_action": bool(closure_result),
+            "has_close_action": any(self._is_closure_run(run) for run in skill_runs),
             "has_disposal_action": bool(actions),
         }
 
@@ -819,7 +819,8 @@ class SentinelFlowAgentService:
         runs: list[dict[str, Any]] = []
         tool_index = 0
         for call in tool_calls:
-            if str(call.get("name", "")).strip() != "execute_skill":
+            tool_name = str(call.get("name", "")).strip()
+            if tool_name not in {"execute_skill", "execute_skill_no_args"}:
                 continue
             args = call.get("args", {})
             if isinstance(args, str):
@@ -832,6 +833,8 @@ class SentinelFlowAgentService:
             skill_name = str(args.get("skill_name", "")).strip()
             arguments = args.get("arguments", {})
             if not isinstance(arguments, dict):
+                arguments = {}
+            if tool_name == "execute_skill_no_args":
                 arguments = {}
 
             payload: dict[str, Any] = {}
@@ -858,6 +861,7 @@ class SentinelFlowAgentService:
             runs.append(
                 {
                     "skill_name": skill_name,
+                    "tool_name": tool_name,
                     "arguments": arguments,
                     "payload": merged_payload,
                     "success": not bool(merged_payload.get("error")),
@@ -896,8 +900,34 @@ class SentinelFlowAgentService:
         payload = payload if isinstance(payload, dict) else {}
         arguments = arguments if isinstance(arguments, dict) else {}
         combined_keys = set(payload.keys()) | set(arguments.keys())
-        required = {"status", "memo", "detailMsg"}
-        return required.issubset(combined_keys)
+        if {"status", "memo", "detailMsg"}.issubset(combined_keys):
+            return True
+        closure_markers = {"status", "memo", "detailMsg", "detail_msg", "closeStatus", "close_status", "result", "success"}
+        return bool(combined_keys & closure_markers) and (
+            "memo" in combined_keys or "detailMsg" in combined_keys or "detail_msg" in combined_keys or "status" in combined_keys
+        )
+
+    def _is_successful_closure_run(self, run: dict[str, Any]) -> bool:
+        if not self._is_closure_run(run):
+            return False
+        payload = run.get("payload", {})
+        arguments = run.get("arguments", {})
+        payload = payload if isinstance(payload, dict) else {}
+        arguments = arguments if isinstance(arguments, dict) else {}
+        if bool(payload.get("error")):
+            return False
+        status_value = payload.get("status", arguments.get("status"))
+        result_value = payload.get("result", arguments.get("result"))
+        success_value = payload.get("success")
+        if isinstance(success_value, bool):
+            return success_value
+        if isinstance(result_value, str) and result_value.strip():
+            normalized = result_value.strip().lower()
+            if normalized in {"ok", "success", "done", "closed", "completed"}:
+                return True
+        if isinstance(status_value, str) and status_value.strip():
+            return True
+        return bool(payload)
 
     def _is_enrichment_run(self, run: dict[str, Any]) -> bool:
         if self._is_closure_run(run):

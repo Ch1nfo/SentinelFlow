@@ -232,7 +232,7 @@ class AlertDispatchService:
                     existing,
                     alert,
                     workflow_selection if isinstance(workflow_selection, dict) else {},
-                    reset_to_queued=True,
+                    reset_to_queued=False,
                 )
                 updated += 1
                 continue
