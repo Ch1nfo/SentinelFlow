@@ -281,6 +281,7 @@ export type AgentDetail = AgentSummary & {
   exec_skill_allowlist: string[]
   worker_allowlist: string[]
   worker_max_steps: number
+  worker_parallel_limit: number
   use_global_model: boolean
   llm_api_base_url?: string
   llm_api_key?: string
@@ -439,6 +440,7 @@ export async function createAgent(payload: {
   execSkillAllowlist?: string[]
   workerAllowlist?: string[]
   useGlobalModel?: boolean
+  workerParallelLimit?: number
   llmApiBaseUrl?: string
   llmApiKey?: string
   llmModel?: string
@@ -466,6 +468,7 @@ export async function saveAgent(name: string, payload: {
   execSkillAllowlist?: string[]
   workerAllowlist?: string[]
   useGlobalModel?: boolean
+  workerParallelLimit?: number
   llmApiBaseUrl?: string
   llmApiKey?: string
   llmModel?: string

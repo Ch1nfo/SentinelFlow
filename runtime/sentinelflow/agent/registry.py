@@ -35,6 +35,7 @@ class SentinelFlowAgentDefinition:
     exec_skill_allowlist: list[str]
     worker_allowlist: list[str]
     worker_max_steps: int
+    worker_parallel_limit: int
     use_global_model: bool
     llm_api_base_url: str
     llm_api_key: str
@@ -75,6 +76,7 @@ def _build_system_primary(agent_root: Path) -> SentinelFlowAgentDefinition:
         exec_skill_allowlist=[],
         worker_allowlist=[],
         worker_max_steps=3,
+        worker_parallel_limit=3,
         use_global_model=True,
         llm_api_base_url="",
         llm_api_key="",
@@ -109,6 +111,7 @@ def _parse_agent_yaml(agent_dir: Path) -> SentinelFlowAgentDefinition:
         "exec_skill_allowlist": [],
         "worker_allowlist": [],
         "worker_max_steps": 3,
+        "worker_parallel_limit": 3,
         "use_global_model": True,
         "llm_api_base_url": "",
         "llm_api_key": "",
@@ -171,6 +174,9 @@ def _parse_agent_yaml(agent_dir: Path) -> SentinelFlowAgentDefinition:
         elif line.startswith("worker_max_steps:"):
             value = line.split(":", 1)[1].strip()
             data["worker_max_steps"] = int(value) if value else 3
+        elif line.startswith("worker_parallel_limit:"):
+            value = line.split(":", 1)[1].strip()
+            data["worker_parallel_limit"] = int(value) if value else 3
         elif line.startswith("llm_api_base_url:"):
             data["llm_api_base_url"] = line.split(":", 1)[1].strip()
         elif line.startswith("llm_api_key:"):
@@ -201,6 +207,7 @@ def _parse_agent_yaml(agent_dir: Path) -> SentinelFlowAgentDefinition:
         exec_skill_allowlist=list(data["exec_skill_allowlist"] or data["skills"]),  # type: ignore[arg-type]
         worker_allowlist=list(data["worker_allowlist"]),  # type: ignore[arg-type]
         worker_max_steps=max(1, int(data["worker_max_steps"])) if isinstance(data["worker_max_steps"], int) else 3,
+        worker_parallel_limit=max(1, int(data["worker_parallel_limit"])) if isinstance(data["worker_parallel_limit"], int) else 3,
         use_global_model=bool(data["use_global_model"]),
         llm_api_base_url=str(data["llm_api_base_url"]),
         llm_api_key=str(data["llm_api_key"]),

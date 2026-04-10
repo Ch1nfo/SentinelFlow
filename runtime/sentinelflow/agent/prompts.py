@@ -101,6 +101,8 @@ PRIMARY_COMMAND_ORCHESTRATION_APPENDIX = """\
 
 核心原则：
 - 每次只调用一个子 Agent，拿到结果后再评估下一步
+- 如果多个子任务彼此独立、可以并行收集信息，优先调用 `delegate_parallel`
+- `delegate_parallel` 只适合相互独立的任务；强依赖前一步结果的任务仍应串行处理
 - 给子 Agent 的 task_prompt 必须具体、可操作，不要笼统
 - 当信息足够时，停止调用任何工具，直接输出最终回复给用户
 - 回复语言必须是中文
@@ -123,6 +125,8 @@ PRIMARY_ALERT_ORCHESTRATION_APPENDIX = """\
 
 核心原则：
 - 每次只调用一个子 Agent，拿到结果后再评估下一步
+- 如果多个子任务彼此独立、可以并行收集信息，优先调用 `delegate_parallel`
+- `delegate_parallel` 只适合相互独立的任务；强依赖前一步结果的任务仍应串行处理
 - 给子 Agent 的 task_prompt 必须具体、可操作
 - 最终结论必须包含：最终分类、简短理由、关键依据、执行结果
 - 当信息足够时，停止调用任何工具，直接输出最终中文结论

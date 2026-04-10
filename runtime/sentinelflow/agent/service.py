@@ -446,6 +446,12 @@ class SentinelFlowAgentService:
             return 3
         return max(1, raw_value)
 
+    def _resolve_worker_parallel_limit(self, primary_agent) -> int:
+        raw_value = getattr(primary_agent, "worker_parallel_limit", 3)
+        if not isinstance(raw_value, int):
+            return 3
+        return max(1, raw_value)
+
     def _serialize_orchestrator_result(
         self,
         final_state: dict[str, Any],
@@ -481,6 +487,10 @@ class SentinelFlowAgentService:
                 result = json.loads(content)
                 if isinstance(result, dict) and "worker" in result:
                     worker_results.append(result)
+                elif isinstance(result, dict) and result.get("mode") == "parallel" and isinstance(result.get("results"), list):
+                    for item in result["results"]:
+                        if isinstance(item, dict) and "worker" in item:
+                            worker_results.append(item)
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -534,6 +544,7 @@ class SentinelFlowAgentService:
         config = load_runtime_config()
         effective_config = primary_agent.resolve_runtime_config(config)
         max_steps = self._resolve_worker_max_steps(primary_agent)
+        parallel_limit = self._resolve_worker_parallel_limit(primary_agent)
         readable_skills, executable_skills = self._resolve_skill_permissions(primary_agent)
         alert_data = {
             "eventIds": f"CMD-{uuid4().hex[:12].upper()}",
@@ -542,6 +553,7 @@ class SentinelFlowAgentService:
             "alert_source": "human_command",
             "_primary_readable_skills": readable_skills,
             "_primary_executable_skills": executable_skills,
+            "_primary_worker_parallel_limit": parallel_limit,
         }
         system_prompt = self._build_primary_prompt(
             primary_agent, PRIMARY_COMMAND_ORCHESTRATION_APPENDIX, workers
@@ -592,6 +604,7 @@ class SentinelFlowAgentService:
         config = load_runtime_config()
         effective_config = primary_agent.resolve_runtime_config(config)
         max_steps = self._resolve_worker_max_steps(primary_agent)
+        parallel_limit = self._resolve_worker_parallel_limit(primary_agent)
         readable_skills, executable_skills = self._resolve_skill_permissions(primary_agent)
 
         alert_data = dict(alert)
@@ -599,6 +612,7 @@ class SentinelFlowAgentService:
             alert_data["handling_intent"] = action_hint
         alert_data["_primary_readable_skills"] = readable_skills
         alert_data["_primary_executable_skills"] = executable_skills
+        alert_data["_primary_worker_parallel_limit"] = parallel_limit
 
         system_prompt = self._build_primary_prompt(
             primary_agent, PRIMARY_ALERT_ORCHESTRATION_APPENDIX, workers

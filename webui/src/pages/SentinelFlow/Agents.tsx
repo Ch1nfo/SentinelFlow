@@ -38,6 +38,7 @@ type AgentDraft = {
   execSkillAllowlist: string[]
   workerAllowlist: string[]
   workerMaxSteps: string
+  workerParallelLimit: string
 }
 
 const EMPTY_DRAFT: AgentDraft = {
@@ -61,6 +62,7 @@ const EMPTY_DRAFT: AgentDraft = {
   execSkillAllowlist: [],
   workerAllowlist: [],
   workerMaxSteps: '3',
+  workerParallelLimit: '3',
 }
 
 function detailToDraft(detail: AgentDetail): AgentDraft {
@@ -85,6 +87,7 @@ function detailToDraft(detail: AgentDetail): AgentDraft {
     execSkillAllowlist: detail.exec_skill_allowlist || [],
     workerAllowlist: detail.worker_allowlist || [],
     workerMaxSteps: String(detail.worker_max_steps ?? 3),
+    workerParallelLimit: String(detail.worker_parallel_limit ?? 3),
   }
 }
 
@@ -106,6 +109,7 @@ function buildPayload(draft: AgentDraft) {
     execSkillAllowlist: draft.execSkillAllowlist,
     workerAllowlist: draft.workerAllowlist,
     workerMaxSteps: Number(draft.workerMaxSteps || '3'),
+    workerParallelLimit: Number(draft.workerParallelLimit || '3'),
     useGlobalModel: draft.useGlobalModel,
     llmApiBaseUrl: draft.useGlobalModel ? '' : draft.llmApiBaseUrl,
     llmApiKey: draft.useGlobalModel ? undefined : (draft.llmApiKey.trim() || undefined),
@@ -294,6 +298,15 @@ function AgentForm({
               value={draft.workerMaxSteps}
               onChange={(event) => onChange((current) => ({ ...current, workerMaxSteps: event.target.value }))}
             />
+            <input
+              className="sentinelflow-settings-input"
+              placeholder="单次并行调度上限，默认 3"
+              value={draft.workerParallelLimit}
+              onChange={(event) => onChange((current) => ({ ...current, workerParallelLimit: event.target.value }))}
+            />
+          </div>
+          <div className="mt-2 text-sm leading-6 text-gray-500">
+            一次并行委派会同时调用多个子 Agent，但整体只算一层“子 Agent 调用深度”。这里用于限制单层最多并发多少个子 Agent。
           </div>
         </div>
       ) : null}
@@ -555,6 +568,7 @@ export default function SentinelFlowAgentsPage() {
                       <>
                         <div className="sentinelflow-stack-item"><strong>允许调度的子 Agent</strong><span>{detail.worker_allowlist.length || 0}</span></div>
                         <div className="sentinelflow-stack-item"><strong>子 Agent 调用深度</strong><span>{detail.worker_max_steps}</span></div>
+                        <div className="sentinelflow-stack-item"><strong>单次并行调度上限</strong><span>{detail.worker_parallel_limit}</span></div>
                       </>
                     ) : null}
                   </div>

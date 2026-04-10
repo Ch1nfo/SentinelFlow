@@ -305,6 +305,7 @@ def _build_agent_yaml(req: AgentCreateRequest) -> str:
         lines.append("worker_allowlist:")
         lines.extend([f"  - {item}" for item in req.worker_allowlist])
     lines.append(f"worker_max_steps: {max(1, int(req.worker_max_steps or 3))}")
+    lines.append(f"worker_parallel_limit: {max(1, int(req.worker_parallel_limit or 3))}")
     lines.append(f"use_global_model: {'true' if req.use_global_model else 'false'}")
     if not req.use_global_model:
         if req.llm_api_base_url:
@@ -361,6 +362,7 @@ def _read_agent_yaml(agent_name: str) -> dict[str, Any]:
         "exec_skill_allowlist": agent.exec_skill_allowlist,
         "worker_allowlist": agent.worker_allowlist,
         "worker_max_steps": agent.worker_max_steps,
+        "worker_parallel_limit": agent.worker_parallel_limit,
         "use_global_model": agent.use_global_model,
         "llm_api_base_url": agent.llm_api_base_url,
         "llm_api_key": "",

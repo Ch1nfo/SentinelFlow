@@ -121,6 +121,7 @@ class AgentCreateRequest(BaseModel):
     exec_skill_allowlist: list[str] | None = Field(default=None, alias="execSkillAllowlist")
     worker_allowlist: list[str] | None = Field(default=None, alias="workerAllowlist")
     worker_max_steps: int = Field(default=3, alias="workerMaxSteps")
+    worker_parallel_limit: int = Field(default=3, alias="workerParallelLimit")
     use_global_model: bool = Field(default=True, alias="useGlobalModel")
     llm_api_base_url: str | None = Field(default=None, alias="llmApiBaseUrl")
     llm_api_key: str | None = Field(default=None, alias="llmApiKey")

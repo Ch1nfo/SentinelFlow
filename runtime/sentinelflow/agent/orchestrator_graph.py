@@ -20,9 +20,10 @@ ToolMessage.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from sentinelflow.agent.graph import build_agent_graph
 from sentinelflow.agent.orchestrator_state import OrchestratorState
@@ -35,7 +36,7 @@ try:
     from langchain_core.tools import tool
     from langchain_openai import ChatOpenAI
     from langgraph.graph import END, START, StateGraph
-    from langgraph.prebuilt import ToolNode
+    from langgraph.prebuilt import InjectedState, ToolNode
 except ModuleNotFoundError as _exc:  # pragma: no cover
     raise ModuleNotFoundError(
         "缺少 Agent 运行依赖，请安装 langgraph、langchain-openai 和 langchain-core。"
@@ -77,37 +78,43 @@ def _build_worker_subgraph_tool(
     Internally it runs a full ReAct SubGraph and returns a JSON summary
     of the worker's final response and skills used.
     """
-    worker_config = worker_agent_def.resolve_runtime_config(runtime_config)
-    subgraph = build_agent_graph(
-        project_root,
-        skill_runtime,
-        worker_config,
-        enable_read_skill_document=True,
-        enable_execute_skill=True,
-    )
     readable_skills, executable_skills = _resolve_worker_permissions(worker_agent_def, skill_runtime)
 
-    async def _invoke(task_prompt: str) -> str:
-        step_counter[0] += 1
-        step_idx = step_counter[0]
-
-        # Inject the delegated task prompt into the worker's alert context
+    async def _run_worker_subgraph(task_prompt: str, step_idx: int) -> dict[str, Any]:
+        worker_config = worker_agent_def.resolve_runtime_config(runtime_config)
+        subgraph = build_agent_graph(
+            project_root,
+            skill_runtime,
+            worker_config,
+            enable_read_skill_document=True,
+            enable_execute_skill=True,
+        )
         worker_alert_data = dict(alert_data)
         worker_alert_data["delegated_task_prompt"] = task_prompt
 
-        worker_state = await subgraph.ainvoke({
-            "alert_data": worker_alert_data,
-            "messages": [],
-            "event_id_ref": str(alert_data.get("eventIds", "")).strip(),
-            "input_seeded": False,
-            "cancel_event": cancel_event,
-            "readable_skills": readable_skills,
-            "executable_skills": executable_skills,
-            "system_prompt_override": worker_agent_def.prompt or "",
-            "agent_name": worker_agent_def.name,
-        })
+        try:
+            worker_state = await subgraph.ainvoke({
+                "alert_data": worker_alert_data,
+                "messages": [],
+                "event_id_ref": str(alert_data.get("eventIds", "")).strip(),
+                "input_seeded": False,
+                "cancel_event": cancel_event,
+                "readable_skills": readable_skills,
+                "executable_skills": executable_skills,
+                "system_prompt_override": worker_agent_def.prompt or "",
+                "agent_name": worker_agent_def.name,
+            })
+        except Exception as exc:
+            return {
+                "step": step_idx,
+                "worker": worker_agent_def.name,
+                "task_prompt": task_prompt,
+                "final_response": "",
+                "skills_used": [],
+                "success": False,
+                "error": str(exc),
+            }
 
-        # Extract final response text from worker's message history
         final_text = ""
         skills_used: list[str] = []
         for msg in worker_state.get("messages", []):
@@ -118,17 +125,20 @@ def _build_worker_subgraph_tool(
                 if isinstance(tc, dict) and tc.get("name"):
                     skills_used.append(tc["name"])
 
-        return json.dumps(
-            {
-                "step": step_idx,
-                "worker": worker_agent_def.name,
-                "task_prompt": task_prompt,
-                "final_response": final_text[:3000],   # truncate to keep context manageable
-                "skills_used": skills_used,
-                "success": bool(final_text),
-            },
-            ensure_ascii=False,
-        )
+        return {
+            "step": step_idx,
+            "worker": worker_agent_def.name,
+            "task_prompt": task_prompt,
+            "final_response": final_text[:3000],
+            "skills_used": skills_used,
+            "success": bool(final_text),
+            "error": None if final_text else "子 Agent 未返回有效结果。",
+        }
+
+    async def _invoke(task_prompt: str) -> str:
+        step_counter[0] += 1
+        step_idx = step_counter[0]
+        return json.dumps(await _run_worker_subgraph(task_prompt, step_idx), ensure_ascii=False)
 
     # Give the tool a deterministic name and helpful docstring
     safe_name = worker_agent_def.name.replace("-", "_").replace(" ", "_")
@@ -139,7 +149,7 @@ def _build_worker_subgraph_tool(
         f"该 Agent 的专项能力：{worker_desc}。"
         f"参数 task_prompt 必须是具体、可操作的中文任务描述，包含当前步骤需要完成的具体工作内容。"
     )
-    return tool(_invoke)
+    return tool(_invoke), _run_worker_subgraph
 
 
 # ── Routing ───────────────────────────────────────────────────────────────────
@@ -186,7 +196,7 @@ def build_orchestrator_graph(
     """
     # ── Build Worker tools ────────────────────────────────────────────────────
     step_counter: list[int] = [0]
-    worker_tools = [
+    worker_entries = [
         _build_worker_subgraph_tool(
             w,
             project_root,
@@ -198,14 +208,94 @@ def build_orchestrator_graph(
         )
         for w in workers
     ]
+    worker_tools = [entry[0] for entry in worker_entries]
+    worker_runners = {worker.name: entry[1] for worker, entry in zip(workers, worker_entries)}
     readable_skills = list(alert_data.get("_primary_readable_skills", []) or [])
     executable_skills = list(alert_data.get("_primary_executable_skills", []) or [])
+    parallel_limit = max(1, int(alert_data.get("_primary_worker_parallel_limit", 3) or 3))
     primary_skill_tools = build_agent_tools(
         skill_runtime,
         enable_read_skill_document=bool(readable_skills),
         enable_execute_skill=bool(executable_skills),
     )
-    supervisor_tools = worker_tools + primary_skill_tools
+    @tool
+    async def delegate_parallel(
+        tasks: list[dict[str, str]],
+        state: Annotated[OrchestratorState, InjectedState()],  # type: ignore[misc]
+    ) -> str:
+        """并行委托多个子 Agent 执行彼此独立的子任务，并返回全部结果。"""
+        cancel = state.get("cancel_event")
+        if cancel is not None and getattr(cancel, "is_set", lambda: False)():
+            return json.dumps({"success": False, "mode": "parallel", "results": [], "error": "用户已停止当前任务。"}, ensure_ascii=False)
+
+        normalized_tasks: list[tuple[str, str]] = []
+        for item in tasks or []:
+            if not isinstance(item, dict):
+                continue
+            worker_name = str(item.get("worker", "")).strip()
+            task_prompt = str(item.get("task_prompt", "")).strip()
+            if not worker_name or not task_prompt:
+                continue
+            if worker_name not in worker_runners:
+                normalized_tasks.append((worker_name, ""))
+                continue
+            normalized_tasks.append((worker_name, task_prompt))
+
+        if not normalized_tasks:
+            return json.dumps(
+                {"success": False, "mode": "parallel", "results": [], "error": "没有提供有效的并行委派任务。"},
+                ensure_ascii=False,
+            )
+
+        run_coroutines: list[Any] = []
+        invalid_results: list[dict[str, Any]] = []
+        for worker_name, task_prompt in normalized_tasks[:parallel_limit]:
+            if not task_prompt:
+                step_counter[0] += 1
+                invalid_results.append(
+                    {
+                        "step": step_counter[0],
+                        "worker": worker_name,
+                        "task_prompt": "",
+                        "final_response": "",
+                        "skills_used": [],
+                        "success": False,
+                        "error": f"子 Agent {worker_name} 不在当前主 Agent 的授权列表中。",
+                    }
+                )
+                continue
+            step_counter[0] += 1
+            run_coroutines.append(worker_runners[worker_name](task_prompt, step_counter[0]))
+
+        gathered = await asyncio.gather(*run_coroutines, return_exceptions=True) if run_coroutines else []
+        results: list[dict[str, Any]] = list(invalid_results)
+        for item in gathered:
+            if isinstance(item, Exception):
+                results.append(
+                    {
+                        "step": step_counter[0],
+                        "worker": "",
+                        "task_prompt": "",
+                        "final_response": "",
+                        "skills_used": [],
+                        "success": False,
+                        "error": str(item),
+                    }
+                )
+            else:
+                results.append(item)
+
+        return json.dumps(
+            {
+                "success": any(bool(item.get("success")) for item in results),
+                "mode": "parallel",
+                "results": results,
+                "error": None,
+            },
+            ensure_ascii=False,
+        )
+
+    supervisor_tools = worker_tools + [delegate_parallel] + primary_skill_tools
 
     # ── Build Supervisor LLM (bound with worker + primary skill tools) ───────
     supervisor_config = primary_agent.resolve_runtime_config(runtime_config)
