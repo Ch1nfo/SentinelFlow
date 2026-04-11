@@ -26,6 +26,13 @@ class SentinelFlowAgentDefinition:
     enabled: bool
     color: str
     prompt: str
+    prompt_command: str
+    prompt_alert: str
+    prompt_orchestrate_command: str
+    prompt_orchestrate_alert: str
+    prompt_workflow_select: str
+    prompt_synthesize_command: str
+    prompt_synthesize_alert: str
     skills: list[str]
     tools: list[str]
     doc_skill_mode: str
@@ -44,6 +51,19 @@ class SentinelFlowAgentDefinition:
     llm_timeout: int | None
     location: str
     has_prompt: bool
+
+    def prompt_for_mode(self, mode: str) -> str:
+        mapping = {
+            "agent_command": self.prompt_command,
+            "agent_alert": self.prompt_alert,
+            "primary_orchestrate_command": self.prompt_orchestrate_command,
+            "primary_orchestrate_alert": self.prompt_orchestrate_alert,
+            "primary_workflow_select": self.prompt_workflow_select,
+            "primary_synthesize_command": self.prompt_synthesize_command,
+            "primary_synthesize_alert": self.prompt_synthesize_alert,
+        }
+        specialized = mapping.get(mode, "").strip()
+        return specialized or self.prompt
 
     def resolve_runtime_config(self, runtime_config: SentinelFlowRuntimeConfig) -> SentinelFlowRuntimeConfig:
         if self.use_global_model:
@@ -67,6 +87,13 @@ def _build_system_primary(agent_root: Path) -> SentinelFlowAgentDefinition:
         enabled=True,
         color="#0f766e",
         prompt=SYSTEM_PRIMARY_DEFAULT_PROMPT,
+        prompt_command="",
+        prompt_alert="",
+        prompt_orchestrate_command="",
+        prompt_orchestrate_alert="",
+        prompt_workflow_select="",
+        prompt_synthesize_command="",
+        prompt_synthesize_alert="",
         skills=[],
         tools=[],
         doc_skill_mode="all",
@@ -91,6 +118,13 @@ def _build_system_primary(agent_root: Path) -> SentinelFlowAgentDefinition:
 def _parse_agent_yaml(agent_dir: Path) -> SentinelFlowAgentDefinition:
     yaml_path = agent_dir / "agent.yaml"
     prompt_path = agent_dir / "prompt.md"
+    prompt_command_path = agent_dir / "prompt.command.md"
+    prompt_alert_path = agent_dir / "prompt.alert.md"
+    prompt_orchestrate_command_path = agent_dir / "prompt.orchestrate.command.md"
+    prompt_orchestrate_alert_path = agent_dir / "prompt.orchestrate.alert.md"
+    prompt_workflow_select_path = agent_dir / "prompt.workflow.select.md"
+    prompt_synthesize_command_path = agent_dir / "prompt.synthesize.command.md"
+    prompt_synthesize_alert_path = agent_dir / "prompt.synthesize.alert.md"
     if not yaml_path.is_file():
         raise FileNotFoundError(f"Agent not found: {agent_dir.name}")
 
@@ -119,6 +153,13 @@ def _parse_agent_yaml(agent_dir: Path) -> SentinelFlowAgentDefinition:
         "llm_temperature": None,
         "llm_timeout": None,
         "prompt": prompt_path.read_text(encoding="utf-8").strip() if prompt_path.is_file() else "",
+        "prompt_command": prompt_command_path.read_text(encoding="utf-8").strip() if prompt_command_path.is_file() else "",
+        "prompt_alert": prompt_alert_path.read_text(encoding="utf-8").strip() if prompt_alert_path.is_file() else "",
+        "prompt_orchestrate_command": prompt_orchestrate_command_path.read_text(encoding="utf-8").strip() if prompt_orchestrate_command_path.is_file() else "",
+        "prompt_orchestrate_alert": prompt_orchestrate_alert_path.read_text(encoding="utf-8").strip() if prompt_orchestrate_alert_path.is_file() else "",
+        "prompt_workflow_select": prompt_workflow_select_path.read_text(encoding="utf-8").strip() if prompt_workflow_select_path.is_file() else "",
+        "prompt_synthesize_command": prompt_synthesize_command_path.read_text(encoding="utf-8").strip() if prompt_synthesize_command_path.is_file() else "",
+        "prompt_synthesize_alert": prompt_synthesize_alert_path.read_text(encoding="utf-8").strip() if prompt_synthesize_alert_path.is_file() else "",
         "location": str(agent_dir),
         "has_prompt": prompt_path.is_file(),
     }
@@ -198,6 +239,13 @@ def _parse_agent_yaml(agent_dir: Path) -> SentinelFlowAgentDefinition:
         enabled=bool(data["enabled"]),
         color=str(data["color"]),
         prompt=str(data["prompt"]),
+        prompt_command=str(data["prompt_command"]),
+        prompt_alert=str(data["prompt_alert"]),
+        prompt_orchestrate_command=str(data["prompt_orchestrate_command"]),
+        prompt_orchestrate_alert=str(data["prompt_orchestrate_alert"]),
+        prompt_workflow_select=str(data["prompt_workflow_select"]),
+        prompt_synthesize_command=str(data["prompt_synthesize_command"]),
+        prompt_synthesize_alert=str(data["prompt_synthesize_alert"]),
         skills=list(data["skills"]),  # type: ignore[arg-type]
         tools=list(data["tools"]),  # type: ignore[arg-type]
         doc_skill_mode=str(data["doc_skill_mode"] or "all"),

@@ -21,6 +21,13 @@ type AgentDraft = {
   name: string
   description: string
   prompt: string
+  promptCommand: string
+  promptAlert: string
+  promptOrchestrateCommand: string
+  promptOrchestrateAlert: string
+  promptWorkflowSelect: string
+  promptSynthesizeCommand: string
+  promptSynthesizeAlert: string
   mode: string
   role: string
   enabled: boolean
@@ -45,6 +52,13 @@ const EMPTY_DRAFT: AgentDraft = {
   name: '',
   description: '',
   prompt: '',
+  promptCommand: '',
+  promptAlert: '',
+  promptOrchestrateCommand: '',
+  promptOrchestrateAlert: '',
+  promptWorkflowSelect: '',
+  promptSynthesizeCommand: '',
+  promptSynthesizeAlert: '',
   mode: 'subagent',
   role: 'worker',
   enabled: true,
@@ -70,6 +84,13 @@ function detailToDraft(detail: AgentDetail): AgentDraft {
     name: detail.name,
     description: detail.description,
     prompt: detail.prompt,
+    promptCommand: detail.prompt_command || '',
+    promptAlert: detail.prompt_alert || '',
+    promptOrchestrateCommand: detail.prompt_orchestrate_command || '',
+    promptOrchestrateAlert: detail.prompt_orchestrate_alert || '',
+    promptWorkflowSelect: detail.prompt_workflow_select || '',
+    promptSynthesizeCommand: detail.prompt_synthesize_command || '',
+    promptSynthesizeAlert: detail.prompt_synthesize_alert || '',
     mode: detail.mode,
     role: detail.role || (detail.mode === 'primary' ? 'primary' : 'worker'),
     enabled: detail.enabled,
@@ -96,6 +117,13 @@ function buildPayload(draft: AgentDraft) {
     name: draft.name,
     description: draft.description,
     prompt: draft.prompt,
+    promptCommand: draft.promptCommand,
+    promptAlert: draft.promptAlert,
+    promptOrchestrateCommand: draft.promptOrchestrateCommand,
+    promptOrchestrateAlert: draft.promptOrchestrateAlert,
+    promptWorkflowSelect: draft.promptWorkflowSelect,
+    promptSynthesizeCommand: draft.promptSynthesizeCommand,
+    promptSynthesizeAlert: draft.promptSynthesizeAlert,
     mode: draft.mode,
     role: draft.role,
     enabled: draft.enabled,
@@ -254,7 +282,27 @@ function AgentForm({
         </>
       ) : null}
 
-      <textarea className="sentinelflow-command-input mt-3" rows={7} placeholder="Agent Prompt" value={draft.prompt} onChange={(event) => onChange((current) => ({ ...current, prompt: event.target.value }))} />
+      <textarea className="sentinelflow-command-input mt-3" rows={7} placeholder="基础 Agent Prompt" value={draft.prompt} onChange={(event) => onChange((current) => ({ ...current, prompt: event.target.value }))} />
+
+      <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+        <div className="mb-2 text-sm font-semibold text-gray-900">高级 Prompt 配置（可选）</div>
+        <div className="mb-3 text-sm leading-6 text-gray-500">
+          不填写时会自动回退到上面的基础 Prompt。只有需要针对不同运行模式精细控制时，才单独填写下面这些专用 Prompt。
+        </div>
+        <div className="grid gap-3">
+          <textarea className="sentinelflow-command-input" rows={4} placeholder="对话模式专用 Prompt（可选）" value={draft.promptCommand} onChange={(event) => onChange((current) => ({ ...current, promptCommand: event.target.value }))} />
+          <textarea className="sentinelflow-command-input" rows={4} placeholder="告警模式专用 Prompt（可选）" value={draft.promptAlert} onChange={(event) => onChange((current) => ({ ...current, promptAlert: event.target.value }))} />
+          {draft.role === 'primary' ? (
+            <>
+              <textarea className="sentinelflow-command-input" rows={4} placeholder="主 Agent 对话编排 Prompt（可选）" value={draft.promptOrchestrateCommand} onChange={(event) => onChange((current) => ({ ...current, promptOrchestrateCommand: event.target.value }))} />
+              <textarea className="sentinelflow-command-input" rows={4} placeholder="主 Agent 告警编排 Prompt（可选）" value={draft.promptOrchestrateAlert} onChange={(event) => onChange((current) => ({ ...current, promptOrchestrateAlert: event.target.value }))} />
+              <textarea className="sentinelflow-command-input" rows={4} placeholder="Workflow 选择 Prompt（可选）" value={draft.promptWorkflowSelect} onChange={(event) => onChange((current) => ({ ...current, promptWorkflowSelect: event.target.value }))} />
+              <textarea className="sentinelflow-command-input" rows={4} placeholder="对话汇总 Prompt（可选）" value={draft.promptSynthesizeCommand} onChange={(event) => onChange((current) => ({ ...current, promptSynthesizeCommand: event.target.value }))} />
+              <textarea className="sentinelflow-command-input" rows={4} placeholder="告警汇总 Prompt（可选）" value={draft.promptSynthesizeAlert} onChange={(event) => onChange((current) => ({ ...current, promptSynthesizeAlert: event.target.value }))} />
+            </>
+          ) : null}
+        </div>
+      </div>
 
       {draft.docSkillMode === 'selected' ? (
         <div className="mt-4">

@@ -7,8 +7,10 @@ import re
 from typing import Any, Callable
 from uuid import uuid4
 
+from sentinelflow.agent.catalog import load_skill_catalog
 from sentinelflow.agent.graph import build_agent_graph
 from sentinelflow.agent.policy import can_agent_delegate_to_worker, can_agent_execute_skill, can_agent_read_skill
+from sentinelflow.agent.prompt_builder import PromptBuildContext, build_prompt
 from sentinelflow.agent.prompts import (
     PRIMARY_ALERT_ORCHESTRATION_APPENDIX,
     PRIMARY_ALERT_WORKFLOW_SELECTION_APPENDIX,
@@ -121,6 +123,7 @@ class SentinelFlowAgentService:
         config = load_runtime_config()
         effective_config = agent_definition.resolve_runtime_config(config) if agent_definition else config
         readable_skills, executable_skills = self._resolve_skill_permissions(agent_definition)
+        prompt_mode = "agent_command" if alert_data.get("alert_source") == "human_command" else "agent_alert"
         graph = build_agent_graph(
             self.project_root,
             self.skill_runtime,
@@ -137,7 +140,7 @@ class SentinelFlowAgentService:
                 "cancel_event": cancel_event,
                 "readable_skills": readable_skills,
                 "executable_skills": executable_skills,
-                "system_prompt_override": agent_definition.prompt if agent_definition else "",
+                "system_prompt_override": agent_definition.prompt_for_mode(prompt_mode) if agent_definition else "",
                 "agent_name": agent_definition.name if agent_definition else "",
             }
         )
@@ -222,9 +225,20 @@ class SentinelFlowAgentService:
         return "\n".join(items)
 
     def _build_primary_prompt(self, primary_agent, appendix_template: str, workers: list) -> str:
-        base_prompt = primary_agent.prompt.strip() if primary_agent and primary_agent.prompt.strip() else ""
-        appendix = appendix_template.replace("{worker_catalog}", self._build_worker_catalog(workers))
-        return f"{base_prompt}\n\n{appendix}".strip() if base_prompt else appendix
+        mode_map = {
+            PRIMARY_COMMAND_ORCHESTRATION_APPENDIX: "primary_orchestrate_command",
+            PRIMARY_ALERT_ORCHESTRATION_APPENDIX: "primary_orchestrate_alert",
+        }
+        readable_skills, _ = self._resolve_skill_permissions(primary_agent)
+        skill_catalog = load_skill_catalog(self.project_root / ".sentinelflow" / "plugins" / "skills", readable_skills)
+        return build_prompt(
+            PromptBuildContext(
+                base_prompt=primary_agent.prompt_for_mode(mode_map.get(appendix_template, "primary_orchestrate_alert")).strip() if primary_agent else "",
+                mode=mode_map.get(appendix_template, "primary_orchestrate_alert"),
+                skill_catalog=skill_catalog,
+                worker_catalog=self._build_worker_catalog(workers),
+            )
+        )
 
     def _build_workflow_catalog(self, workflows: list) -> str:
         if not workflows:
@@ -247,16 +261,25 @@ class SentinelFlowAgentService:
         return "\n".join(items)
 
     def _build_primary_workflow_prompt(self, primary_agent, workflows: list) -> str:
-        base_prompt = primary_agent.prompt.strip() if primary_agent and primary_agent.prompt.strip() else ""
-        appendix = PRIMARY_ALERT_WORKFLOW_SELECTION_APPENDIX.replace(
-            "{workflow_catalog}",
-            self._build_workflow_catalog(workflows),
+        return build_prompt(
+            PromptBuildContext(
+                base_prompt=primary_agent.prompt_for_mode("primary_workflow_select").strip() if primary_agent else "",
+                mode="primary_workflow_select",
+                workflow_catalog=self._build_workflow_catalog(workflows),
+            )
         )
-        return f"{base_prompt}\n\n{appendix}".strip() if base_prompt else appendix
 
     def _build_primary_synthesis_prompt(self, primary_agent, appendix_template: str) -> str:
-        base_prompt = primary_agent.prompt.strip() if primary_agent and primary_agent.prompt.strip() else ""
-        return f"{base_prompt}\n\n{appendix_template}".strip() if base_prompt else appendix_template
+        mode_map = {
+            PRIMARY_COMMAND_SYNTHESIS_APPENDIX: "primary_synthesize_command",
+            PRIMARY_ALERT_SYNTHESIS_APPENDIX: "primary_synthesize_alert",
+        }
+        return build_prompt(
+            PromptBuildContext(
+                base_prompt=primary_agent.prompt_for_mode(mode_map.get(appendix_template, "primary_synthesize_alert")).strip() if primary_agent else "",
+                mode=mode_map.get(appendix_template, "primary_synthesize_alert"),
+            )
+        )
 
     async def _summarize_worker_command(
         self,

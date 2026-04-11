@@ -179,6 +179,7 @@ def create_sentinelflow_agent(payload: AgentCreateRequest) -> dict[str, Any]:
     relative_dir = Path(".sentinelflow") / "plugins" / "agents" / agent_name
     _mirror_project_file(relative_dir / "agent.yaml", _build_agent_yaml(normalized))
     _mirror_project_file(relative_dir / "prompt.md", payload.prompt.strip() + "\n")
+    _write_agent_prompt_variants(relative_dir, normalized)
     return _read_agent_yaml(agent_name)
 
 @router.post("/agents/{name}/save")
@@ -203,6 +204,7 @@ def save_sentinelflow_agent(name: str, payload: AgentCreateRequest) -> dict[str,
     _assert_single_enabled_primary(normalized, current_name=current_name)
     _mirror_project_file(target_relative_dir / "agent.yaml", _build_agent_yaml(normalized))
     _mirror_project_file(target_relative_dir / "prompt.md", payload.prompt.strip() + "\n")
+    _write_agent_prompt_variants(target_relative_dir, normalized)
     if current_name != target_name and current_name != SYSTEM_PRIMARY_AGENT_NAME:
         _remove_project_path(current_relative_dir)
     return _read_agent_yaml(target_name)
@@ -213,3 +215,21 @@ def delete_sentinelflow_agent(name: str) -> dict[str, Any]:
     if agent_name == SYSTEM_PRIMARY_AGENT_NAME: raise HTTPException(status_code=400, detail="系统主 Agent 不能删除。")
     _remove_project_path(Path(".sentinelflow") / "plugins" / "agents" / agent_name)
     return {"deleted": True, "name": agent_name}
+
+
+def _write_agent_prompt_variants(relative_dir: Path, payload: AgentCreateRequest) -> None:
+    prompt_files = {
+        "prompt.command.md": payload.prompt_command,
+        "prompt.alert.md": payload.prompt_alert,
+        "prompt.orchestrate.command.md": payload.prompt_orchestrate_command,
+        "prompt.orchestrate.alert.md": payload.prompt_orchestrate_alert,
+        "prompt.workflow.select.md": payload.prompt_workflow_select,
+        "prompt.synthesize.command.md": payload.prompt_synthesize_command,
+        "prompt.synthesize.alert.md": payload.prompt_synthesize_alert,
+    }
+    for filename, content in prompt_files.items():
+        target = relative_dir / filename
+        if (content or "").strip():
+            _mirror_project_file(target, content.strip() + "\n")
+        else:
+            _remove_project_path(target)

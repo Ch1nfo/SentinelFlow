@@ -4,7 +4,7 @@ import json
 from typing import Literal
 
 from sentinelflow.agent.catalog import load_skill_catalog
-from sentinelflow.agent.prompts import ALERT_HANDLING_HINTS, DEFAULT_ALERT_SYSTEM_PROMPT, DEFAULT_COMMAND_SYSTEM_PROMPT
+from sentinelflow.agent.prompt_builder import PromptBuildContext, build_prompt
 from sentinelflow.agent.state import SentinelFlowAgentState
 
 try:
@@ -24,22 +24,29 @@ async def agent_node(state: SentinelFlowAgentState, llm, skill_root) -> dict:
     skill_catalog = load_skill_catalog(skill_root, readable_skills)
     custom_prompt = str(state.get("system_prompt_override", "")).strip()
 
-    def _render_prompt(base_prompt: str) -> str:
-        if not custom_prompt:
-            return base_prompt
-        if "{skill_catalog}" in custom_prompt:
-            return custom_prompt.format(skill_catalog=skill_catalog)
-        return f"{custom_prompt}\n\n可用技能目录：\n{skill_catalog}"
-
     if is_human_command:
-        system_msg = SystemMessage(content=_render_prompt(DEFAULT_COMMAND_SYSTEM_PROMPT.format(skill_catalog=skill_catalog)))
+        prompt = build_prompt(
+            PromptBuildContext(
+                base_prompt=custom_prompt,
+                mode="agent_command",
+                entry_type="conversation",
+                skill_catalog=skill_catalog,
+            )
+        )
+        system_msg = SystemMessage(content=prompt)
         payload = str(alert_data.get("payload", "")).strip()
         initial_msg = HumanMessage(content=f"请执行以下人工指令：{payload}")
     else:
         handling_intent = str(alert_data.get("handling_intent", "")).strip()
-        prompt = _render_prompt(DEFAULT_ALERT_SYSTEM_PROMPT.format(skill_catalog=skill_catalog))
-        if handling_intent in ALERT_HANDLING_HINTS:
-            prompt = f"{prompt}\n\n{ALERT_HANDLING_HINTS[handling_intent]}"
+        prompt = build_prompt(
+            PromptBuildContext(
+                base_prompt=custom_prompt,
+                mode="agent_alert",
+                entry_type="alert",
+                action_hint=handling_intent,
+                skill_catalog=skill_catalog,
+            )
+        )
         system_msg = SystemMessage(content=prompt)
         alert_json = json.dumps(alert_data, ensure_ascii=False, indent=2)
         delegated_task_prompt = str(alert_data.get("delegated_task_prompt", "")).strip()
