@@ -339,6 +339,23 @@
     @apply bg-sky-50;
   }
 
+  .sentinelflow-table-row-queued {
+    @apply bg-amber-50/60;
+  }
+
+  .sentinelflow-table-row-success {
+    @apply bg-emerald-50/60;
+  }
+
+  .sentinelflow-table-row-danger {
+    @apply bg-red-50/60;
+  }
+
+  .sentinelflow-table-row-running {
+    @apply bg-sky-50/80;
+    animation: sentinelflow-running-pulse 1.8s ease-in-out infinite;
+  }
+
   .sentinelflow-alert-queue-scroll {
     @apply min-h-0 flex-1 overflow-y-auto;
   }
@@ -378,6 +395,28 @@
 
   .sentinelflow-status-badge-danger {
     @apply bg-red-100 text-red-700;
+  }
+
+  .sentinelflow-status-badge-info {
+    @apply bg-sky-100 text-sky-700;
+    animation: sentinelflow-running-pulse 1.8s ease-in-out infinite;
+  }
+
+  .sentinelflow-detail-panel-queued {
+    @apply border-amber-200 bg-amber-50/40;
+  }
+
+  .sentinelflow-detail-panel-running {
+    @apply border-sky-200 bg-sky-50/60;
+    animation: sentinelflow-running-outline 1.8s ease-in-out infinite;
+  }
+
+  .sentinelflow-detail-panel-success {
+    @apply border-emerald-200 bg-emerald-50/40;
+  }
+
+  .sentinelflow-detail-panel-danger {
+    @apply border-red-200 bg-red-50/40;
   }
 
   .sentinelflow-activity-banner,
@@ -647,5 +686,25 @@
 
   .sentinelflow-chat-send-button {
     @apply pointer-events-auto inline-flex h-11 w-11 items-center justify-center rounded-full bg-black text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300;
+  }
+}
+
+@keyframes sentinelflow-running-pulse {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(14, 165, 233, 0.08);
+  }
+  50% {
+    box-shadow: inset 0 0 0 999px rgba(14, 165, 233, 0.14);
+  }
+}
+
+@keyframes sentinelflow-running-outline {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.16);
   }
 }

@@ -184,7 +184,9 @@ class SentinelFlowAgentService:
         except Exception as exc:
             raise RuntimeError(f"模型加载失败，可能是它不支持强绑定 Function Calling({exc})。")
 
-        custom_prompt = agent_definition.prompt if agent_definition else ""
+        custom_prompt = agent_definition.prompt_for_mode(
+            "agent_command" if alert_data.get("alert_source") == "human_command" else "agent_alert"
+        ) if agent_definition else ""
         system_msg = SystemMessage(content=custom_prompt)
         
         is_human_command = alert_data.get("alert_source") == "human_command"

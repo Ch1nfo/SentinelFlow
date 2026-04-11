@@ -110,11 +110,8 @@ class AgentCreateRequest(BaseModel):
     prompt: str
     prompt_command: str | None = Field(default=None, alias="promptCommand")
     prompt_alert: str | None = Field(default=None, alias="promptAlert")
-    prompt_orchestrate_command: str | None = Field(default=None, alias="promptOrchestrateCommand")
-    prompt_orchestrate_alert: str | None = Field(default=None, alias="promptOrchestrateAlert")
     prompt_workflow_select: str | None = Field(default=None, alias="promptWorkflowSelect")
-    prompt_synthesize_command: str | None = Field(default=None, alias="promptSynthesizeCommand")
-    prompt_synthesize_alert: str | None = Field(default=None, alias="promptSynthesizeAlert")
+    prompt_synthesize: str | None = Field(default=None, alias="promptSynthesize")
     mode: str = "subagent"
     role: str | None = None
     enabled: bool = True

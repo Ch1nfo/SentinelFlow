@@ -272,11 +272,8 @@ export type AgentDetail = AgentSummary & {
   prompt: string
   prompt_command?: string
   prompt_alert?: string
-  prompt_orchestrate_command?: string
-  prompt_orchestrate_alert?: string
   prompt_workflow_select?: string
-  prompt_synthesize_command?: string
-  prompt_synthesize_alert?: string
+  prompt_synthesize?: string
   skills: string[]
   tools: string[]
   role: string
@@ -436,11 +433,8 @@ export async function createAgent(payload: {
   prompt: string
   promptCommand?: string
   promptAlert?: string
-  promptOrchestrateCommand?: string
-  promptOrchestrateAlert?: string
   promptWorkflowSelect?: string
-  promptSynthesizeCommand?: string
-  promptSynthesizeAlert?: string
+  promptSynthesize?: string
   mode?: string
   role?: string
   enabled?: boolean
@@ -471,11 +465,8 @@ export async function saveAgent(name: string, payload: {
   prompt: string
   promptCommand?: string
   promptAlert?: string
-  promptOrchestrateCommand?: string
-  promptOrchestrateAlert?: string
   promptWorkflowSelect?: string
-  promptSynthesizeCommand?: string
-  promptSynthesizeAlert?: string
+  promptSynthesize?: string
   mode?: string
   role?: string
   enabled?: boolean

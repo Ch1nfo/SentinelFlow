@@ -23,11 +23,8 @@ type AgentDraft = {
   prompt: string
   promptCommand: string
   promptAlert: string
-  promptOrchestrateCommand: string
-  promptOrchestrateAlert: string
   promptWorkflowSelect: string
-  promptSynthesizeCommand: string
-  promptSynthesizeAlert: string
+  promptSynthesize: string
   mode: string
   role: string
   enabled: boolean
@@ -54,11 +51,8 @@ const EMPTY_DRAFT: AgentDraft = {
   prompt: '',
   promptCommand: '',
   promptAlert: '',
-  promptOrchestrateCommand: '',
-  promptOrchestrateAlert: '',
   promptWorkflowSelect: '',
-  promptSynthesizeCommand: '',
-  promptSynthesizeAlert: '',
+  promptSynthesize: '',
   mode: 'subagent',
   role: 'worker',
   enabled: true,
@@ -86,11 +80,8 @@ function detailToDraft(detail: AgentDetail): AgentDraft {
     prompt: detail.prompt,
     promptCommand: detail.prompt_command || '',
     promptAlert: detail.prompt_alert || '',
-    promptOrchestrateCommand: detail.prompt_orchestrate_command || '',
-    promptOrchestrateAlert: detail.prompt_orchestrate_alert || '',
     promptWorkflowSelect: detail.prompt_workflow_select || '',
-    promptSynthesizeCommand: detail.prompt_synthesize_command || '',
-    promptSynthesizeAlert: detail.prompt_synthesize_alert || '',
+    promptSynthesize: detail.prompt_synthesize || '',
     mode: detail.mode,
     role: detail.role || (detail.mode === 'primary' ? 'primary' : 'worker'),
     enabled: detail.enabled,
@@ -113,17 +104,15 @@ function detailToDraft(detail: AgentDetail): AgentDraft {
 }
 
 function buildPayload(draft: AgentDraft) {
+  const isPrimary = draft.role === 'primary'
   return {
     name: draft.name,
     description: draft.description,
     prompt: draft.prompt,
-    promptCommand: draft.promptCommand,
-    promptAlert: draft.promptAlert,
-    promptOrchestrateCommand: draft.promptOrchestrateCommand,
-    promptOrchestrateAlert: draft.promptOrchestrateAlert,
-    promptWorkflowSelect: draft.promptWorkflowSelect,
-    promptSynthesizeCommand: draft.promptSynthesizeCommand,
-    promptSynthesizeAlert: draft.promptSynthesizeAlert,
+    promptCommand: isPrimary ? draft.promptCommand : '',
+    promptAlert: isPrimary ? draft.promptAlert : '',
+    promptWorkflowSelect: isPrimary ? draft.promptWorkflowSelect : '',
+    promptSynthesize: isPrimary ? draft.promptSynthesize : '',
     mode: draft.mode,
     role: draft.role,
     enabled: draft.enabled,
@@ -211,6 +200,8 @@ function AgentForm({
   submitText,
   skills,
   agents,
+  advancedPromptExpanded,
+  onToggleAdvancedPrompt,
 }: {
   title: string
   draft: AgentDraft
@@ -220,6 +211,8 @@ function AgentForm({
   submitText: string
   skills: SkillSummary[]
   agents: AgentSummary[]
+  advancedPromptExpanded: boolean
+  onToggleAdvancedPrompt: () => void
 }) {
   const docSkills = useMemo(() => skills.filter((skill) => skill.type === 'doc').map((skill) => skill.name), [skills])
   const hybridSkills = useMemo(() => skills.filter((skill) => skill.type === 'hybrid').map((skill) => skill.name), [skills])
@@ -284,25 +277,29 @@ function AgentForm({
 
       <textarea className="sentinelflow-command-input mt-3" rows={7} placeholder="基础 Agent Prompt" value={draft.prompt} onChange={(event) => onChange((current) => ({ ...current, prompt: event.target.value }))} />
 
-      <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
-        <div className="mb-2 text-sm font-semibold text-gray-900">高级 Prompt 配置（可选）</div>
-        <div className="mb-3 text-sm leading-6 text-gray-500">
-          不填写时会自动回退到上面的基础 Prompt。只有需要针对不同运行模式精细控制时，才单独填写下面这些专用 Prompt。
-        </div>
-        <div className="grid gap-3">
-          <textarea className="sentinelflow-command-input" rows={4} placeholder="对话模式专用 Prompt（可选）" value={draft.promptCommand} onChange={(event) => onChange((current) => ({ ...current, promptCommand: event.target.value }))} />
-          <textarea className="sentinelflow-command-input" rows={4} placeholder="告警模式专用 Prompt（可选）" value={draft.promptAlert} onChange={(event) => onChange((current) => ({ ...current, promptAlert: event.target.value }))} />
-          {draft.role === 'primary' ? (
-            <>
-              <textarea className="sentinelflow-command-input" rows={4} placeholder="主 Agent 对话编排 Prompt（可选）" value={draft.promptOrchestrateCommand} onChange={(event) => onChange((current) => ({ ...current, promptOrchestrateCommand: event.target.value }))} />
-              <textarea className="sentinelflow-command-input" rows={4} placeholder="主 Agent 告警编排 Prompt（可选）" value={draft.promptOrchestrateAlert} onChange={(event) => onChange((current) => ({ ...current, promptOrchestrateAlert: event.target.value }))} />
+      {draft.role === 'primary' ? (
+        <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-gray-900">高级 Prompt 配置（可选）</div>
+              <div className="mt-1 text-sm leading-6 text-gray-500">
+                默认收起；不填写时自动回退到基础 Prompt。用于单独配置主 Agent 的对话、告警、Workflow 和汇总模式。
+              </div>
+            </div>
+            <button type="button" className="sentinelflow-ghost-button" onClick={onToggleAdvancedPrompt}>
+              {advancedPromptExpanded ? '收起' : '展开'}
+            </button>
+          </div>
+          {advancedPromptExpanded ? (
+            <div className="mt-3 grid gap-3">
+              <textarea className="sentinelflow-command-input" rows={4} placeholder="对话使用 Prompt（可选）" value={draft.promptCommand} onChange={(event) => onChange((current) => ({ ...current, promptCommand: event.target.value }))} />
+              <textarea className="sentinelflow-command-input" rows={4} placeholder="告警分析 Prompt（可选）" value={draft.promptAlert} onChange={(event) => onChange((current) => ({ ...current, promptAlert: event.target.value }))} />
               <textarea className="sentinelflow-command-input" rows={4} placeholder="Workflow 选择 Prompt（可选）" value={draft.promptWorkflowSelect} onChange={(event) => onChange((current) => ({ ...current, promptWorkflowSelect: event.target.value }))} />
-              <textarea className="sentinelflow-command-input" rows={4} placeholder="对话汇总 Prompt（可选）" value={draft.promptSynthesizeCommand} onChange={(event) => onChange((current) => ({ ...current, promptSynthesizeCommand: event.target.value }))} />
-              <textarea className="sentinelflow-command-input" rows={4} placeholder="告警汇总 Prompt（可选）" value={draft.promptSynthesizeAlert} onChange={(event) => onChange((current) => ({ ...current, promptSynthesizeAlert: event.target.value }))} />
-            </>
+              <textarea className="sentinelflow-command-input" rows={4} placeholder="汇总 Prompt（可选）" value={draft.promptSynthesize} onChange={(event) => onChange((current) => ({ ...current, promptSynthesize: event.target.value }))} />
+            </div>
           ) : null}
         </div>
-      </div>
+      ) : null}
 
       {draft.docSkillMode === 'selected' ? (
         <div className="mt-4">
@@ -380,6 +377,7 @@ export default function SentinelFlowAgentsPage() {
   const [editDraft, setEditDraft] = useState<AgentDraft>(EMPTY_DRAFT)
   const [editing, setEditing] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
+  const [advancedPromptExpanded, setAdvancedPromptExpanded] = useState(false)
   const [formError, setFormError] = useState('')
 
   useEffect(() => {
@@ -397,6 +395,7 @@ export default function SentinelFlowAgentsPage() {
       setEditDraft(detailToDraft(agent))
       setEditing(false)
       setPromptExpanded(false)
+      setAdvancedPromptExpanded(false)
     })
   }, [selected])
 
@@ -416,6 +415,7 @@ export default function SentinelFlowAgentsPage() {
       await createAgent(buildPayload(draft))
       await reload()
       setDraft(EMPTY_DRAFT)
+      setAdvancedPromptExpanded(false)
     } catch (error) {
       setFormError(error instanceof Error ? error.message : '创建 Agent 失败。')
     } finally {
@@ -449,6 +449,7 @@ export default function SentinelFlowAgentsPage() {
         }
       })
       setEditing(false)
+      setAdvancedPromptExpanded(false)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (error) {
       setFormError(error instanceof Error ? error.message : '保存 Agent 失败。')
@@ -478,6 +479,7 @@ export default function SentinelFlowAgentsPage() {
     setEditDraft(detailToDraft(detail))
     setEditing(true)
     setFormError('')
+    setAdvancedPromptExpanded(false)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -540,6 +542,8 @@ export default function SentinelFlowAgentsPage() {
           submitText={editing ? (selectedIsSystem ? '保存主 Agent' : '保存更改') : '新建子 Agent'}
           skills={skills}
           agents={agents}
+          advancedPromptExpanded={advancedPromptExpanded}
+          onToggleAdvancedPrompt={() => setAdvancedPromptExpanded((current) => !current)}
         />
       </div>
       {formError ? <div className="sentinelflow-message-block sentinelflow-message-error">{formError}</div> : null}

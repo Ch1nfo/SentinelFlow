@@ -22,9 +22,43 @@ function getDispositionLabel(value: string) {
   return value || '未明确'
 }
 
-function getTaskTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' {
+function getTaskTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
+  if (task.status === 'running') return 'info'
+  if (task.status === 'queued') return 'warn'
   if (task.status === 'failed') return 'danger'
-  if (task.status === 'running') return 'warn'
+  if (task.status === 'succeeded' || task.status === 'completed') return 'success'
+  return 'neutral'
+}
+
+function splitAlertIps(value: unknown): string[] {
+  const text = String(value ?? '').trim()
+  if (!text) return []
+  return text
+    .split(/[,\n，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function formatIpPreview(value: unknown): { text: string; fullText: string } {
+  const ips = splitAlertIps(value)
+  if (!ips.length) {
+    const fallback = String(value ?? '').trim()
+    return { text: fallback || '未提供', fullText: fallback || '未提供' }
+  }
+  if (ips.length <= 3) {
+    const joined = ips.join(',')
+    return { text: joined, fullText: joined }
+  }
+  return {
+    text: `${ips.slice(0, 3).join(',')}...共${ips.length}个`,
+    fullText: ips.join(','),
+  }
+}
+
+function getTaskStatusClass(task: AlertTask): string {
+  if (task.status === 'running') return 'running'
+  if (task.status === 'queued') return 'queued'
+  if (task.status === 'failed') return 'danger'
   if (task.status === 'succeeded' || task.status === 'completed') return 'success'
   return 'neutral'
 }
@@ -79,6 +113,7 @@ export default function SentinelFlowAlertsPage() {
   const [actionResult, setActionResult] = useState<AlertActionResponse | null>(null)
   const autoExecuteEnabled = Boolean(data?.auto_execute_enabled)
   const autoExecuteRunning = Boolean(data?.auto_execute_running)
+  const liveRefreshing = autoExecuteEnabled || actionState.running || (data?.tasks ?? []).some((task) => task.status === 'running')
 
   async function loadTasks(options?: { silent?: boolean }) {
     const silent = options?.silent ?? false
@@ -116,12 +151,12 @@ export default function SentinelFlowAlertsPage() {
   }, [])
 
   useEffect(() => {
-    if (!autoExecuteEnabled) return
+    if (!liveRefreshing) return
     const timer = window.setInterval(() => {
       void loadTasks({ silent: true })
     }, 2000)
     return () => window.clearInterval(timer)
-  }, [autoExecuteEnabled])
+  }, [liveRefreshing])
 
   const tasks = [...(data?.tasks ?? [])].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
   const selectedTask = tasks.find((task) => task.task_id === selectedTaskId) ?? tasks[0] ?? null
@@ -134,11 +169,13 @@ export default function SentinelFlowAlertsPage() {
   const selectedEvidence = Array.isArray(selectedResult.evidence)
     ? selectedResult.evidence.map((item) => String(item).trim()).filter(Boolean)
     : []
+  const dipPreview = formatIpPreview(selectedPayload.dip)
   const workflowDecision = String(workflowSelection.workflow_id ?? selectedTask?.workflow_name ?? '').trim()
   const workflowDecisionReason = String(workflowSelection.reason ?? '').trim()
 
   async function runAction(action: string) {
     setActionState({ action, running: true })
+    void loadTasks({ silent: true })
     try {
       const result = action === 'refresh_poll' || action === 'auto_run_pending' || action === 'auto_execute_start' || action === 'auto_execute_stop'
         ? await handleAlertAction(action)
@@ -246,7 +283,10 @@ export default function SentinelFlowAlertsPage() {
                   {!loading && !error ? tasks.map((task) => (
                     <tr
                       key={task.task_id}
-                      className={selectedTask?.task_id === task.task_id ? 'sentinelflow-table-row-active' : ''}
+                      className={[
+                        selectedTask?.task_id === task.task_id ? 'sentinelflow-table-row-active' : '',
+                        `sentinelflow-table-row-${getTaskStatusClass(task)}`,
+                      ].filter(Boolean).join(' ')}
                       onClick={() => setSelectedTaskId(task.task_id)}
                     >
                       <td>{task.title || '未命名告警'}</td>
@@ -260,7 +300,7 @@ export default function SentinelFlowAlertsPage() {
             </div>
           </div>
 
-          <div className="sentinelflow-detail-panel">
+          <div className={`sentinelflow-detail-panel sentinelflow-detail-panel-${selectedTask ? getTaskStatusClass(selectedTask) : 'neutral'}`}>
             <h3>当前选中告警</h3>
             {selectedTask ? (
               <div className="sentinelflow-response-stack">
@@ -276,7 +316,7 @@ export default function SentinelFlowAlertsPage() {
                   <div className="sentinelflow-context-card"><strong>事件号</strong><span>{selectedTask.event_ids || '未提供'}</span></div>
                   <div className="sentinelflow-context-card"><strong>来源</strong><span>{String(selectedPayload.alert_source ?? '未提供')}</span></div>
                   <div className="sentinelflow-context-card"><strong>源 IP</strong><span>{String(selectedPayload.sip ?? '未提供')}</span></div>
-                  <div className="sentinelflow-context-card"><strong>目的 IP</strong><span>{String(selectedPayload.dip ?? '未提供')}</span></div>
+                  <div className="sentinelflow-context-card"><strong>目的 IP</strong><span title={dipPreview.fullText}>{dipPreview.text}</span></div>
                   <div className="sentinelflow-context-card"><strong>当前研判</strong><span>{String(selectedPayload.current_judgment ?? '未提供')}</span></div>
                   <div className="sentinelflow-context-card"><strong>历史研判</strong><span>{String(selectedPayload.history_judgment ?? '未提供')}</span></div>
                 </div>

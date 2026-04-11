@@ -1,5 +1,5 @@
 type StatusBadgeProps = {
-  tone?: 'neutral' | 'success' | 'warn' | 'danger'
+  tone?: 'neutral' | 'success' | 'warn' | 'danger' | 'info'
   children: string
 }
 

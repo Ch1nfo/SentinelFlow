@@ -18,6 +18,29 @@ active_command_cancellations: dict[str, threading.Event] = {}
 active_command_lock = threading.Lock()
 
 
+def _is_successful_ban_action(action_name: str, payload: dict[str, Any]) -> bool:
+    normalized_name = action_name.lower().strip()
+    if "ban" not in normalized_name:
+        return False
+    if bool(payload.get("error")):
+        return False
+    success_value = payload.get("success")
+    if isinstance(success_value, bool):
+        return success_value
+    status_value = str(payload.get("status", "")).strip().lower()
+    if status_value in {"fail", "failed", "error"}:
+        return False
+    return True
+
+
+def _extract_ban_ip(payload: dict[str, Any]) -> str:
+    for candidate in ("ban_ip", "banned_ip", "blocked_ip", "ip", "source_ip", "sip"):
+        value = str(payload.get(candidate, "")).strip()
+        if value:
+            return value
+    return ""
+
+
 def _dashboard_summary() -> dict[str, Any]:
     tasks = dispatch_service.list_tasks()
     dispositions = {
@@ -48,12 +71,14 @@ def _dashboard_summary() -> dict[str, Any]:
 
         actions = result.get("actions")
         if isinstance(actions, dict):
-            for item in actions.values():
-                if isinstance(item, dict):
-                    for candidate in ("name", "ban", "ip", "target_ip"):
-                        value = str(item.get(candidate, "")).strip()
-                        if value:
-                            banned_ips.add(value)
+            for action_name, item in actions.items():
+                if not isinstance(item, dict):
+                    continue
+                if not _is_successful_ban_action(str(action_name), item):
+                    continue
+                banned_ip = _extract_ban_ip(item)
+                if banned_ip:
+                    banned_ips.add(banned_ip)
 
         if len(recent_results) < 8 and result:
             recent_results.append(
