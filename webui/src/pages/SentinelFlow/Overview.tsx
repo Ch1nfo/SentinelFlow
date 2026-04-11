@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { BarChart3, BookOpen, ChevronRight, LayoutDashboard, ListTodo, MessageSquareText, ShieldAlert, Siren } from 'lucide-react'
 import { fetchDashboardSummary, fetchHealth, fetchPollAlerts, fetchSkills } from '@/api/sentinelflow'
@@ -7,6 +7,7 @@ import StatusBadge from '@/components/sentinelflow/StatusBadge'
 import PageHeader from '@/components/common/PageHeader'
 import { brand, withProductName } from '@/config/brand'
 import { useSentinelFlowAsyncData } from '@/hooks/useSentinelFlowAsyncData'
+import { useSentinelFlowLiveRefresh } from '@/hooks/useSentinelFlowLiveRefresh'
 import { readRuntimeActivity, subscribeRuntimeActivity, type RuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
 
 export default function SentinelFlowOverviewPage() {
@@ -22,6 +23,12 @@ export default function SentinelFlowOverviewPage() {
       void Promise.all([reloadHealth(), reloadPoll(), reloadSkills(), reloadSummary()])
     })
   }, [reloadHealth, reloadPoll, reloadSkills, reloadSummary])
+
+  const refreshOverview = useCallback(() => {
+    void Promise.all([reloadHealth(), reloadPoll(), reloadSummary()])
+  }, [reloadHealth, reloadPoll, reloadSummary])
+
+  useSentinelFlowLiveRefresh(refreshOverview, { intervalMs: 5000 })
 
   const tasks = poll?.tasks ?? []
   const skillCount = skills?.skills?.length ?? 0

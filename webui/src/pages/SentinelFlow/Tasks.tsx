@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Clock, ListTodo, RotateCcw, ShieldCheck, XCircle } from 'lucide-react'
 import { fetchAuditEvents, fetchPollAlerts, fetchRuntimeSettings, handleAlertAction, type AlertActionResponse, type AlertTask } from '@/api/sentinelflow'
 import JsonPreview from '@/components/sentinelflow/JsonPreview'
@@ -7,6 +7,7 @@ import StatusBadge from '@/components/sentinelflow/StatusBadge'
 import PageHeader from '@/components/common/PageHeader'
 import { withProductName } from '@/config/brand'
 import { useSentinelFlowAsyncData } from '@/hooks/useSentinelFlowAsyncData'
+import { useSentinelFlowLiveRefresh } from '@/hooks/useSentinelFlowLiveRefresh'
 import { readSessionValue, writeSessionValue } from '@/utils/sentinelflowLocalState'
 import { publishRuntimeActivity, readRuntimeActivity, subscribeRuntimeActivity, type RuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
 
@@ -36,6 +37,31 @@ function getDispositionLabel(value: string) {
   if (value === 'business_trigger') return '业务触发'
   if (value === 'false_positive') return '误报'
   return value || '未明确'
+}
+
+function splitAlertIps(value: unknown): string[] {
+  const text = String(value ?? '').trim()
+  if (!text) return []
+  return text
+    .split(/[,\n，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function formatIpPreview(value: unknown, limit = 4): { text: string; fullText: string } {
+  const ips = splitAlertIps(value)
+  if (!ips.length) {
+    const fallback = String(value ?? '').trim()
+    return { text: fallback || '未提供', fullText: fallback || '未提供' }
+  }
+  if (ips.length <= limit) {
+    const joined = ips.join(',')
+    return { text: joined, fullText: joined }
+  }
+  return {
+    text: `${ips.slice(0, limit).join(',')}...共${ips.length}个`,
+    fullText: ips.join(','),
+  }
 }
 
 function getTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' {
@@ -75,15 +101,16 @@ export default function SentinelFlowTasksPage() {
     setSelectedTaskId((current) => current ?? tasks[0]?.task_id ?? null)
   }, [tasks])
 
-  useEffect(() => {
-    if (!autoExecuteEnabled) return
-    const timer = window.setInterval(() => {
-      void fetchPollAlerts().then((next) => {
-        setPollData(next)
-      })
-    }, 2000)
-    return () => window.clearInterval(timer)
-  }, [autoExecuteEnabled, setPollData])
+  const refreshTasks = useCallback(() => {
+    void fetchPollAlerts().then((next) => {
+      setPollData(next)
+    })
+    void reloadAudit()
+  }, [reloadAudit, setPollData])
+
+  useSentinelFlowLiveRefresh(refreshTasks, {
+    intervalMs: autoExecuteEnabled || (tasks.some((task) => task.status === 'running') ? true : false) ? 2000 : 5000,
+  })
 
   const filteredTasks = useMemo(() => (filter === 'all' ? tasks : tasks.filter((task) => task.status === filter)), [filter, tasks])
   const failedTasks = tasks.filter((task) => task.status === 'failed')
@@ -146,6 +173,7 @@ export default function SentinelFlowTasksPage() {
   const selectedEvidence = Array.isArray(selectedResult.evidence)
     ? selectedResult.evidence.map((item) => String(item).trim()).filter(Boolean)
     : []
+  const dipPreview = formatIpPreview(selectedPayload.dip, 4)
   const workflowDecision = String(workflowSelection.workflow_id ?? selectedTask?.workflow_name ?? '').trim()
   const workflowDecisionReason = String(workflowSelection.reason ?? '').trim()
 
@@ -281,7 +309,7 @@ export default function SentinelFlowTasksPage() {
               <div className="sentinelflow-context-grid">
                 <div className="sentinelflow-context-card"><strong>告警名称</strong><span>{String(selectedPayload.alert_name ?? '未提供')}</span></div>
                 <div className="sentinelflow-context-card"><strong>源 IP</strong><span>{String(selectedPayload.sip ?? '未提供')}</span></div>
-                <div className="sentinelflow-context-card"><strong>目标 IP</strong><span>{String(selectedPayload.dip ?? '未提供')}</span></div>
+                <div className="sentinelflow-context-card"><strong>目标 IP</strong><span title={dipPreview.fullText}>{dipPreview.text}</span></div>
                 <div className="sentinelflow-context-card"><strong>当前研判</strong><span>{String(selectedPayload.current_judgment ?? '未提供')}</span></div>
               </div>
               {workflowDecision ? (

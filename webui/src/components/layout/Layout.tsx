@@ -1,4 +1,4 @@
-import { type ComponentType, useMemo, useState } from 'react'
+import { type ComponentType, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import {
   Bot,
@@ -15,6 +15,8 @@ import {
   Siren,
 } from 'lucide-react'
 import { brand, withProductName } from '@/config/brand'
+import { fetchPollAlerts } from '@/api/sentinelflow'
+import { useSentinelFlowLiveRefresh } from '@/hooks/useSentinelFlowLiveRefresh'
 
 type NavItem = {
   name: string
@@ -31,6 +33,8 @@ type NavSection = {
 export default function Layout() {
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
+  const [newAlertNotice, setNewAlertNotice] = useState<{ count: number; timestamp: string } | null>(null)
+  const knownTaskIdsRef = useRef<Set<string> | null>(null)
 
   const navigation = useMemo<NavSection[]>(
     () => [
@@ -61,8 +65,64 @@ export default function Layout() {
     [],
   )
 
+  const refreshAlertNotice = useMemo(
+    () => async () => {
+      const result = await fetchPollAlerts()
+      const currentTaskIds = new Set((result.tasks ?? []).map((task) => task.task_id).filter(Boolean))
+      if (knownTaskIdsRef.current === null) {
+        knownTaskIdsRef.current = currentTaskIds
+        return
+      }
+      const previous = knownTaskIdsRef.current
+      let addedCount = 0
+      for (const taskId of currentTaskIds) {
+        if (!previous.has(taskId)) {
+          addedCount += 1
+        }
+      }
+      knownTaskIdsRef.current = currentTaskIds
+      if (addedCount > 0) {
+        setNewAlertNotice({ count: addedCount, timestamp: new Date().toISOString() })
+      }
+    },
+    [],
+  )
+
+  useSentinelFlowLiveRefresh(refreshAlertNotice, { intervalMs: 5000 })
+
+  useEffect(() => {
+    if (!newAlertNotice) return
+    const timer = window.setTimeout(() => {
+      setNewAlertNotice(null)
+    }, 8000)
+    return () => window.clearTimeout(timer)
+  }, [newAlertNotice])
+
   return (
     <div className="min-h-screen bg-gray-50">
+      {newAlertNotice ? (
+        <div className="fixed right-6 top-6 z-50 max-w-sm rounded-2xl border border-red-200 bg-white px-4 py-4 shadow-lg">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-red-50 text-red-500">
+              <BellRing className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold text-slate-900">发现新告警</div>
+              <div className="mt-1 text-sm leading-6 text-slate-600">
+                新刷入 {newAlertNotice.count} 条告警，不用手动刷新页面了。
+              </div>
+              <div className="mt-3 flex items-center gap-3">
+                <Link to="/alerts" className="text-sm font-semibold text-sky-700 hover:text-sky-600">
+                  前往告警工作台
+                </Link>
+                <button type="button" className="text-sm text-slate-500 hover:text-slate-700" onClick={() => setNewAlertNotice(null)}>
+                  关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <aside
         className={`fixed inset-y-0 left-0 z-40 border-r border-gray-200 bg-white transition-all duration-300 ${
           collapsed ? 'w-20' : 'w-72'

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, Siren } from 'lucide-react'
 import {
   fetchDashboardSummary,
@@ -14,6 +14,7 @@ import Surface from '@/components/sentinelflow/Surface'
 import PageHeader from '@/components/common/PageHeader'
 import { withProductName } from '@/config/brand'
 import { publishRuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
+import { useSentinelFlowLiveRefresh } from '@/hooks/useSentinelFlowLiveRefresh'
 
 function getDispositionLabel(value: string) {
   if (value === 'true_attack') return '真实攻击'
@@ -115,7 +116,7 @@ export default function SentinelFlowAlertsPage() {
   const autoExecuteRunning = Boolean(data?.auto_execute_running)
   const liveRefreshing = autoExecuteEnabled || actionState.running || (data?.tasks ?? []).some((task) => task.status === 'running')
 
-  async function loadTasks(options?: { silent?: boolean }) {
+  const loadTasks = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false
     if (!silent) {
       setLoading(true)
@@ -144,19 +145,16 @@ export default function SentinelFlowAlertsPage() {
         setLoading(false)
       }
     }
-  }
+  }, [])
 
   useEffect(() => {
     void loadTasks()
   }, [])
 
-  useEffect(() => {
-    if (!liveRefreshing) return
-    const timer = window.setInterval(() => {
-      void loadTasks({ silent: true })
-    }, 2000)
-    return () => window.clearInterval(timer)
-  }, [liveRefreshing])
+  useSentinelFlowLiveRefresh(
+    () => loadTasks({ silent: true }),
+    { intervalMs: liveRefreshing ? 2000 : 5000 },
+  )
 
   const tasks = [...(data?.tasks ?? [])].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
   const selectedTask = tasks.find((task) => task.task_id === selectedTaskId) ?? tasks[0] ?? null

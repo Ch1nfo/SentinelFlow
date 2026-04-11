@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, GitBranch, Plus, Radar, RefreshCw, Save, ShieldCheck, Trash2, Workflow as WorkflowIcon, X } from 'lucide-react'
 import { createWorkflow, deleteWorkflow, fetchAgents, fetchPollAlerts, fetchRuntimeSettings, fetchWorkflowDetail, fetchWorkflows, saveWorkflow, type AgentSummary, type WorkflowDetail } from '@/api/sentinelflow'
 import Surface from '@/components/sentinelflow/Surface'
@@ -6,6 +6,7 @@ import StatusBadge from '@/components/sentinelflow/StatusBadge'
 import PageHeader from '@/components/common/PageHeader'
 import { brand, withProductName } from '@/config/brand'
 import { useSentinelFlowAsyncData } from '@/hooks/useSentinelFlowAsyncData'
+import { useSentinelFlowLiveRefresh } from '@/hooks/useSentinelFlowLiveRefresh'
 
 type WorkflowCard = {
   id: string
@@ -186,6 +187,12 @@ export default function SentinelFlowWorkflowsPage() {
   for (const task of poll?.tasks ?? []) {
     taskCountByWorkflow.set(task.workflow_name, (taskCountByWorkflow.get(task.workflow_name) ?? 0) + 1)
   }
+
+  const refreshWorkflowRuntime = useCallback(() => {
+    void reloadPoll()
+  }, [reloadPoll])
+
+  useSentinelFlowLiveRefresh(refreshWorkflowRuntime, { intervalMs: 5000 })
 
   function startCreate() {
     setEditingId('__new__')
