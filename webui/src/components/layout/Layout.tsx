@@ -109,7 +109,9 @@ export default function Layout() {
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold text-slate-900">发现新告警</div>
               <div className="mt-1 text-sm leading-6 text-slate-600">
-                新刷入 {newAlertNotice.count} 条告警，不用手动刷新页面了。
+                {newAlertNotice.count === 1
+                  ? '新增一条告警，请于告警工作台查看'
+                  : `新增 ${newAlertNotice.count} 条告警，请于告警工作台查看`}
               </div>
               <div className="mt-3 flex items-center gap-3">
                 <Link to="/alerts" className="text-sm font-semibold text-sky-700 hover:text-sky-600">
