@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Clock, ListTodo, RotateCcw, ShieldCheck, XCircle } from 'lucide-react'
-import { fetchAuditEvents, fetchPollAlerts, fetchRuntimeSettings, handleAlertAction, type AlertActionResponse, type AlertTask } from '@/api/sentinelflow'
+import { ChevronDown, ChevronRight, Clock, ListTodo, RotateCcw, ShieldCheck, XCircle } from 'lucide-react'
+import {
+  fetchPollAlerts,
+  fetchRuntimeSettings,
+  handleAlertAction,
+  type AlertTask,
+  type ExecutionTraceItem,
+} from '@/api/sentinelflow'
 import JsonPreview from '@/components/sentinelflow/JsonPreview'
 import Surface from '@/components/sentinelflow/Surface'
 import StatusBadge from '@/components/sentinelflow/StatusBadge'
@@ -19,7 +25,7 @@ const TASK_FILTER_LABELS: Record<TaskFilter, string> = {
   queued: '排队中',
   running: '执行中',
   succeeded: '已完成',
-  completed: '已完成',
+  completed: '已被人工处置',
   failed: '失败',
 }
 
@@ -65,22 +71,84 @@ function formatIpPreview(value: unknown, limit = 4): { text: string; fullText: s
 }
 
 function getTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' {
-  if (task.status === 'succeeded') return 'success'
-  if (task.status === 'completed') return 'success'
+  if (task.status === 'succeeded' || task.status === 'completed') return 'success'
   if (task.status === 'failed') return 'danger'
   if (task.status === 'running') return 'warn'
   return 'neutral'
 }
 
+function toSortableTime(value: string | undefined) {
+  const text = String(value ?? '').trim()
+  if (!text) return 0
+  const timestamp = Date.parse(text.replace(' ', 'T'))
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function getTraceTone(item: ExecutionTraceItem): 'success' | 'danger' | 'warn' | 'info' {
+  if (item.success === true) return 'success'
+  if (item.success === false) return 'danger'
+  if (item.phase === 'skill_runs' || item.phase === 'actions') return 'info'
+  return 'warn'
+}
+
+function ProcessTrace({ trace }: { trace: ExecutionTraceItem[] }) {
+  const [openKeys, setOpenKeys] = useState<Record<string, boolean>>({})
+
+  useEffect(() => {
+    setOpenKeys({})
+  }, [trace])
+
+  if (!trace.length) {
+    return <p className="sentinelflow-muted-text">该任务生成于旧版本，暂无完整处置全流程明细。</p>
+  }
+
+  return (
+    <div className="space-y-3">
+      {trace.map((item, index) => {
+        const detailKey = `${item.phase}-${index}`
+        const open = Boolean(openKeys[detailKey])
+        const data = item.data && Object.keys(item.data).length ? item.data : null
+        return (
+          <div key={detailKey} className="rounded-xl border border-gray-200 bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">步骤 {index + 1}</span>
+                  <StatusBadge tone={getTraceTone(item)}>{item.title}</StatusBadge>
+                </div>
+                {item.summary ? <p className="text-sm text-gray-700">{item.summary}</p> : null}
+              </div>
+              {data ? (
+                <button
+                  type="button"
+                  className="sentinelflow-ghost-button shrink-0"
+                  onClick={() => setOpenKeys((current) => ({ ...current, [detailKey]: !open }))}
+                >
+                  {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                  {open ? '收起详情' : '展开详情'}
+                </button>
+              ) : null}
+            </div>
+            {open && data ? (
+              <div className="mt-3">
+                <JsonPreview value={data} />
+              </div>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function SentinelFlowTasksPage() {
   const { data: poll, loading, error, reload: reloadPoll, setData: setPollData } = useSentinelFlowAsyncData(fetchPollAlerts, [])
-  const { data: audit, reload: reloadAudit } = useSentinelFlowAsyncData(fetchAuditEvents, [])
   const { data: settings } = useSentinelFlowAsyncData(fetchRuntimeSettings, [])
   const [activity, setActivity] = useState<RuntimeActivity | null>(() => readRuntimeActivity())
-  const [bulkResult, setBulkResult] = useState<AlertActionResponse | null>(null)
   const [runningAction, setRunningAction] = useState('')
   const [filter, setFilter] = useState<TaskFilter>(() => readSessionValue<TaskFilter>(TASK_FILTER_KEY, 'all'))
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [processExpanded, setProcessExpanded] = useState(false)
   const tasks = poll?.tasks ?? []
   const autoExecuteEnabled = Boolean(poll?.auto_execute_enabled)
   const autoExecuteRunning = Boolean(poll?.auto_execute_running)
@@ -93,32 +161,39 @@ export default function SentinelFlowTasksPage() {
     return subscribeRuntimeActivity((next) => {
       setActivity(next)
       void reloadPoll()
-      void reloadAudit()
     })
-  }, [reloadAudit, reloadPoll])
+  }, [reloadPoll])
+
+  const filteredTasks = useMemo(() => {
+    const base = filter === 'all' ? tasks : tasks.filter((task) => task.status === filter)
+    return [...base].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
+  }, [filter, tasks])
 
   useEffect(() => {
-    setSelectedTaskId((current) => current ?? tasks[0]?.task_id ?? null)
-  }, [tasks])
+    setSelectedTaskId((current) => {
+      if (!filteredTasks.length) return null
+      if (current && filteredTasks.some((task) => task.task_id === current)) return current
+      return filteredTasks[0]?.task_id ?? null
+    })
+  }, [filteredTasks])
+
+  useEffect(() => {
+    setProcessExpanded(false)
+  }, [selectedTaskId])
 
   const refreshTasks = useCallback(() => {
     void fetchPollAlerts().then((next) => {
       setPollData(next)
     })
-    void reloadAudit()
-  }, [reloadAudit, setPollData])
+  }, [setPollData])
 
   useSentinelFlowLiveRefresh(refreshTasks, {
-    intervalMs: autoExecuteEnabled || (tasks.some((task) => task.status === 'running') ? true : false) ? 2000 : 5000,
+    intervalMs: autoExecuteEnabled || tasks.some((task) => task.status === 'running') ? 2000 : 5000,
   })
 
-  const filteredTasks = useMemo(() => (filter === 'all' ? tasks : tasks.filter((task) => task.status === filter)), [filter, tasks])
-  const failedTasks = tasks.filter((task) => task.status === 'failed')
   const selectedTask =
     filteredTasks.find((task) => task.task_id === selectedTaskId) ??
-    tasks.find((task) => task.task_id === selectedTaskId) ??
     filteredTasks[0] ??
-    tasks[0] ??
     null
 
   async function handleAutoExecuteToggle() {
@@ -126,7 +201,6 @@ export default function SentinelFlowTasksPage() {
     setRunningAction(action)
     try {
       const result = await handleAlertAction(action)
-      setBulkResult(result)
       const next: RuntimeActivity = {
         type: 'alert_action',
         title: autoExecuteEnabled ? '停止自动执行' : '开始自动执行',
@@ -137,7 +211,6 @@ export default function SentinelFlowTasksPage() {
       setActivity(next)
       publishRuntimeActivity(next)
       void reloadPoll()
-      void reloadAudit()
     } finally {
       setRunningAction('')
     }
@@ -147,7 +220,6 @@ export default function SentinelFlowTasksPage() {
     setRunningAction(task.task_id)
     try {
       const result = await handleAlertAction('retry_task', task)
-      setBulkResult(result)
       const next: RuntimeActivity = {
         type: 'alert_action',
         title: `${task.title} / retry`,
@@ -158,30 +230,35 @@ export default function SentinelFlowTasksPage() {
       setActivity(next)
       publishRuntimeActivity(next)
       void reloadPoll()
-      void reloadAudit()
     } finally {
       setRunningAction('')
     }
   }
 
   const selectedPayload = (selectedTask?.payload?.alert_data as Record<string, unknown> | undefined) ?? {}
-  const workflowSelection = (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ?? {}
-  const selectedResult = (selectedTask?.last_result_data ?? {}) as Record<string, unknown>
+  const selectedResult = selectedTask?.last_result_data ?? {}
+  const selectedWorkflowSelection =
+    (selectedResult.workflow_selection as Record<string, unknown> | undefined) ??
+    (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ??
+    {}
   const selectedReason = String(selectedResult.reason ?? '').trim()
   const selectedDisposition = String(selectedResult.disposition ?? '').trim()
   const selectedSummary = String(selectedResult.summary ?? '').trim()
   const selectedEvidence = Array.isArray(selectedResult.evidence)
     ? selectedResult.evidence.map((item) => String(item).trim()).filter(Boolean)
     : []
+  const selectedTrace = Array.isArray(selectedResult.execution_trace)
+    ? (selectedResult.execution_trace as ExecutionTraceItem[])
+    : []
   const dipPreview = formatIpPreview(selectedPayload.dip, 4)
-  const workflowDecision = String(workflowSelection.workflow_id ?? selectedTask?.workflow_name ?? '').trim()
-  const workflowDecisionReason = String(workflowSelection.reason ?? '').trim()
+  const workflowDecision = String(selectedWorkflowSelection.workflow_id ?? selectedTask?.workflow_name ?? '').trim()
+  const workflowDecisionReason = String(selectedWorkflowSelection.reason ?? '').trim()
 
   return (
     <div className="sentinelflow-page-stack">
       <PageHeader
         title="任务中心"
-        description="按状态查看任务流转、失败聚合、重试动作和最近审计。"
+        description="按状态查看任务流转、执行细节和完整处置链路。"
         icon={<ListTodo className="w-8 h-8" />}
         action={
           <button
@@ -213,7 +290,7 @@ export default function SentinelFlowTasksPage() {
             <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => task.status === 'running').length}</div>
           </div>
           <div className="rounded-xl border border-gray-200 bg-white p-5">
-          <div className="mb-2 flex items-center justify-between">
+            <div className="mb-2 flex items-center justify-between">
               <span className="text-sm text-gray-500">已完成</span>
               <ShieldCheck className="h-4 w-4 text-emerald-500" />
             </div>
@@ -224,14 +301,14 @@ export default function SentinelFlowTasksPage() {
               <span className="text-sm text-gray-500">失败</span>
               <XCircle className="h-4 w-4 text-red-500" />
             </div>
-            <div className="text-3xl font-bold text-gray-900">{failedTasks.length}</div>
+            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => task.status === 'failed').length}</div>
           </div>
         </div>
 
-        <div className="mt-4 mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="mb-4 mt-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex gap-1 rounded-lg bg-gray-100 p-1">
             {(['all', 'queued', 'running', 'succeeded', 'completed', 'failed'] as TaskFilter[]).map((item) => (
-              <button key={item} type="button" className={`px-4 py-2 text-sm rounded-md transition-colors ${filter === item ? 'bg-white text-slate-800 shadow-sm font-medium' : 'text-gray-600 hover:text-gray-900'}`} onClick={() => setFilter(item)}>
+              <button key={item} type="button" className={`rounded-md px-4 py-2 text-sm transition-colors ${filter === item ? 'bg-white font-medium text-slate-800 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`} onClick={() => setFilter(item)}>
                 {TASK_FILTER_LABELS[item]}
               </button>
             ))}
@@ -239,7 +316,7 @@ export default function SentinelFlowTasksPage() {
           <div className="sentinelflow-inline-metrics">
             <span>mode: {settings?.runtime.agent_enabled ? 'Agent' : 'Basic'}</span>
             <span>自动执行: {autoExecuteEnabled ? (autoExecuteRunning ? '自动执行中' : '已开启') : '未开启'}</span>
-            <button type="button" className="sentinelflow-ghost-button" onClick={() => void Promise.all([reloadPoll(), reloadAudit()])}>刷新任务视图</button>
+            <button type="button" className="sentinelflow-ghost-button" onClick={() => void reloadPoll()}>刷新任务视图</button>
           </div>
         </div>
 
@@ -255,109 +332,103 @@ export default function SentinelFlowTasksPage() {
         ) : null}
       </Surface>
 
-      <Surface title="任务工作面" subtitle="支持状态筛选、失败聚合、单条详情和重试动作。">
+      <Surface title="任务工作面" subtitle="左侧选择任务，右侧查看详情与完整处置全流程。">
         {loading ? <p className="sentinelflow-muted-text">正在读取任务分发结果...</p> : null}
         {error ? <div className="sentinelflow-message-block sentinelflow-message-error">{error}</div> : null}
         {!loading && !error ? (
-          <>
-            <div className="sentinelflow-grid-2">
-              <div className="sentinelflow-detail-panel">
-                <h3>筛选结果</h3>
-                <div className="sentinelflow-task-list">
-                  {filteredTasks.map((task) => (
-                    <button key={task.task_id} type="button" className={`sentinelflow-task-tile${selectedTask?.task_id === task.task_id ? ' sentinelflow-task-tile-active' : ''}`} onClick={() => setSelectedTaskId(task.task_id)}>
-                      <div className="sentinelflow-response-row">
-                        <strong>{task.title}</strong>
-                        <StatusBadge tone={getTone(task)}>{getTaskStatusLabel(task.status)}</StatusBadge>
-                      </div>
-                      <span>{task.workflow_name}</span>
-                      <span>{task.event_ids}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="sentinelflow-detail-panel">
-                <h3>失败任务</h3>
-                {failedTasks.length === 0 ? <p className="sentinelflow-muted-text">当前没有失败任务。</p> : failedTasks.map((task) => (
-                  <div key={task.task_id} className="sentinelflow-task-tile sentinelflow-task-tile-failed">
+          <div className="sentinelflow-grid-2">
+            <div className="sentinelflow-detail-panel">
+              <h3>筛选结果</h3>
+              <div className="sentinelflow-task-list">
+                {filteredTasks.length ? filteredTasks.map((task) => (
+                  <button key={task.task_id} type="button" className={`sentinelflow-task-tile${selectedTask?.task_id === task.task_id ? ' sentinelflow-task-tile-active' : ''}`} onClick={() => setSelectedTaskId(task.task_id)}>
                     <div className="sentinelflow-response-row">
                       <strong>{task.title}</strong>
-                      <StatusBadge tone="danger">失败</StatusBadge>
+                      <StatusBadge tone={getTone(task)}>{getTaskStatusLabel(task.status)}</StatusBadge>
                     </div>
-                    <span>{task.last_result_error || '无详细错误信息'}</span>
-                    <button type="button" className="sentinelflow-ghost-button" onClick={() => void handleRetry(task)} disabled={runningAction !== ''}>
-                      {runningAction === task.task_id ? '重试中...' : '重试任务'}
-                    </button>
-                  </div>
-                ))}
+                    <span>{task.alert_time || '未提供告警时间'}</span>
+                    <span>{task.workflow_name}</span>
+                  </button>
+                )) : <p className="sentinelflow-muted-text">当前筛选条件下没有任务。</p>}
               </div>
             </div>
-          </>
-        ) : null}
-      </Surface>
 
-      <div className="sentinelflow-grid-2">
-        <Surface title="任务详情" subtitle="卡片化显示选中任务的告警上下文和最近结果。">
-          {selectedTask ? (
-            <div className="sentinelflow-response-stack">
-              <div className="sentinelflow-response-row">
-                <StatusBadge tone={getTone(selectedTask)}>{getTaskStatusLabel(selectedTask.status)}</StatusBadge>
-                <span>{selectedTask.event_ids}</span>
-                <span>{selectedTask.workflow_name}</span>
-              </div>
-              <p className="sentinelflow-muted-text">{selectedTask.description}</p>
-              <div className="sentinelflow-context-grid">
-                <div className="sentinelflow-context-card"><strong>告警名称</strong><span>{String(selectedPayload.alert_name ?? '未提供')}</span></div>
-                <div className="sentinelflow-context-card"><strong>源 IP</strong><span>{String(selectedPayload.sip ?? '未提供')}</span></div>
-                <div className="sentinelflow-context-card"><strong>目标 IP</strong><span title={dipPreview.fullText}>{dipPreview.text}</span></div>
-                <div className="sentinelflow-context-card"><strong>当前研判</strong><span>{String(selectedPayload.current_judgment ?? '未提供')}</span></div>
-              </div>
-              {workflowDecision ? (
-                <div className="rounded-xl border border-amber-100 bg-amber-50 p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Workflow 决策</div>
-                  <div className="mt-2 text-sm font-semibold text-amber-950">命中流程：{workflowDecision}</div>
-                  {workflowDecisionReason ? <div className="mt-2 text-sm text-amber-900">主 Agent 理由：{workflowDecisionReason}</div> : null}
-                </div>
-              ) : null}
-              {selectedDisposition || selectedReason || selectedSummary ? (
-                <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">最终研判</div>
-                  <div className="mt-2 text-sm font-semibold text-blue-950">
-                    {`分类：${getDispositionLabel(selectedDisposition)}`}
+            <div className="sentinelflow-detail-panel">
+              <h3>任务详情</h3>
+              {selectedTask ? (
+                <div className="sentinelflow-response-stack">
+                  <div className="sentinelflow-response-row">
+                    <StatusBadge tone={getTone(selectedTask)}>{getTaskStatusLabel(selectedTask.status)}</StatusBadge>
+                    <span>{selectedTask.alert_time || '未提供告警时间'}</span>
+                    <span>{selectedTask.workflow_name}</span>
                   </div>
-                  {selectedSummary ? <div className="mt-2 text-sm text-blue-900">结论：{selectedSummary}</div> : null}
-                  {selectedReason ? <div className="mt-2 text-sm text-blue-900">理由：{selectedReason}</div> : null}
-                  {selectedEvidence.length ? (
-                    <div className="mt-3">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">关键依据</div>
-                      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-blue-900">
-                        {selectedEvidence.map((item, index) => (
-                          <li key={`${selectedTask.task_id}-evidence-${index}`}>{item}</li>
-                        ))}
-                      </ul>
+                  <p className="sentinelflow-muted-text">{selectedTask.description}</p>
+
+                  <div className="sentinelflow-context-grid">
+                    <div className="sentinelflow-context-card"><strong>告警名称</strong><span>{String(selectedPayload.alert_name ?? '未提供')}</span></div>
+                    <div className="sentinelflow-context-card"><strong>事件号</strong><span>{selectedTask.event_ids || '未提供'}</span></div>
+                    <div className="sentinelflow-context-card"><strong>源 IP</strong><span>{String(selectedPayload.sip ?? '未提供')}</span></div>
+                    <div className="sentinelflow-context-card"><strong>目标 IP</strong><span title={dipPreview.fullText}>{dipPreview.text}</span></div>
+                    <div className="sentinelflow-context-card"><strong>告警时间</strong><span>{String(selectedPayload.alert_time ?? selectedTask.alert_time ?? '未提供')}</span></div>
+                    <div className="sentinelflow-context-card"><strong>当前研判</strong><span>{String(selectedPayload.current_judgment ?? '未提供')}</span></div>
+                  </div>
+
+                  {workflowDecision ? (
+                    <div className="rounded-xl border border-amber-100 bg-amber-50 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Workflow 决策</div>
+                      <div className="mt-2 text-sm font-semibold text-amber-950">命中流程：{workflowDecision}</div>
+                      {workflowDecisionReason ? <div className="mt-2 text-sm text-amber-900">主 Agent 理由：{workflowDecisionReason}</div> : null}
+                    </div>
+                  ) : null}
+
+                  {selectedDisposition || selectedReason || selectedSummary ? (
+                    <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">最终研判</div>
+                      <div className="mt-2 text-sm font-semibold text-blue-950">{`分类：${getDispositionLabel(selectedDisposition)}`}</div>
+                      {selectedSummary ? <div className="mt-2 text-sm text-blue-900">结论：{selectedSummary}</div> : null}
+                      {selectedReason ? <div className="mt-2 text-sm text-blue-900">理由：{selectedReason}</div> : null}
+                      {selectedEvidence.length ? (
+                        <div className="mt-3">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">关键依据</div>
+                          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-blue-900">
+                            {selectedEvidence.map((item, index) => (
+                              <li key={`${selectedTask.task_id}-evidence-${index}`}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {selectedTask.last_result_error ? <div className="sentinelflow-message-block sentinelflow-message-error">{selectedTask.last_result_error}</div> : null}
+
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">处置全流程</div>
+                        <p className="mt-1 text-sm text-gray-600">展开后可查看从接收告警、主 Agent 研判、技能调用到结单结果的完整细节。</p>
+                      </div>
+                      <button type="button" className="sentinelflow-ghost-button" onClick={() => setProcessExpanded((current) => !current)}>
+                        {processExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                        {processExpanded ? '收起处置全流程' : '展开处置全流程'}
+                      </button>
+                    </div>
+                    {processExpanded ? <div className="mt-4"><ProcessTrace trace={selectedTrace} /></div> : null}
+                  </div>
+
+                  {selectedTask.status === 'failed' ? (
+                    <div className="flex justify-end">
+                      <button type="button" className="sentinelflow-ghost-button" onClick={() => void handleRetry(selectedTask)} disabled={runningAction !== ''}>
+                        {runningAction === selectedTask.task_id ? '重试中...' : '重试任务'}
+                      </button>
                     </div>
                   ) : null}
                 </div>
-              ) : null}
-              {selectedTask.last_result_error ? <div className="sentinelflow-message-block sentinelflow-message-error">{selectedTask.last_result_error}</div> : null}
-              {Object.keys(selectedTask.last_result_data ?? {}).length ? <JsonPreview value={selectedTask.last_result_data} /> : <p className="sentinelflow-muted-text">当前还没有最近一次执行结果详情。</p>}
+              ) : <p className="sentinelflow-muted-text">选择一条任务后查看详情。</p>}
             </div>
-          ) : <p className="sentinelflow-muted-text">选择一条任务后查看详情。</p>}
-        </Surface>
-
-        <Surface title="审计与批量结果" subtitle="这里收口最近审计动静与批量执行结果。">
-          {bulkResult ? <JsonPreview value={bulkResult} /> : <p className="sentinelflow-muted-text">执行自动处理或重试任务后，这里会显示结构化结果。</p>}
-          <div className="sentinelflow-divider" />
-          <div className="sentinelflow-stack-list">
-            {(audit?.events ?? []).slice(-5).reverse().map((event) => (
-              <div key={`${event.event_type}-${event.created_at}`} className="sentinelflow-stack-item">
-                <strong>{event.event_type}</strong>
-                <span>{event.message}</span>
-              </div>
-            ))}
           </div>
-        </Surface>
-      </div>
+        ) : null}
+      </Surface>
     </div>
   )
 }

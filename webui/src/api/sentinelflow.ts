@@ -1,5 +1,22 @@
 export type AlertTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'completed'
 
+export type ExecutionTraceItem = {
+  phase: string
+  title: string
+  summary?: string
+  success?: boolean | null
+  data?: Record<string, unknown>
+}
+
+export type AlertTaskResultData = Record<string, unknown> & {
+  disposition?: string
+  summary?: string
+  reason?: string
+  evidence?: string[]
+  workflow_selection?: Record<string, unknown>
+  execution_trace?: ExecutionTraceItem[]
+}
+
 export type AlertTask = {
   task_id: string
   event_ids: string
@@ -12,7 +29,7 @@ export type AlertTask = {
   last_action: string
   last_result_success?: boolean | null
   last_result_error?: string | null
-  last_result_data: Record<string, unknown>
+  last_result_data: AlertTaskResultData
   payload: Record<string, unknown>
 }
 

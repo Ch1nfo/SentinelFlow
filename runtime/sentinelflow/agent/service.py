@@ -779,6 +779,8 @@ class SentinelFlowAgentService:
                 tool_calls.extend(msg.tool_calls)
             if getattr(msg, "name", None):
                 item["name"] = msg.name
+            if getattr(msg, "tool_call_id", None):
+                item["tool_call_id"] = msg.tool_call_id
             serialized_messages.append(item)
             if msg_type == "ai" and content:
                 final_text = content
@@ -813,6 +815,21 @@ class SentinelFlowAgentService:
         closure_success = any(self._is_successful_closure_run(run) for run in skill_runs)
         disposal_success = any(not bool(payload.get("error")) for payload in actions.values() if isinstance(payload, dict))
         success = closure_success or (action_hint == "triage_dispose" and disposal_success)
+        workflow_selection = self._extract_workflow_selection(alert, graph_result)
+        execution_trace = self._build_execution_trace(
+            alert=alert,
+            graph_result=graph_result,
+            workflow_selection=workflow_selection,
+            disposition=disposition,
+            summary=summary,
+            reason=reason,
+            evidence=evidence,
+            enrichment=enrichment,
+            closure_result=closure_result,
+            actions=actions,
+            skill_runs=skill_runs,
+            success=success,
+        )
 
         return {
             **graph_result,
@@ -825,14 +842,168 @@ class SentinelFlowAgentService:
             "detail_msg": self._infer_closure_field(skill_runs, "detailMsg", self._default_detail_msg(disposition)),
             "closure_status": self._infer_closure_field(skill_runs, "status", self._default_closure_status(disposition)),
             "enrichment": enrichment,
+            "workflow_selection": workflow_selection,
             "closure_result": closure_result,
             "actions": actions,
             "success": success,
             "execution_mode": "agent",
+            "execution_trace": execution_trace,
             "used_agent": True,
             "has_close_action": any(self._is_closure_run(run) for run in skill_runs),
             "has_disposal_action": bool(actions),
         }
+
+    def _extract_workflow_selection(
+        self,
+        alert: dict[str, Any],
+        graph_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        direct = graph_result.get("workflow_selection")
+        if isinstance(direct, dict):
+            return dict(direct)
+        payload = alert.get("_workflow_selection")
+        if isinstance(payload, dict):
+            return dict(payload)
+        raw_payload = alert.get("payload")
+        if isinstance(raw_payload, str) and raw_payload.strip().startswith("{"):
+            try:
+                decoded = json.loads(raw_payload)
+            except json.JSONDecodeError:
+                decoded = None
+            if isinstance(decoded, dict):
+                candidate = decoded.get("workflow_selection")
+                if isinstance(candidate, dict):
+                    return dict(candidate)
+        return {}
+
+    def _build_execution_trace(
+        self,
+        *,
+        alert: dict[str, Any],
+        graph_result: dict[str, Any],
+        workflow_selection: dict[str, Any],
+        disposition: str,
+        summary: str,
+        reason: str,
+        evidence: list[str],
+        enrichment: dict[str, Any],
+        closure_result: dict[str, Any],
+        actions: dict[str, Any],
+        skill_runs: list[dict[str, Any]],
+        success: bool,
+    ) -> list[dict[str, Any]]:
+        trace: list[dict[str, Any]] = []
+        trace.append(
+            {
+                "phase": "alert_received",
+                "title": "接收告警",
+                "summary": "已接收任务告警上下文。",
+                "success": True,
+                "data": {
+                    "eventIds": str(alert.get("eventIds", "")).strip(),
+                    "alert_name": str(alert.get("alert_name", alert.get("alert_name") or alert.get("alertName", ""))).strip(),
+                    "sip": alert.get("sip", ""),
+                    "dip": alert.get("dip", ""),
+                    "alert_time": alert.get("alert_time", ""),
+                    "alert_source": alert.get("alert_source", ""),
+                    "current_judgment": alert.get("current_judgment", ""),
+                    "history_judgment": alert.get("history_judgment", ""),
+                    "payload": alert.get("payload", ""),
+                },
+            }
+        )
+        if workflow_selection:
+            trace.append(
+                {
+                    "phase": "workflow_selection",
+                    "title": "Workflow 决策",
+                    "summary": (
+                        f"命中流程：{workflow_selection.get('workflow_id')}"
+                        if workflow_selection.get("workflow_id")
+                        else str(workflow_selection.get("reason", "")).strip() or "未命中固定流程。"
+                    ),
+                    "success": True,
+                    "data": workflow_selection,
+                }
+            )
+        trace.append(
+            {
+                "phase": "agent_analysis",
+                "title": "主 Agent 研判",
+                "summary": summary or reason or "主 Agent 已输出研判结论。",
+                "success": True,
+                "data": {
+                    "agent_name": graph_result.get("agent_name", ""),
+                    "used_agent": True,
+                    "execution_mode": "agent",
+                    "disposition": disposition,
+                    "summary": summary,
+                    "reason": reason,
+                    "evidence": evidence,
+                    "final_response": graph_result.get("final_response", ""),
+                },
+            }
+        )
+        if enrichment:
+            trace.append(
+                {
+                    "phase": "enrichment",
+                    "title": "情报补充",
+                    "summary": "已产生额外情报或上下文补充结果。",
+                    "success": not bool(enrichment.get("error")),
+                    "data": enrichment,
+                }
+            )
+        if skill_runs:
+            trace.append(
+                {
+                    "phase": "skill_runs",
+                    "title": "技能调用记录",
+                    "summary": f"共调用 {len(skill_runs)} 个技能。",
+                    "success": all(bool(run.get("success")) for run in skill_runs),
+                    "data": {
+                        "runs": skill_runs,
+                    },
+                }
+            )
+        if actions:
+            trace.append(
+                {
+                    "phase": "actions",
+                    "title": "处置动作",
+                    "summary": f"共执行 {len(actions)} 类处置动作。",
+                    "success": all(not bool(payload.get("error")) for payload in actions.values() if isinstance(payload, dict)),
+                    "data": {
+                        "actions": actions,
+                    },
+                }
+            )
+        if closure_result:
+            trace.append(
+                {
+                    "phase": "closure",
+                    "title": "结单结果",
+                    "summary": str(closure_result.get("detailMsg") or closure_result.get("detail_msg") or closure_result.get("result") or "已执行结单。").strip(),
+                    "success": not bool(closure_result.get("error")),
+                    "data": closure_result,
+                }
+            )
+        trace.append(
+            {
+                "phase": "final_status",
+                "title": "最终执行状态",
+                "summary": "任务成功完成。" if success else "任务未完成或未返回成功结果。",
+                "success": success,
+                "data": {
+                    "success": success,
+                    "has_close_action": any(self._is_closure_run(run) for run in skill_runs),
+                    "has_disposal_action": bool(actions),
+                    "tool_calls": graph_result.get("tool_calls", []),
+                    "messages": graph_result.get("messages", []),
+                },
+            }
+        )
+        return trace
 
     def _extract_skill_runs(self, graph_result: dict[str, Any]) -> list[dict[str, Any]]:
         tool_calls = [item for item in graph_result.get("tool_calls", []) if isinstance(item, dict)]
@@ -841,6 +1012,13 @@ class SentinelFlowAgentService:
             for item in graph_result.get("messages", [])
             if isinstance(item, dict) and str(item.get("type", "")).strip() == "tool"
         ]
+        tool_messages_by_id: dict[str, dict[str, Any]] = {}
+        ordered_tool_messages: list[dict[str, Any]] = []
+        for tool_message in tool_messages:
+            tool_call_id = str(tool_message.get("tool_call_id", "")).strip()
+            if tool_call_id:
+                tool_messages_by_id[tool_call_id] = tool_message
+            ordered_tool_messages.append(tool_message)
         runs: list[dict[str, Any]] = []
         tool_index = 0
         for call in tool_calls:
@@ -863,10 +1041,21 @@ class SentinelFlowAgentService:
                 arguments = {}
 
             payload: dict[str, Any] = {}
-            while tool_index < len(tool_messages):
-                tool_message = tool_messages[tool_index]
-                tool_index += 1
-                content = tool_message.get("content", "")
+            matched_message = None
+            tool_call_id = str(call.get("id", "")).strip()
+            if tool_call_id:
+                matched_message = tool_messages_by_id.get(tool_call_id)
+            if matched_message is None:
+                while tool_index < len(ordered_tool_messages):
+                    tool_message = ordered_tool_messages[tool_index]
+                    tool_index += 1
+                    candidate_id = str(tool_message.get("tool_call_id", "")).strip()
+                    if candidate_id and candidate_id != tool_call_id:
+                        continue
+                    matched_message = tool_message
+                    break
+            if matched_message is not None:
+                content = matched_message.get("content", "")
                 if isinstance(content, str):
                     try:
                         decoded = json.loads(content)
@@ -878,7 +1067,6 @@ class SentinelFlowAgentService:
                     decoded = {"result": content}
                 if isinstance(decoded, dict):
                     payload = decoded
-                break
 
             merged_payload = dict(payload)
             for key, value in arguments.items():

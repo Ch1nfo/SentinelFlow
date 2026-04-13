@@ -13,3 +13,4 @@ runtime/.sentinelflow/
 runtime/.hisoc/
 runtime/*.db
 runtime/*.sqlite
+.vscode/

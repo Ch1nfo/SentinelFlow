@@ -26,25 +26,78 @@ class AlertTaskRunnerService:
         self.workflow_root = workflow_root
 
     def _finalize_success(self, task, selected_action: str, result_data: dict[str, Any]) -> dict[str, Any]:
-        task = self.dispatch_service.finalize_task(task.task_id, selected_action, True, result_data, None)
+        result_payload = dict(result_data)
+        if isinstance(task.payload, dict):
+            workflow_selection = task.payload.get("workflow_selection")
+            if isinstance(workflow_selection, dict) and "workflow_selection" not in result_payload:
+                result_payload["workflow_selection"] = workflow_selection
+        task = self.dispatch_service.finalize_task(task.task_id, selected_action, True, result_payload, None)
         return {
             "action": selected_action,
             "success": True,
             "task_id": task.task_id if task else "",
-            "event_ids": str(result_data.get("event_ids", "")).strip(),
-            "data": result_data,
+            "event_ids": str(result_payload.get("event_ids", "")).strip(),
+            "data": result_payload,
             "task": task,
             "error": None,
         }
 
     def _finalize_failure(self, task, selected_action: str, error: str) -> dict[str, Any]:
-        task = self.dispatch_service.finalize_task(task.task_id, selected_action, False, {}, error)
+        workflow_selection = {}
+        alert_data = {}
+        if isinstance(task.payload, dict):
+            workflow_selection = task.payload.get("workflow_selection", {}) if isinstance(task.payload.get("workflow_selection"), dict) else {}
+            alert_data = task.payload.get("alert_data", {}) if isinstance(task.payload.get("alert_data"), dict) else {}
+        result_data = {
+            "success": False,
+            "workflow_selection": workflow_selection,
+            "execution_trace": [
+                {
+                    "phase": "alert_received",
+                    "title": "接收告警",
+                    "summary": "已接收任务告警上下文。",
+                    "success": True,
+                    "data": {
+                        "eventIds": task.event_ids,
+                        "alert_name": str(alert_data.get("alert_name", task.title)).strip(),
+                        "sip": alert_data.get("sip", ""),
+                        "dip": alert_data.get("dip", ""),
+                        "alert_time": alert_data.get("alert_time", getattr(task, "alert_time", "")),
+                        "payload": alert_data.get("payload", ""),
+                    },
+                },
+                {
+                    "phase": "workflow_selection",
+                    "title": "Workflow 决策",
+                    "summary": (
+                        f"命中流程：{workflow_selection.get('workflow_id')}"
+                        if workflow_selection.get("workflow_id")
+                        else str(workflow_selection.get("reason", "")).strip() or "未命中固定流程。"
+                    ),
+                    "success": True,
+                    "data": workflow_selection,
+                } if workflow_selection else None,
+                {
+                    "phase": "final_status",
+                    "title": "最终执行状态",
+                    "summary": error,
+                    "success": False,
+                    "data": {
+                        "success": False,
+                        "error": error,
+                        "action": selected_action,
+                    },
+                },
+            ],
+        }
+        result_data["execution_trace"] = [item for item in result_data["execution_trace"] if item is not None]
+        task = self.dispatch_service.finalize_task(task.task_id, selected_action, False, result_data, error)
         return {
             "action": selected_action,
             "success": False,
             "task_id": task.task_id if task else "",
             "event_ids": str((task.event_ids if task else "")),
-            "data": {},
+            "data": result_data,
             "task": task,
             "error": error,
         }
