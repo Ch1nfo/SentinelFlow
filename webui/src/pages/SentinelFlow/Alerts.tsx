@@ -169,12 +169,14 @@ export default function SentinelFlowAlertsPage() {
   const selectedPayload = getSelectedAlertPayload(selectedTask)
   const workflowSelection = (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ?? {}
   const selectedResult = (selectedTask?.last_result_data ?? {}) as Record<string, unknown>
+  const selectedClosureStep = (selectedResult.closure_step as Record<string, unknown> | undefined) ?? {}
   const selectedReason = String(selectedResult.reason ?? '').trim()
   const selectedDisposition = String(selectedResult.disposition ?? '').trim()
   const selectedSummary = String(selectedResult.summary ?? '').trim()
   const selectedEvidence = Array.isArray(selectedResult.evidence)
     ? selectedResult.evidence.map((item) => String(item).trim()).filter(Boolean)
     : []
+  const hideTaskError = Boolean(selectedClosureStep.attempted) && Boolean(selectedClosureStep.success)
   const dipPreview = formatIpPreview(selectedPayload.dip)
   const workflowDecision = String(workflowSelection.workflow_id ?? selectedTask?.workflow_name ?? '').trim()
   const workflowDecisionReason = String(workflowSelection.reason ?? '').trim()
@@ -365,7 +367,7 @@ export default function SentinelFlowAlertsPage() {
                     ) : null}
                   </div>
                 ) : null}
-                {selectedTask.last_result_error ? <div className="sentinelflow-message-block sentinelflow-message-error">{selectedTask.last_result_error}</div> : null}
+                {selectedTask.last_result_error && !hideTaskError ? <div className="sentinelflow-message-block sentinelflow-message-error">{selectedTask.last_result_error}</div> : null}
               </div>
             ) : (
               <p className="sentinelflow-muted-text">选择一条告警后查看详情。</p>

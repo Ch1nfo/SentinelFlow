@@ -241,12 +241,14 @@ export default function SentinelFlowTasksPage() {
     (selectedResult.workflow_selection as Record<string, unknown> | undefined) ??
     (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ??
     {}
+  const selectedClosureStep = (selectedResult.closure_step as Record<string, unknown> | undefined) ?? {}
   const selectedReason = String(selectedResult.reason ?? '').trim()
   const selectedDisposition = String(selectedResult.disposition ?? '').trim()
   const selectedSummary = String(selectedResult.summary ?? '').trim()
   const selectedEvidence = Array.isArray(selectedResult.evidence)
     ? selectedResult.evidence.map((item) => String(item).trim()).filter(Boolean)
     : []
+  const hideTaskError = Boolean(selectedClosureStep.attempted) && Boolean(selectedClosureStep.success)
   const selectedTrace = Array.isArray(selectedResult.execution_trace)
     ? (selectedResult.execution_trace as ExecutionTraceItem[])
     : []
@@ -400,7 +402,7 @@ export default function SentinelFlowTasksPage() {
                     </div>
                   ) : null}
 
-                  {selectedTask.last_result_error ? <div className="sentinelflow-message-block sentinelflow-message-error">{selectedTask.last_result_error}</div> : null}
+                  {selectedTask.last_result_error && !hideTaskError ? <div className="sentinelflow-message-block sentinelflow-message-error">{selectedTask.last_result_error}</div> : null}
 
                   <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
                     <div className="flex items-center justify-between gap-3">

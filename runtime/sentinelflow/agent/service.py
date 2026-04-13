@@ -1057,6 +1057,8 @@ class SentinelFlowAgentService:
                     "skill_name": skill_name,
                     "tool_name": run.get("tool_name", ""),
                     "tool_call_id": run.get("tool_call_id", ""),
+                    "tool_success": run.get("tool_success"),
+                    "tool_error": run.get("tool_error"),
                     "arguments": run.get("arguments", {}) if isinstance(run.get("arguments"), dict) else {},
                     "result": payload if isinstance(payload, dict) else {},
                     "error": payload.get("error") if isinstance(payload, dict) else None,
@@ -1087,6 +1089,8 @@ class SentinelFlowAgentService:
                 "skill_name": skill_name,
                 "tool_name": run.get("tool_name", ""),
                 "tool_call_id": run.get("tool_call_id", ""),
+                "tool_success": run.get("tool_success"),
+                "tool_error": run.get("tool_error"),
                 "arguments": arguments,
                 "result": payload,
                 "error": payload.get("error"),
@@ -1098,6 +1102,8 @@ class SentinelFlowAgentService:
             "skill_name": "",
             "tool_name": "",
             "tool_call_id": "",
+            "tool_success": False,
+            "tool_error": None,
             "arguments": {},
             "result": {},
             "error": None,
@@ -1184,7 +1190,12 @@ class SentinelFlowAgentService:
                 if isinstance(decoded, dict):
                     payload = decoded
 
-            merged_payload = dict(payload)
+            tool_payload = dict(payload)
+            business_payload = tool_payload.get("data", {})
+            if not isinstance(business_payload, dict):
+                business_payload = {"result": business_payload}
+
+            merged_payload = dict(business_payload)
             for key, value in arguments.items():
                 merged_payload.setdefault(key, value)
             runs.append(
@@ -1192,9 +1203,14 @@ class SentinelFlowAgentService:
                     "skill_name": skill_name,
                     "tool_name": tool_name,
                     "tool_call_id": tool_call_id,
+                    "tool_success": bool(tool_payload.get("success")) if isinstance(tool_payload.get("success"), bool) else not bool(tool_payload.get("error")),
+                    "tool_error": tool_payload.get("error"),
+                    "tool_payload": tool_payload,
                     "arguments": arguments,
                     "payload": merged_payload,
-                    "success": not bool(merged_payload.get("error")),
+                    "success": (bool(tool_payload.get("success")) if isinstance(tool_payload.get("success"), bool) else not bool(tool_payload.get("error")))
+                    and not bool(merged_payload.get("error"))
+                    and not (isinstance(merged_payload.get("success"), bool) and not bool(merged_payload.get("success"))),
                 }
             )
         return runs
@@ -1249,21 +1265,31 @@ class SentinelFlowAgentService:
             return False
         payload = run.get("payload", {})
         arguments = run.get("arguments", {})
+        tool_success = run.get("tool_success")
+        tool_error = run.get("tool_error")
         payload = payload if isinstance(payload, dict) else {}
         arguments = arguments if isinstance(arguments, dict) else {}
+        if bool(tool_error):
+            return False
+        if isinstance(tool_success, bool) and not tool_success:
+            return False
         if bool(payload.get("error")):
             return False
         status_value = payload.get("status", arguments.get("status"))
         result_value = payload.get("result", arguments.get("result"))
-        success_value = payload.get("success")
+        success_value = payload.get("success", tool_success)
         if isinstance(success_value, bool):
             return success_value
         if isinstance(result_value, str) and result_value.strip():
             normalized = result_value.strip().lower()
-            if normalized in {"ok", "success", "done", "closed", "completed"}:
+            if normalized in {"ok", "success", "done", "closed", "completed", "true"}:
                 return True
+            if normalized in {"fail", "failed", "false", "error"}:
+                return False
         if isinstance(status_value, str) and status_value.strip():
             return True
+        if isinstance(tool_success, bool):
+            return tool_success
         return bool(payload)
 
     def _is_enrichment_run(self, run: dict[str, Any]) -> bool:
