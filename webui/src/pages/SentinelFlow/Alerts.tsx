@@ -125,7 +125,6 @@ export default function SentinelFlowAlertsPage() {
     try {
       const result = await fetchPollAlerts()
       setData(result)
-      setSelectedTaskId((current) => current ?? result.tasks[0]?.task_id ?? null)
       if (!silent) {
         setLoading(false)
       }
@@ -157,6 +156,15 @@ export default function SentinelFlowAlertsPage() {
   )
 
   const tasks = [...(data?.tasks ?? [])].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
+
+  useEffect(() => {
+    setSelectedTaskId((current) => {
+      if (!tasks.length) return null
+      if (current && tasks.some((task) => task.task_id === current)) return current
+      return tasks[0]?.task_id ?? null
+    })
+  }, [tasks])
+
   const selectedTask = tasks.find((task) => task.task_id === selectedTaskId) ?? tasks[0] ?? null
   const selectedPayload = getSelectedAlertPayload(selectedTask)
   const workflowSelection = (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ?? {}
