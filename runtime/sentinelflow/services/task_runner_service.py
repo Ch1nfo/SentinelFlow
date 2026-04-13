@@ -25,6 +25,15 @@ class AlertTaskRunnerService:
         self.agent_workflow_runner = agent_workflow_runner
         self.workflow_root = workflow_root
 
+    def _agent_result_is_success(self, agent_result: dict[str, Any], selected_action: str) -> bool:
+        closure_step = agent_result.get("closure_step", {})
+        if isinstance(closure_step, dict) and bool(closure_step.get("attempted")) and bool(closure_step.get("success")):
+            return True
+        action_steps = agent_result.get("action_steps", [])
+        if selected_action == "triage_dispose" and isinstance(action_steps, list) and action_steps:
+            return all(bool(step.get("success")) for step in action_steps if isinstance(step, dict))
+        return bool(agent_result.get("success"))
+
     def _finalize_success(self, task, selected_action: str, result_data: dict[str, Any]) -> dict[str, Any]:
         result_payload = dict(result_data)
         if isinstance(task.payload, dict):
@@ -42,16 +51,18 @@ class AlertTaskRunnerService:
             "error": None,
         }
 
-    def _finalize_failure(self, task, selected_action: str, error: str) -> dict[str, Any]:
+    def _finalize_failure(self, task, selected_action: str, error: str, result_data: dict[str, Any] | None = None) -> dict[str, Any]:
         workflow_selection = {}
         alert_data = {}
         if isinstance(task.payload, dict):
             workflow_selection = task.payload.get("workflow_selection", {}) if isinstance(task.payload.get("workflow_selection"), dict) else {}
             alert_data = task.payload.get("alert_data", {}) if isinstance(task.payload.get("alert_data"), dict) else {}
-        result_data = {
-            "success": False,
-            "workflow_selection": workflow_selection,
-            "execution_trace": [
+        failure_payload = dict(result_data or {})
+        if "workflow_selection" not in failure_payload:
+            failure_payload["workflow_selection"] = workflow_selection
+        existing_trace = failure_payload.get("execution_trace", [])
+        if not isinstance(existing_trace, list) or not existing_trace:
+            existing_trace = [
                 {
                     "phase": "alert_received",
                     "title": "接收告警",
@@ -77,27 +88,33 @@ class AlertTaskRunnerService:
                     "success": True,
                     "data": workflow_selection,
                 } if workflow_selection else None,
-                {
-                    "phase": "final_status",
-                    "title": "最终执行状态",
-                    "summary": error,
+            ]
+        failure_payload["execution_trace"] = [
+            item
+            for item in existing_trace
+            if item is not None and not (isinstance(item, dict) and str(item.get("phase", "")).strip() == "final_status")
+        ]
+        failure_payload["execution_trace"].append(
+            {
+                "phase": "final_status",
+                "title": "最终执行状态",
+                "summary": error,
+                "success": False,
+                "data": {
                     "success": False,
-                    "data": {
-                        "success": False,
-                        "error": error,
-                        "action": selected_action,
-                    },
+                    "error": error,
+                    "action": selected_action,
                 },
-            ],
-        }
-        result_data["execution_trace"] = [item for item in result_data["execution_trace"] if item is not None]
-        task = self.dispatch_service.finalize_task(task.task_id, selected_action, False, result_data, error)
+            }
+        )
+        failure_payload["success"] = False
+        task = self.dispatch_service.finalize_task(task.task_id, selected_action, False, failure_payload, error)
         return {
             "action": selected_action,
             "success": False,
             "task_id": task.task_id if task else "",
             "event_ids": str((task.event_ids if task else "")),
-            "data": result_data,
+            "data": failure_payload,
             "task": task,
             "error": error,
         }
@@ -109,9 +126,9 @@ class AlertTaskRunnerService:
             self.audit_service.record("agent_react_task_failed", "Agent ReAct runtime failed.", {"error": str(exc)})
             return self._finalize_failure(task, selected_action, f"主 Agent 执行失败：{exc}")
 
-        if bool(agent_result.get("success")):
+        if self._agent_result_is_success(agent_result, selected_action):
             return self._finalize_success(task, selected_action, agent_result)
-        return self._finalize_failure(task, selected_action, "主 Agent 未返回成功结果。")
+        return self._finalize_failure(task, selected_action, "主 Agent 未返回成功结果。", agent_result)
 
     async def _run_workflow_or_fallback(self, task, alert: dict[str, Any], selected_action: str) -> dict[str, Any]:
         if selected_action not in {"triage_close", "triage_dispose"}:
@@ -127,9 +144,9 @@ class AlertTaskRunnerService:
             except Exception as exc:
                 self.audit_service.record("agent_task_failed", f"Agent runtime failed during {selected_action}.", {"error": str(exc)})
                 return self._finalize_failure(task, selected_action, f"主 Agent 执行失败：{exc}")
-            if bool(agent_result.get("success")):
+            if self._agent_result_is_success(agent_result, selected_action):
                 return self._finalize_success(task, selected_action, agent_result)
-            return self._finalize_failure(task, selected_action, "主 Agent 未返回成功结果。")
+            return self._finalize_failure(task, selected_action, "主 Agent 未返回成功结果。", agent_result)
         except Exception as exc:
             self.audit_service.record("agent_workflow_task_failed", f"Workflow failed during {selected_action}.", {"error": str(exc)})
             return self._finalize_failure(task, selected_action, f"Workflow 加载失败：{exc}")
@@ -140,9 +157,9 @@ class AlertTaskRunnerService:
             self.audit_service.record("agent_workflow_task_failed", f"Workflow failed during {selected_action}.", {"error": str(exc)})
             return self._finalize_failure(task, selected_action, f"Workflow 执行失败：{exc}")
 
-        if bool(agent_result.get("success")):
+        if self._agent_result_is_success(agent_result, selected_action):
             return self._finalize_success(task, selected_action, agent_result)
-        return self._finalize_failure(task, selected_action, "Workflow 未返回成功结果。")
+        return self._finalize_failure(task, selected_action, "Workflow 未返回成功结果。", agent_result)
 
     async def run_task(self, task, action: str | None = None) -> dict[str, Any]:
         alert = {}

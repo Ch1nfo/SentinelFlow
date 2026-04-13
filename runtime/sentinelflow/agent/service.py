@@ -809,22 +809,32 @@ class SentinelFlowAgentService:
         if not summary or summary in {"--", "-", "—"}:
             summary = reason or fallback_judgment.summary
         evidence = self._infer_evidence(final_text, alert, fallback_judgment)
+        analysis_step = self._build_analysis_step(graph_result, disposition, summary, reason, evidence)
         enrichment = self._first_enrichment_payload(skill_runs)
         closure_result = self._first_closure_payload(skill_runs)
         actions = self._build_actions(skill_runs)
-        closure_success = any(self._is_successful_closure_run(run) for run in skill_runs)
-        disposal_success = any(not bool(payload.get("error")) for payload in actions.values() if isinstance(payload, dict))
-        success = closure_success or (action_hint == "triage_dispose" and disposal_success)
+        action_steps = self._build_action_steps(skill_runs)
+        closure_step = self._build_closure_step(skill_runs)
+        success = self._compute_alert_task_success(
+            action_hint=action_hint,
+            closure_step=closure_step,
+            action_steps=action_steps,
+            skill_runs=skill_runs,
+            actions=actions,
+        )
         workflow_selection = self._extract_workflow_selection(alert, graph_result)
         execution_trace = self._build_execution_trace(
             alert=alert,
             graph_result=graph_result,
             workflow_selection=workflow_selection,
+            analysis_step=analysis_step,
             disposition=disposition,
             summary=summary,
             reason=reason,
             evidence=evidence,
             enrichment=enrichment,
+            action_steps=action_steps,
+            closure_step=closure_step,
             closure_result=closure_result,
             actions=actions,
             skill_runs=skill_runs,
@@ -838,11 +848,14 @@ class SentinelFlowAgentService:
             "summary": summary,
             "reason": reason,
             "evidence": evidence,
+            "analysis_step": analysis_step,
             "memo": self._infer_closure_field(skill_runs, "memo", self.triage_service.build_memo(summary)),
             "detail_msg": self._infer_closure_field(skill_runs, "detailMsg", self._default_detail_msg(disposition)),
             "closure_status": self._infer_closure_field(skill_runs, "status", self._default_closure_status(disposition)),
             "enrichment": enrichment,
             "workflow_selection": workflow_selection,
+            "action_steps": action_steps,
+            "closure_step": closure_step,
             "closure_result": closure_result,
             "actions": actions,
             "success": success,
@@ -882,11 +895,14 @@ class SentinelFlowAgentService:
         alert: dict[str, Any],
         graph_result: dict[str, Any],
         workflow_selection: dict[str, Any],
+        analysis_step: dict[str, Any],
         disposition: str,
         summary: str,
         reason: str,
         evidence: list[str],
         enrichment: dict[str, Any],
+        action_steps: list[dict[str, Any]],
+        closure_step: dict[str, Any],
         closure_result: dict[str, Any],
         actions: dict[str, Any],
         skill_runs: list[dict[str, Any]],
@@ -931,17 +947,8 @@ class SentinelFlowAgentService:
                 "phase": "agent_analysis",
                 "title": "主 Agent 研判",
                 "summary": summary or reason or "主 Agent 已输出研判结论。",
-                "success": True,
-                "data": {
-                    "agent_name": graph_result.get("agent_name", ""),
-                    "used_agent": True,
-                    "execution_mode": "agent",
-                    "disposition": disposition,
-                    "summary": summary,
-                    "reason": reason,
-                    "evidence": evidence,
-                    "final_response": graph_result.get("final_response", ""),
-                },
+                "success": bool(analysis_step.get("success", True)),
+                "data": analysis_step,
             }
         )
         if enrichment:
@@ -972,20 +979,30 @@ class SentinelFlowAgentService:
                     "phase": "actions",
                     "title": "处置动作",
                     "summary": f"共执行 {len(actions)} 类处置动作。",
-                    "success": all(not bool(payload.get("error")) for payload in actions.values() if isinstance(payload, dict)),
+                    "success": all(bool(step.get("success")) for step in action_steps) if action_steps else all(not bool(payload.get("error")) for payload in actions.values() if isinstance(payload, dict)),
                     "data": {
+                        "steps": action_steps,
                         "actions": actions,
                     },
                 }
             )
-        if closure_result:
+        if closure_step.get("attempted") or closure_result:
             trace.append(
                 {
                     "phase": "closure",
                     "title": "结单结果",
-                    "summary": str(closure_result.get("detailMsg") or closure_result.get("detail_msg") or closure_result.get("result") or "已执行结单。").strip(),
-                    "success": not bool(closure_result.get("error")),
-                    "data": closure_result,
+                    "summary": str(
+                        closure_step.get("summary")
+                        or closure_result.get("detailMsg")
+                        or closure_result.get("detail_msg")
+                        or closure_result.get("result")
+                        or "已执行结单。"
+                    ).strip(),
+                    "success": bool(closure_step.get("success")),
+                    "data": {
+                        **closure_step,
+                        "closure_result": closure_result,
+                    },
                 }
             )
         trace.append(
@@ -996,14 +1013,113 @@ class SentinelFlowAgentService:
                 "success": success,
                 "data": {
                     "success": success,
-                    "has_close_action": any(self._is_closure_run(run) for run in skill_runs),
-                    "has_disposal_action": bool(actions),
+                    "has_close_action": bool(closure_step.get("attempted")) or any(self._is_closure_run(run) for run in skill_runs),
+                    "has_disposal_action": bool(action_steps) or bool(actions),
                     "tool_calls": graph_result.get("tool_calls", []),
                     "messages": graph_result.get("messages", []),
                 },
             }
         )
         return trace
+
+    def _build_analysis_step(
+        self,
+        graph_result: dict[str, Any],
+        disposition: str,
+        summary: str,
+        reason: str,
+        evidence: list[str],
+    ) -> dict[str, Any]:
+        return {
+            "attempted": True,
+            "success": True,
+            "agent_name": graph_result.get("agent_name", ""),
+            "used_agent": True,
+            "execution_mode": "agent",
+            "disposition": disposition,
+            "summary": summary,
+            "reason": reason,
+            "evidence": evidence,
+            "final_response": graph_result.get("final_response", ""),
+        }
+
+    def _build_action_steps(self, skill_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        steps: list[dict[str, Any]] = []
+        for run in skill_runs:
+            skill_name = str(run.get("skill_name", "")).strip()
+            if not skill_name or self._is_closure_run(run) or self._is_enrichment_run(run):
+                continue
+            payload = run.get("payload", {})
+            steps.append(
+                {
+                    "attempted": True,
+                    "success": bool(run.get("success")),
+                    "skill_name": skill_name,
+                    "tool_name": run.get("tool_name", ""),
+                    "tool_call_id": run.get("tool_call_id", ""),
+                    "arguments": run.get("arguments", {}) if isinstance(run.get("arguments"), dict) else {},
+                    "result": payload if isinstance(payload, dict) else {},
+                    "error": payload.get("error") if isinstance(payload, dict) else None,
+                }
+            )
+        return steps
+
+    def _build_closure_step(self, skill_runs: list[dict[str, Any]]) -> dict[str, Any]:
+        for run in skill_runs:
+            skill_name = str(run.get("skill_name", "")).strip()
+            if not skill_name or not self._is_closure_run(run):
+                continue
+            payload = run.get("payload", {})
+            arguments = run.get("arguments", {})
+            payload = payload if isinstance(payload, dict) else {}
+            arguments = arguments if isinstance(arguments, dict) else {}
+            success = self._is_successful_closure_run(run)
+            summary = str(
+                payload.get("detailMsg")
+                or payload.get("detail_msg")
+                or payload.get("result")
+                or payload.get("message")
+                or ("结单执行成功。" if success else "结单执行失败。")
+            ).strip()
+            return {
+                "attempted": True,
+                "success": success,
+                "skill_name": skill_name,
+                "tool_name": run.get("tool_name", ""),
+                "tool_call_id": run.get("tool_call_id", ""),
+                "arguments": arguments,
+                "result": payload,
+                "error": payload.get("error"),
+                "summary": summary,
+            }
+        return {
+            "attempted": False,
+            "success": False,
+            "skill_name": "",
+            "tool_name": "",
+            "tool_call_id": "",
+            "arguments": {},
+            "result": {},
+            "error": None,
+            "summary": "",
+        }
+
+    def _compute_alert_task_success(
+        self,
+        *,
+        action_hint: str | None,
+        closure_step: dict[str, Any],
+        action_steps: list[dict[str, Any]],
+        skill_runs: list[dict[str, Any]],
+        actions: dict[str, Any],
+    ) -> bool:
+        if bool(closure_step.get("attempted")) and bool(closure_step.get("success")):
+            return True
+        if action_hint == "triage_dispose" and action_steps and all(bool(step.get("success")) for step in action_steps):
+            return True
+        closure_success = any(self._is_successful_closure_run(run) for run in skill_runs)
+        disposal_success = any(not bool(payload.get("error")) for payload in actions.values() if isinstance(payload, dict))
+        return closure_success or (action_hint == "triage_dispose" and disposal_success)
 
     def _extract_skill_runs(self, graph_result: dict[str, Any]) -> list[dict[str, Any]]:
         tool_calls = [item for item in graph_result.get("tool_calls", []) if isinstance(item, dict)]
@@ -1075,6 +1191,7 @@ class SentinelFlowAgentService:
                 {
                     "skill_name": skill_name,
                     "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
                     "arguments": arguments,
                     "payload": merged_payload,
                     "success": not bool(merged_payload.get("error")),
@@ -1108,6 +1225,9 @@ class SentinelFlowAgentService:
         return {}
 
     def _is_closure_run(self, run: dict[str, Any]) -> bool:
+        skill_name = str(run.get("skill_name", "")).strip().lower()
+        if self._is_closure_skill_name(skill_name):
+            return True
         payload = run.get("payload", {})
         arguments = run.get("arguments", {})
         payload = payload if isinstance(payload, dict) else {}
@@ -1119,6 +1239,10 @@ class SentinelFlowAgentService:
         return bool(combined_keys & closure_markers) and (
             "memo" in combined_keys or "detailMsg" in combined_keys or "detail_msg" in combined_keys or "status" in combined_keys
         )
+
+    def _is_closure_skill_name(self, skill_name: str) -> bool:
+        normalized = skill_name.strip().lower()
+        return normalized in {"exec", "close", "soc_close", "alert_close"}
 
     def _is_successful_closure_run(self, run: dict[str, Any]) -> bool:
         if not self._is_closure_run(run):

@@ -14,6 +14,9 @@ export type AlertTaskResultData = Record<string, unknown> & {
   reason?: string
   evidence?: string[]
   workflow_selection?: Record<string, unknown>
+  analysis_step?: Record<string, unknown>
+  action_steps?: Array<Record<string, unknown>>
+  closure_step?: Record<string, unknown>
   execution_trace?: ExecutionTraceItem[]
 }
 
