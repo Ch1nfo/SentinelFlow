@@ -16,6 +16,12 @@ export type AlertTaskResultData = Record<string, unknown> & {
   workflow_selection?: Record<string, unknown>
   workflow_runs?: Array<Record<string, unknown>>
   analysis_step?: Record<string, unknown>
+  primary_action_steps?: Array<Record<string, unknown>>
+  primary_closure_step?: Record<string, unknown>
+  aggregated_action_steps?: Array<Record<string, unknown>>
+  aggregated_actions?: Record<string, unknown>
+  aggregated_closure_steps?: Array<Record<string, unknown>>
+  effective_closure_step?: Record<string, unknown>
   action_steps?: Array<Record<string, unknown>>
   closure_step?: Record<string, unknown>
   execution_trace?: ExecutionTraceItem[]

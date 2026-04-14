@@ -750,9 +750,38 @@ class SentinelFlowAgentService:
         actions = self._build_actions(skill_runs, closure_run)
         action_steps = self._build_action_steps(skill_runs, closure_run)
         closure_step = self._build_closure_step(skill_runs, closure_run)
+        primary_actions = dict(actions)
+        primary_action_steps = list(action_steps)
+        primary_closure_step = dict(closure_step)
         workflow_runs = graph_result.get("workflow_runs", [])
         if not isinstance(workflow_runs, list):
             workflow_runs = []
+        worker_results = graph_result.get("worker_results", [])
+        if not isinstance(worker_results, list):
+            worker_results = []
+        aggregated_action_steps, aggregated_actions = self._aggregate_action_side_effects(
+            primary_action_steps=action_steps,
+            primary_actions=actions,
+            worker_results=worker_results,
+            workflow_runs=workflow_runs,
+        )
+        aggregated_closure_steps = self._aggregate_closure_steps(
+            primary_closure_step=closure_step,
+            worker_results=worker_results,
+            workflow_runs=workflow_runs,
+        )
+        effective_closure_step = self._resolve_effective_closure_step(
+            primary_closure_step=closure_step,
+            aggregated_closure_steps=aggregated_closure_steps,
+        )
+        effective_closure_result = effective_closure_step.get("result", {})
+        if not isinstance(effective_closure_result, dict):
+            effective_closure_result = {}
+        if effective_closure_result:
+            closure_result = effective_closure_result
+        actions = aggregated_actions
+        action_steps = aggregated_action_steps
+        closure_step = effective_closure_step
         success = self._compute_alert_task_success(
             action_hint=action_hint,
             closure_step=closure_step,
@@ -788,12 +817,28 @@ class SentinelFlowAgentService:
             "reason": reason,
             "evidence": evidence,
             "analysis_step": analysis_step,
-            "memo": self._infer_closure_field(skill_runs, "memo", self.triage_service.build_memo(summary)),
-            "detail_msg": self._infer_closure_field(skill_runs, "detailMsg", self._default_detail_msg(disposition)),
-            "closure_status": self._infer_closure_field(skill_runs, "status", self._default_closure_status(disposition)),
+            "memo": str(
+                closure_result.get("memo")
+                or self._infer_closure_field(skill_runs, "memo", self.triage_service.build_memo(summary))
+            ).strip(),
+            "detail_msg": str(
+                closure_result.get("detailMsg")
+                or closure_result.get("detail_msg")
+                or self._infer_closure_field(skill_runs, "detailMsg", self._default_detail_msg(disposition))
+            ).strip(),
+            "closure_status": str(
+                closure_result.get("status")
+                or self._infer_closure_field(skill_runs, "status", self._default_closure_status(disposition))
+            ).strip(),
             "enrichment": enrichment,
             "workflow_selection": workflow_selection,
             "workflow_runs": workflow_runs,
+            "primary_action_steps": primary_action_steps,
+            "primary_closure_step": primary_closure_step,
+            "aggregated_action_steps": aggregated_action_steps,
+            "aggregated_actions": aggregated_actions,
+            "aggregated_closure_steps": aggregated_closure_steps,
+            "effective_closure_step": effective_closure_step,
             "action_steps": action_steps,
             "closure_step": closure_step,
             "closure_result": closure_result,
@@ -802,7 +847,7 @@ class SentinelFlowAgentService:
             "execution_mode": "agent",
             "execution_trace": execution_trace,
             "used_agent": True,
-            "has_close_action": closure_run is not None,
+            "has_close_action": bool(closure_step.get("attempted")),
             "has_disposal_action": bool(actions),
         }
 
@@ -1081,6 +1126,178 @@ class SentinelFlowAgentService:
             "result": {},
             "error": None,
             "summary": "",
+        }
+
+    def _extract_nested_side_effects(
+        self,
+        nested_result: dict[str, Any],
+        *,
+        action_hint: str | None,
+        source_type: str,
+        source_name: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any] | None]:
+        skill_runs = self._extract_skill_runs(nested_result)
+        closure_run = self._select_closure_run(skill_runs, action_hint)
+        actions = self._build_actions(skill_runs, closure_run)
+        action_steps = self._build_action_steps(skill_runs, closure_run)
+        closure_step = self._build_closure_step(skill_runs, closure_run)
+        if action_steps:
+            for step in action_steps:
+                if not isinstance(step, dict):
+                    continue
+                step["source_type"] = source_type
+                step["source_name"] = source_name
+        if bool(closure_step.get("attempted")):
+            closure_step = {
+                **closure_step,
+                "source_type": source_type,
+                "source_name": source_name,
+            }
+        return action_steps, actions, closure_step if bool(closure_step.get("attempted")) else None
+
+    def _aggregate_action_side_effects(
+        self,
+        *,
+        primary_action_steps: list[dict[str, Any]],
+        primary_actions: dict[str, Any],
+        worker_results: list[dict[str, Any]],
+        workflow_runs: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        aggregated_steps: list[dict[str, Any]] = []
+        aggregated_actions: dict[str, Any] = {}
+
+        for step in primary_action_steps:
+            if not isinstance(step, dict):
+                continue
+            aggregated_steps.append({**step, "source_type": "primary", "source_name": "primary"})
+        for action_name, payload in primary_actions.items():
+            aggregated_actions[action_name] = payload
+
+        for worker_result in worker_results:
+            if not isinstance(worker_result, dict):
+                continue
+            worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
+            nested_steps, nested_actions, _ = self._extract_nested_side_effects(
+                worker_result,
+                action_hint=None,
+                source_type="worker",
+                source_name=worker_name,
+            )
+            aggregated_steps.extend(nested_steps)
+            for action_name, payload in nested_actions.items():
+                aggregated_actions[f"{worker_name}:{action_name}"] = payload
+
+        for workflow_run in workflow_runs:
+            if not isinstance(workflow_run, dict):
+                continue
+            workflow_name = str(workflow_run.get("workflow_name", workflow_run.get("workflow_id", ""))).strip() or "workflow"
+            workflow_action_steps = workflow_run.get("action_steps", [])
+            if isinstance(workflow_action_steps, list):
+                for step in workflow_action_steps:
+                    if not isinstance(step, dict):
+                        continue
+                    aggregated_steps.append({**step, "source_type": "workflow", "source_name": workflow_name})
+            workflow_actions = workflow_run.get("actions", {})
+            if isinstance(workflow_actions, dict):
+                for action_name, payload in workflow_actions.items():
+                    if action_name == "tool_runs":
+                        continue
+                    aggregated_actions[f"{workflow_name}:{action_name}"] = payload
+            nested_worker_results = workflow_run.get("worker_results", [])
+            if isinstance(nested_worker_results, list):
+                for worker_result in nested_worker_results:
+                    if not isinstance(worker_result, dict):
+                        continue
+                    worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
+                    nested_steps, nested_actions, _ = self._extract_nested_side_effects(
+                        worker_result,
+                        action_hint=None,
+                        source_type="workflow_worker",
+                        source_name=f"{workflow_name}/{worker_name}",
+                    )
+                    aggregated_steps.extend(nested_steps)
+                    for action_name, payload in nested_actions.items():
+                        aggregated_actions[f"{workflow_name}/{worker_name}:{action_name}"] = payload
+
+        return aggregated_steps, aggregated_actions
+
+    def _aggregate_closure_steps(
+        self,
+        *,
+        primary_closure_step: dict[str, Any],
+        worker_results: list[dict[str, Any]],
+        workflow_runs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        aggregated: list[dict[str, Any]] = []
+        if bool(primary_closure_step.get("attempted")):
+            aggregated.append({**primary_closure_step, "source_type": "primary", "source_name": "primary"})
+
+        for worker_result in worker_results:
+            if not isinstance(worker_result, dict):
+                continue
+            worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
+            _, _, nested_closure = self._extract_nested_side_effects(
+                worker_result,
+                action_hint=None,
+                source_type="worker",
+                source_name=worker_name,
+            )
+            if nested_closure:
+                aggregated.append(nested_closure)
+
+        for workflow_run in workflow_runs:
+            if not isinstance(workflow_run, dict):
+                continue
+            workflow_name = str(workflow_run.get("workflow_name", workflow_run.get("workflow_id", ""))).strip() or "workflow"
+            workflow_closure = workflow_run.get("closure_step", {})
+            if isinstance(workflow_closure, dict) and bool(workflow_closure.get("attempted")):
+                aggregated.append({**workflow_closure, "source_type": "workflow", "source_name": workflow_name})
+            nested_worker_results = workflow_run.get("worker_results", [])
+            if isinstance(nested_worker_results, list):
+                for worker_result in nested_worker_results:
+                    if not isinstance(worker_result, dict):
+                        continue
+                    worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
+                    _, _, nested_closure = self._extract_nested_side_effects(
+                        worker_result,
+                        action_hint=None,
+                        source_type="workflow_worker",
+                        source_name=f"{workflow_name}/{worker_name}",
+                    )
+                    if nested_closure:
+                        aggregated.append(nested_closure)
+        return aggregated
+
+    def _resolve_effective_closure_step(
+        self,
+        *,
+        primary_closure_step: dict[str, Any],
+        aggregated_closure_steps: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if bool(primary_closure_step.get("attempted")) and bool(primary_closure_step.get("success")):
+            return {**primary_closure_step, "source_type": "primary", "source_name": "primary"}
+        for closure_step in aggregated_closure_steps:
+            if isinstance(closure_step, dict) and bool(closure_step.get("attempted")) and bool(closure_step.get("success")):
+                return closure_step
+        if bool(primary_closure_step.get("attempted")):
+            return {**primary_closure_step, "source_type": "primary", "source_name": "primary"}
+        for closure_step in aggregated_closure_steps:
+            if isinstance(closure_step, dict) and bool(closure_step.get("attempted")):
+                return closure_step
+        return {
+            "attempted": False,
+            "success": False,
+            "skill_name": "",
+            "tool_name": "",
+            "tool_call_id": "",
+            "tool_success": False,
+            "tool_error": None,
+            "arguments": {},
+            "result": {},
+            "error": None,
+            "summary": "",
+            "source_type": "",
+            "source_name": "",
         }
 
     def _compute_alert_task_success(

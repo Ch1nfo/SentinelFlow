@@ -26,10 +26,10 @@ class AlertTaskRunnerService:
         self.workflow_root = workflow_root
 
     def _agent_result_is_success(self, agent_result: dict[str, Any], selected_action: str) -> bool:
-        closure_step = agent_result.get("closure_step", {})
+        closure_step = agent_result.get("effective_closure_step", agent_result.get("closure_step", {}))
         if isinstance(closure_step, dict) and bool(closure_step.get("attempted")) and bool(closure_step.get("success")):
             return True
-        action_steps = agent_result.get("action_steps", [])
+        action_steps = agent_result.get("aggregated_action_steps", agent_result.get("action_steps", []))
         if selected_action == "triage_dispose" and isinstance(action_steps, list) and action_steps:
             return all(bool(step.get("success")) for step in action_steps if isinstance(step, dict))
         return bool(agent_result.get("success"))

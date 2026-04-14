@@ -221,7 +221,10 @@ export default function SentinelFlowAlertsPage() {
   const selectedResult = (selectedTask?.last_result_data ?? {}) as Record<string, unknown>
   const selectedWorkflowRuns = normalizeWorkflowRuns(selectedResult.workflow_runs)
   const selectedWorkflowRun = selectedWorkflowRuns[0] ?? null
-  const selectedClosureStep = (selectedResult.closure_step as Record<string, unknown> | undefined) ?? {}
+  const selectedClosureStep = (
+    (selectedResult.effective_closure_step as Record<string, unknown> | undefined)
+    ?? (selectedResult.closure_step as Record<string, unknown> | undefined)
+  ) ?? {}
   const selectedReason = String(selectedResult.reason ?? '').trim()
   const selectedDisposition = String(selectedResult.disposition ?? '').trim()
   const selectedSummary = String(selectedResult.summary ?? '').trim()

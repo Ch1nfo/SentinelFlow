@@ -7,8 +7,9 @@ from typing import Any
 from uuid import uuid4
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from sentinelflow.agent.registry import list_agent_definitions
 from sentinelflow.api.schemas import CommandDispatchRequest, AlertActionRequest
-from sentinelflow.api.deps import agent_service, dispatch_service, audit_service, polling_service, skill_runtime, _serialize, auto_execution_service, task_runner_service, WORKFLOW_ROOT
+from sentinelflow.api.deps import agent_service, dispatch_service, audit_service, polling_service, skill_runtime, _serialize, auto_execution_service, task_runner_service, WORKFLOW_ROOT, AGENT_ROOT
 from sentinelflow.api.utils import _extract_alert_payload, _resolve_task
 from sentinelflow.config.runtime import load_runtime_config, save_runtime_config
 
@@ -41,8 +42,44 @@ def _extract_ban_ip(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _collect_banned_ips_from_result(result: dict[str, Any]) -> set[str]:
+    banned_ips: set[str] = set()
+    aggregated_action_steps = result.get("aggregated_action_steps")
+    if isinstance(aggregated_action_steps, list):
+        for step in aggregated_action_steps:
+            if not isinstance(step, dict):
+                continue
+            skill_name = str(step.get("skill_name", "")).strip()
+            payload = step.get("result", {})
+            if not isinstance(payload, dict):
+                continue
+            if not _is_successful_ban_action(skill_name, payload):
+                continue
+            banned_ip = _extract_ban_ip(payload)
+            if banned_ip:
+                banned_ips.add(banned_ip)
+        if banned_ips:
+            return banned_ips
+    actions = result.get("actions")
+    if isinstance(actions, dict):
+        for action_name, item in actions.items():
+            if not isinstance(item, dict):
+                continue
+            if not _is_successful_ban_action(str(action_name), item):
+                continue
+            banned_ip = _extract_ban_ip(item)
+            if banned_ip:
+                banned_ips.add(banned_ip)
+    return banned_ips
+
+
 def _dashboard_summary() -> dict[str, Any]:
     tasks = dispatch_service.list_tasks()
+    agents = [
+        agent
+        for agent in list_agent_definitions(AGENT_ROOT, include_system_primary=True)
+        if agent.enabled and agent.role == "worker"
+    ]
     dispositions = {
         "business_trigger": 0,
         "false_positive": 0,
@@ -69,16 +106,7 @@ def _dashboard_summary() -> dict[str, Any]:
         if task.status == "completed":
             manual_completed += 1
 
-        actions = result.get("actions")
-        if isinstance(actions, dict):
-            for action_name, item in actions.items():
-                if not isinstance(item, dict):
-                    continue
-                if not _is_successful_ban_action(str(action_name), item):
-                    continue
-                banned_ip = _extract_ban_ip(item)
-                if banned_ip:
-                    banned_ips.add(banned_ip)
+        banned_ips.update(_collect_banned_ips_from_result(result))
 
         if len(recent_results) < 8 and result:
             recent_results.append(
@@ -102,6 +130,7 @@ def _dashboard_summary() -> dict[str, Any]:
             "audit_events": len(audit_service.list_events()),
             "skills": len(skill_runtime.list_skills()),
             "workflows": len(list(WORKFLOW_ROOT.glob("*/workflow.json"))) if WORKFLOW_ROOT.is_dir() else 0,
+            "agents": len(agents),
         },
         "judgment": dispositions,
         "operations": {

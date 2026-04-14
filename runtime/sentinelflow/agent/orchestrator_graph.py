@@ -119,10 +119,24 @@ def _build_worker_subgraph_tool(
 
         final_text = ""
         skills_used: list[str] = []
+        serialized_messages: list[dict[str, Any]] = []
+        tool_calls: list[dict[str, Any]] = []
         for msg in worker_state.get("messages", []):
             msg_type = getattr(msg, "type", "")
             if msg_type == "ai" and getattr(msg, "content", ""):
                 final_text = msg.content
+            item: dict[str, Any] = {
+                "type": msg_type or getattr(msg, "__class__", type(msg)).__name__.lower(),
+                "content": getattr(msg, "content", ""),
+            }
+            if getattr(msg, "tool_calls", None):
+                item["tool_calls"] = msg.tool_calls
+                tool_calls.extend(msg.tool_calls)
+            if getattr(msg, "name", None):
+                item["name"] = msg.name
+            if getattr(msg, "tool_call_id", None):
+                item["tool_call_id"] = msg.tool_call_id
+            serialized_messages.append(item)
             for tc in (getattr(msg, "tool_calls", None) or []):
                 if isinstance(tc, dict) and tc.get("name"):
                     skills_used.append(tc["name"])
@@ -133,6 +147,8 @@ def _build_worker_subgraph_tool(
             "task_prompt": task_prompt,
             "final_response": final_text[:3000],
             "skills_used": skills_used,
+            "messages": serialized_messages,
+            "tool_calls": tool_calls,
             "success": bool(final_text),
             "error": None if final_text else "子 Agent 未返回有效结果。",
         }
