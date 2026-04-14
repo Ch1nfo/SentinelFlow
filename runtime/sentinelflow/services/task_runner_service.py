@@ -79,11 +79,11 @@ class AlertTaskRunnerService:
                 },
                 {
                     "phase": "workflow_selection",
-                    "title": "Workflow 决策",
+                    "title": "Workflow 记录",
                     "summary": (
-                        f"命中流程：{workflow_selection.get('workflow_id')}"
+                        f"历史流程记录：{workflow_selection.get('workflow_id')}"
                         if workflow_selection.get("workflow_id")
-                        else str(workflow_selection.get("reason", "")).strip() or "未命中固定流程。"
+                        else str(workflow_selection.get("reason", "")).strip() or "存在历史 Workflow 记录。"
                     ),
                     "success": True,
                     "data": workflow_selection,

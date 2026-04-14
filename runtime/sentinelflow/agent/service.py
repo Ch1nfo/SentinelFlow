@@ -13,7 +13,6 @@ from sentinelflow.agent.policy import can_agent_delegate_to_worker, can_agent_ex
 from sentinelflow.agent.prompt_builder import PromptBuildContext, build_prompt
 from sentinelflow.agent.prompts import (
     PRIMARY_ALERT_ORCHESTRATION_APPENDIX,
-    PRIMARY_ALERT_WORKFLOW_SELECTION_APPENDIX,
     PRIMARY_ALERT_SYNTHESIS_APPENDIX,
     PRIMARY_COMMAND_ORCHESTRATION_APPENDIX,
     PRIMARY_COMMAND_SYNTHESIS_APPENDIX,
@@ -72,6 +71,11 @@ class SentinelFlowAgentService:
         self.skill_runtime = skill_runtime
         self.triage_service = TriageService()
         self.agent_root = project_root / ".sentinelflow" / "plugins" / "agents"
+        self.workflow_root = project_root / ".sentinelflow" / "plugins" / "workflows"
+        self.workflow_runner = None
+
+    def attach_workflow_runner(self, workflow_runner) -> None:
+        self.workflow_runner = workflow_runner
 
     def is_configured(self, agent_name: str | None = None) -> bool:
         config = load_runtime_config()
@@ -233,12 +237,14 @@ class SentinelFlowAgentService:
         }
         readable_skills, _ = self._resolve_skill_permissions(primary_agent)
         skill_catalog = load_skill_catalog(self.project_root / ".sentinelflow" / "plugins" / "skills", readable_skills)
+        workflows = [workflow for workflow in list_agent_workflows(self.workflow_root) if workflow.enabled]
         return build_prompt(
             PromptBuildContext(
                 base_prompt=primary_agent.prompt_for_mode(mode_map.get(appendix_template, "primary_orchestrate_alert")).strip() if primary_agent else "",
                 mode=mode_map.get(appendix_template, "primary_orchestrate_alert"),
                 skill_catalog=skill_catalog,
                 worker_catalog=self._build_worker_catalog(workers),
+                workflow_catalog=self._build_workflow_catalog(workflows),
             )
         )
 
@@ -261,15 +267,6 @@ class SentinelFlowAgentService:
                 )
             )
         return "\n".join(items)
-
-    def _build_primary_workflow_prompt(self, primary_agent, workflows: list) -> str:
-        return build_prompt(
-            PromptBuildContext(
-                base_prompt=primary_agent.prompt_for_mode("primary_workflow_select").strip() if primary_agent else "",
-                mode="primary_workflow_select",
-                workflow_catalog=self._build_workflow_catalog(workflows),
-            )
-        )
 
     def _build_primary_synthesis_prompt(self, primary_agent, appendix_template: str) -> str:
         mode_map = {
@@ -410,30 +407,6 @@ class SentinelFlowAgentService:
         )
         return delegated_alert
 
-    def _build_workflow_selection_payload(self, alert: dict[str, Any], workflows: list) -> dict[str, Any]:
-        return {
-            **dict(alert),
-            "payload": json.dumps(
-                {
-                    "original_alert": alert,
-                    "workflow_candidates": [
-                        {
-                            "id": workflow.id,
-                            "name": workflow.name,
-                            "description": workflow.description,
-                            "scenarios": workflow.scenarios,
-                            "selection_keywords": workflow.selection_keywords,
-                            "recommended_action": workflow.recommended_action,
-                        }
-                        for workflow in workflows
-                    ],
-                    "instruction": "请在这些固定 Agent Workflow 中选出最适合当前任务/告警场景的一条。",
-                },
-                ensure_ascii=False,
-            ),
-            "alert_source": "workflow_selection",
-        }
-
     def _compact_worker_result(
         self,
         worker_name: str,
@@ -461,9 +434,11 @@ class SentinelFlowAgentService:
     def _should_use_orchestrator(self, primary_agent, workers: list) -> bool:
         if primary_agent is None or primary_agent.role != "primary":
             return False
-        if not workers:
+        if workers:
+            return True
+        if self.workflow_runner is None:
             return False
-        return True
+        return any(workflow.enabled for workflow in list_agent_workflows(self.workflow_root))
 
     def _resolve_worker_max_steps(self, primary_agent) -> int:
         raw_value = getattr(primary_agent, "worker_max_steps", 3)
@@ -498,6 +473,7 @@ class SentinelFlowAgentService:
 
         # Worker results surfaced from ToolMessages
         worker_results: list[dict[str, Any]] = []
+        workflow_runs: list[dict[str, Any]] = []
         for msg in messages:
             try:
                 from langchain_core.messages import ToolMessage
@@ -512,6 +488,8 @@ class SentinelFlowAgentService:
                 result = json.loads(content)
                 if isinstance(result, dict) and "worker" in result:
                     worker_results.append(result)
+                elif isinstance(result, dict) and result.get("workflow_id"):
+                    workflow_runs.append(result)
                 elif isinstance(result, dict) and result.get("mode") == "parallel" and isinstance(result.get("results"), list):
                     for item in result["results"]:
                         if isinstance(item, dict) and "worker" in item:
@@ -551,6 +529,7 @@ class SentinelFlowAgentService:
             "orchestration_strategy": "subgraph_supervisor",
             "primary_agent": primary_agent.name if primary_agent else "",
             "worker_results": worker_results,
+            "workflow_runs": workflow_runs,
             "worker_agent": worker_results[-1]["worker"] if worker_results else "",
             "success": bool(final_text),
         }
@@ -594,6 +573,8 @@ class SentinelFlowAgentService:
             effective_config,
             alert_data=alert_data,
             cancel_event=cancel_event,
+            workflow_root=self.workflow_root,
+            workflow_runner=self.workflow_runner,
         )
         initial_state = {
             "alert_data": alert_data,
@@ -650,6 +631,8 @@ class SentinelFlowAgentService:
             effective_config,
             alert_data=alert_data,
             cancel_event=cancel_event,
+            workflow_root=self.workflow_root,
+            workflow_runner=self.workflow_runner,
         )
         initial_state = {
             "alert_data": alert_data,
@@ -712,55 +695,6 @@ class SentinelFlowAgentService:
         serialized = await self._run_agent_graph(agent_definition, alert_payload, history=[], cancel_event=cancel_event)
         return self._serialize_alert_result(alert, serialized, action_hint)
 
-    async def resolve_alert_workflow(self, alert: dict[str, Any], workflow_root: Path) -> tuple[str | None, dict[str, Any]]:
-        workflows = [workflow for workflow in list_agent_workflows(workflow_root) if workflow.enabled]
-        if not workflows:
-            return None, {"strategy": "direct", "reason": "当前没有可用的 Agent Workflow。"}
-
-        primary_agent = resolve_default_agent(self.agent_root, None)
-        if primary_agent is None or primary_agent.role != "primary":
-            return None, {"strategy": "direct", "reason": "当前没有可用主 Agent。"}
-
-        if not self.is_configured(primary_agent.name):
-            fallback = workflows[0]
-            return fallback.id, {"strategy": "workflow", "workflow_id": fallback.id, "reason": "主 Agent 未配置，回退到默认 workflow。"}
-
-        available, _reason = self.is_available()
-        if not available:
-            fallback = workflows[0]
-            return fallback.id, {"strategy": "workflow", "workflow_id": fallback.id, "reason": "Agent Runtime 不可用，回退到默认 workflow。"}
-
-        planner_agent = replace(
-            primary_agent,
-            prompt=self._build_primary_workflow_prompt(primary_agent, workflows),
-        )
-        planner_result = await self._run_planner_graph(
-            planner_agent,
-            self._build_workflow_selection_payload(alert, workflows),
-            history=[],
-            cancel_event=None,
-        )
-        try:
-            plan = json.loads(str(planner_result.get("final_response", "{}")))
-        except (json.JSONDecodeError, TypeError):
-            plan = {}
-        strategy = str(plan.get("strategy", "")).strip()
-        workflow_id = str(plan.get("workflow_id", "")).strip()
-        workflow = next((item for item in workflows if item.id == workflow_id), None)
-        if strategy == "workflow" and workflow is not None:
-            return workflow.id, plan
-        if strategy == "direct":
-            return None, {
-                "strategy": "direct",
-                "reason": str(plan.get("reason", "")).strip() or "主 Agent 判断当前任务更适合自由 ReAct 处理。",
-            }
-
-        fallback = workflows[0]
-        return fallback.id, {
-            "strategy": "workflow",
-            "workflow_id": fallback.id,
-            "reason": str(plan.get("reason", "")).strip() or "主 Agent 未命中明确 workflow，回退到默认 workflow。",
-        }
 
     def _serialize_graph_result(self, source: str, state: dict[str, Any], agent_name: str = "") -> dict[str, Any]:
         messages = state.get("messages", [])
@@ -815,6 +749,9 @@ class SentinelFlowAgentService:
         actions = self._build_actions(skill_runs)
         action_steps = self._build_action_steps(skill_runs)
         closure_step = self._build_closure_step(skill_runs)
+        workflow_runs = graph_result.get("workflow_runs", [])
+        if not isinstance(workflow_runs, list):
+            workflow_runs = []
         success = self._compute_alert_task_success(
             action_hint=action_hint,
             closure_step=closure_step,
@@ -827,6 +764,7 @@ class SentinelFlowAgentService:
             alert=alert,
             graph_result=graph_result,
             workflow_selection=workflow_selection,
+            workflow_runs=workflow_runs,
             analysis_step=analysis_step,
             disposition=disposition,
             summary=summary,
@@ -854,6 +792,7 @@ class SentinelFlowAgentService:
             "closure_status": self._infer_closure_field(skill_runs, "status", self._default_closure_status(disposition)),
             "enrichment": enrichment,
             "workflow_selection": workflow_selection,
+            "workflow_runs": workflow_runs,
             "action_steps": action_steps,
             "closure_step": closure_step,
             "closure_result": closure_result,
@@ -895,6 +834,7 @@ class SentinelFlowAgentService:
         alert: dict[str, Any],
         graph_result: dict[str, Any],
         workflow_selection: dict[str, Any],
+        workflow_runs: list[dict[str, Any]],
         analysis_step: dict[str, Any],
         disposition: str,
         summary: str,
@@ -932,16 +872,42 @@ class SentinelFlowAgentService:
             trace.append(
                 {
                     "phase": "workflow_selection",
-                    "title": "Workflow 决策",
+                    "title": "Workflow 记录",
                     "summary": (
-                        f"命中流程：{workflow_selection.get('workflow_id')}"
+                        f"历史流程记录：{workflow_selection.get('workflow_id')}"
                         if workflow_selection.get("workflow_id")
-                        else str(workflow_selection.get("reason", "")).strip() or "未命中固定流程。"
+                        else str(workflow_selection.get("reason", "")).strip() or "存在历史 Workflow 记录。"
                     ),
                     "success": True,
                     "data": workflow_selection,
                 }
             )
+        for workflow_run in workflow_runs:
+            if not isinstance(workflow_run, dict):
+                continue
+            trace.append(
+                {
+                    "phase": "workflow_run",
+                    "title": f"调用 Workflow：{str(workflow_run.get('workflow_name', workflow_run.get('workflow_id', '未命名流程'))).strip()}",
+                    "summary": str(workflow_run.get("summary", "")).strip() or "主 Agent 调用了一个固定多步骤 Workflow。",
+                    "success": bool(workflow_run.get("success")),
+                    "data": workflow_run,
+                }
+            )
+            nested_trace = workflow_run.get("execution_trace", [])
+            if isinstance(nested_trace, list):
+                for nested_item in nested_trace:
+                    if not isinstance(nested_item, dict):
+                        continue
+                    trace.append(
+                        {
+                            "phase": f"workflow_nested_{str(nested_item.get('phase', '')).strip() or 'step'}",
+                            "title": f"Workflow 内部：{str(nested_item.get('title', '')).strip() or '步骤'}",
+                            "summary": str(nested_item.get("summary", "")).strip(),
+                            "success": nested_item.get("success"),
+                            "data": nested_item.get("data", nested_item),
+                        }
+                    )
         trace.append(
             {
                 "phase": "agent_analysis",

@@ -23,7 +23,6 @@ type AgentDraft = {
   prompt: string
   promptCommand: string
   promptAlert: string
-  promptWorkflowSelect: string
   promptSynthesize: string
   mode: string
   role: string
@@ -51,7 +50,6 @@ const EMPTY_DRAFT: AgentDraft = {
   prompt: '',
   promptCommand: '',
   promptAlert: '',
-  promptWorkflowSelect: '',
   promptSynthesize: '',
   mode: 'subagent',
   role: 'worker',
@@ -80,7 +78,6 @@ function detailToDraft(detail: AgentDetail): AgentDraft {
     prompt: detail.prompt,
     promptCommand: detail.prompt_command || '',
     promptAlert: detail.prompt_alert || '',
-    promptWorkflowSelect: detail.prompt_workflow_select || '',
     promptSynthesize: detail.prompt_synthesize || '',
     mode: detail.mode,
     role: detail.role || (detail.mode === 'primary' ? 'primary' : 'worker'),
@@ -111,7 +108,6 @@ function buildPayload(draft: AgentDraft) {
     prompt: draft.prompt,
     promptCommand: isPrimary ? draft.promptCommand : '',
     promptAlert: isPrimary ? draft.promptAlert : '',
-    promptWorkflowSelect: isPrimary ? draft.promptWorkflowSelect : '',
     promptSynthesize: isPrimary ? draft.promptSynthesize : '',
     mode: draft.mode,
     role: draft.role,
@@ -294,7 +290,6 @@ function AgentForm({
             <div className="mt-3 grid gap-3">
               <textarea className="sentinelflow-command-input" rows={4} placeholder="对话使用 Prompt（可选）" value={draft.promptCommand} onChange={(event) => onChange((current) => ({ ...current, promptCommand: event.target.value }))} />
               <textarea className="sentinelflow-command-input" rows={4} placeholder="告警分析 Prompt（可选）" value={draft.promptAlert} onChange={(event) => onChange((current) => ({ ...current, promptAlert: event.target.value }))} />
-              <textarea className="sentinelflow-command-input" rows={4} placeholder="Workflow 选择 Prompt（可选）" value={draft.promptWorkflowSelect} onChange={(event) => onChange((current) => ({ ...current, promptWorkflowSelect: event.target.value }))} />
               <textarea className="sentinelflow-command-input" rows={4} placeholder="汇总 Prompt（可选）" value={draft.promptSynthesize} onChange={(event) => onChange((current) => ({ ...current, promptSynthesize: event.target.value }))} />
             </div>
           ) : null}

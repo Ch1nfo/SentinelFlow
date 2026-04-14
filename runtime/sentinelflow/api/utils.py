@@ -323,8 +323,6 @@ def _build_agent_yaml(req: AgentCreateRequest) -> str:
         lines.append("prompt_command_file: prompt.command.md")
     if (req.prompt_alert or "").strip():
         lines.append("prompt_alert_file: prompt.alert.md")
-    if (req.prompt_workflow_select or "").strip():
-        lines.append("prompt_workflow_select_file: prompt.workflow.select.md")
     if (req.prompt_synthesize or "").strip():
         lines.append("prompt_synthesize_file: prompt.synthesize.md")
     return "\n".join(lines) + "\n"
@@ -362,7 +360,6 @@ def _read_agent_yaml(agent_name: str) -> dict[str, Any]:
         "prompt": agent.prompt,
         "prompt_command": agent.prompt_command,
         "prompt_alert": agent.prompt_alert,
-        "prompt_workflow_select": agent.prompt_workflow_select,
         "prompt_synthesize": agent.prompt_synthesize,
         "location": agent.location,
         "has_prompt": agent.has_prompt,

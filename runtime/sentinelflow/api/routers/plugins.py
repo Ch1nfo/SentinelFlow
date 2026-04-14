@@ -221,7 +221,6 @@ def _write_agent_prompt_variants(relative_dir: Path, payload: AgentCreateRequest
     prompt_files = {
         "prompt.command.md": payload.prompt_command,
         "prompt.alert.md": payload.prompt_alert,
-        "prompt.workflow.select.md": payload.prompt_workflow_select,
         "prompt.synthesize.md": payload.prompt_synthesize,
     }
     for filename, content in prompt_files.items():
@@ -232,6 +231,7 @@ def _write_agent_prompt_variants(relative_dir: Path, payload: AgentCreateRequest
             _remove_project_path(target)
     # Clear deprecated mode-specific prompt files saved by older versions.
     for filename in (
+        "prompt.workflow.select.md",
         "prompt.orchestrate.command.md",
         "prompt.orchestrate.alert.md",
         "prompt.synthesize.command.md",

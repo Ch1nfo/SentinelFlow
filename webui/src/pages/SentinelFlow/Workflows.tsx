@@ -41,6 +41,11 @@ const EMPTY_DRAFT: WorkflowDraft = {
   stepAgents: [],
 }
 
+function normalizeWorkflowRuns(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+}
+
 function detailToDraft(detail: WorkflowDetail): WorkflowDraft {
   return {
     name: detail.name,
@@ -185,7 +190,22 @@ export default function SentinelFlowWorkflowsPage() {
 
   const taskCountByWorkflow = new Map<string, number>()
   for (const task of poll?.tasks ?? []) {
-    taskCountByWorkflow.set(task.workflow_name, (taskCountByWorkflow.get(task.workflow_name) ?? 0) + 1)
+    const result = (task.last_result_data ?? {}) as Record<string, unknown>
+    const workflowRuns = normalizeWorkflowRuns(result.workflow_runs)
+    if (workflowRuns.length) {
+      const counted = new Set<string>()
+      for (const run of workflowRuns) {
+        const workflowId = String(run.workflow_id ?? '').trim()
+        if (!workflowId || counted.has(workflowId)) continue
+        counted.add(workflowId)
+        taskCountByWorkflow.set(workflowId, (taskCountByWorkflow.get(workflowId) ?? 0) + 1)
+      }
+      continue
+    }
+
+    const legacyWorkflowName = String(task.workflow_name ?? '').trim()
+    if (!legacyWorkflowName || legacyWorkflowName === 'agent_react') continue
+    taskCountByWorkflow.set(legacyWorkflowName, (taskCountByWorkflow.get(legacyWorkflowName) ?? 0) + 1)
   }
 
   const refreshWorkflowRuntime = useCallback(() => {
@@ -304,7 +324,7 @@ export default function SentinelFlowWorkflowsPage() {
         <div className="rounded-xl border border-gray-200 bg-white p-5">
           <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-900">
             <Radar className="h-4 w-4 text-amber-500" />
-            关联任务
+            最近任务
           </div>
           <div className="text-3xl font-bold text-gray-900">{(poll?.tasks ?? []).length}</div>
         </div>
@@ -343,7 +363,7 @@ export default function SentinelFlowWorkflowsPage() {
                       <div className="mt-1 text-[11px] text-gray-500">{workflow.id}</div>
                     </div>
                     <StatusBadge tone={workflow.tone ?? 'neutral'}>
-                      {workflow.enabled ? (taskCountByWorkflow.get(workflow.id) ? '运行中' : '已启用') : '已停用'}
+                      {workflow.enabled ? (taskCountByWorkflow.get(workflow.id) ? '近期被调用' : '已启用') : '已停用'}
                     </StatusBadge>
                   </div>
                   <p className="min-h-[72px] text-xs leading-6 text-gray-600">{workflow.description}</p>
@@ -358,7 +378,7 @@ export default function SentinelFlowWorkflowsPage() {
                     </div>
                     <div>
                       <div className="font-semibold text-gray-900">{taskCountByWorkflow.get(workflow.id) ?? 0}</div>
-                      <div className="text-gray-500">任务</div>
+                      <div className="text-gray-500">调用</div>
                     </div>
                   </div>
                 </button>
@@ -478,7 +498,7 @@ export default function SentinelFlowWorkflowsPage() {
                       <div className="mt-2 text-base font-semibold text-gray-900">{(detail.scenarios ?? []).join(' / ') || '未设置'}</div>
                     </div>
                     <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                      <div className="text-xs text-gray-500">关联任务</div>
+                      <div className="text-xs text-gray-500">调用次数</div>
                       <div className="mt-2 text-2xl font-semibold text-gray-900">{taskCountByWorkflow.get(detail.id) ?? 0}</div>
                     </div>
                     <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">

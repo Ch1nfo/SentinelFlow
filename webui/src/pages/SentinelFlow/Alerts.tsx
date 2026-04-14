@@ -90,6 +90,23 @@ function getSelectedAlertPayload(task: AlertTask | null): Record<string, unknown
   return (task?.payload?.alert_data as Record<string, unknown> | undefined) ?? {}
 }
 
+function normalizeWorkflowRuns(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+}
+
+function getTaskFlowLabel(task: AlertTask): string {
+  const result = (task.last_result_data ?? {}) as Record<string, unknown>
+  const workflowRuns = normalizeWorkflowRuns(result.workflow_runs)
+  const workflowRun = workflowRuns[0] ?? null
+  if (workflowRun) {
+    return `Workflow / ${String(workflowRun.workflow_name ?? workflowRun.workflow_id ?? '未命名流程').trim() || '未命名流程'}`
+  }
+  const workflowName = String(task.workflow_name ?? '').trim()
+  if (!workflowName || workflowName === 'agent_react') return '主 Agent'
+  return workflowName
+}
+
 export default function SentinelFlowAlertsPage() {
   const [data, setData] = useState<PollAlertsResponse | null>(null)
   const [summary, setSummary] = useState<{
@@ -169,6 +186,8 @@ export default function SentinelFlowAlertsPage() {
   const selectedPayload = getSelectedAlertPayload(selectedTask)
   const workflowSelection = (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ?? {}
   const selectedResult = (selectedTask?.last_result_data ?? {}) as Record<string, unknown>
+  const selectedWorkflowRuns = normalizeWorkflowRuns(selectedResult.workflow_runs)
+  const selectedWorkflowRun = selectedWorkflowRuns[0] ?? null
   const selectedClosureStep = (selectedResult.closure_step as Record<string, unknown> | undefined) ?? {}
   const selectedReason = String(selectedResult.reason ?? '').trim()
   const selectedDisposition = String(selectedResult.disposition ?? '').trim()
@@ -178,8 +197,12 @@ export default function SentinelFlowAlertsPage() {
     : []
   const hideTaskError = Boolean(selectedClosureStep.attempted) && Boolean(selectedClosureStep.success)
   const dipPreview = formatIpPreview(selectedPayload.dip)
-  const workflowDecision = String(workflowSelection.workflow_id ?? selectedTask?.workflow_name ?? '').trim()
-  const workflowDecisionReason = String(workflowSelection.reason ?? '').trim()
+  const workflowDecision = String(
+    selectedWorkflowRun?.workflow_name ?? selectedWorkflowRun?.workflow_id ?? selectedTask?.workflow_name ?? '',
+  ).trim()
+  const workflowDecisionReason = String(
+    selectedWorkflowRun?.summary ?? selectedWorkflowRun?.reason ?? workflowSelection.reason ?? '',
+  ).trim()
 
   async function runAction(action: string) {
     setActionState({ action, running: true })
@@ -282,7 +305,7 @@ export default function SentinelFlowAlertsPage() {
             <div className="sentinelflow-alert-queue-scroll">
               <table className="sentinelflow-data-table">
                 <thead>
-                  <tr><th>告警</th><th>告警时间</th><th>状态</th><th>流转</th></tr>
+                  <tr><th>告警</th><th>告警时间</th><th>状态</th><th>执行方式</th></tr>
                 </thead>
                 <tbody>
                   {loading ? <tr><td colSpan={4}>正在加载...</td></tr> : null}
@@ -300,7 +323,7 @@ export default function SentinelFlowAlertsPage() {
                       <td>{task.title || '未命名告警'}</td>
                       <td>{formatAlertTime(task.alert_time)}</td>
                       <td><StatusBadge tone={getTaskTone(task)}>{getTaskStatusLabel(task)}</StatusBadge></td>
-                      <td>{task.workflow_name}</td>
+                      <td>{getTaskFlowLabel(task)}</td>
                     </tr>
                   )) : null}
                 </tbody>
@@ -315,7 +338,7 @@ export default function SentinelFlowAlertsPage() {
                 <div className="sentinelflow-response-row">
                   <StatusBadge tone={getTaskTone(selectedTask)}>{getTaskStatusLabel(selectedTask)}</StatusBadge>
                   <span>{formatAlertTime(selectedTask.alert_time)}</span>
-                  <span>{selectedTask.workflow_name}</span>
+                  <span>{getTaskFlowLabel(selectedTask)}</span>
                 </div>
                 <p className="sentinelflow-muted-text">{selectedTask.description}</p>
                 <div className="sentinelflow-context-grid">
@@ -342,9 +365,19 @@ export default function SentinelFlowAlertsPage() {
                 </div>
                 {workflowDecision ? (
                   <div className="rounded-xl border border-amber-100 bg-amber-50 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Workflow 决策</div>
-                    <div className="mt-2 text-sm font-semibold text-amber-950">命中流程：{workflowDecision}</div>
-                    {workflowDecisionReason ? <div className="mt-2 text-sm text-amber-900">主 Agent 理由：{workflowDecisionReason}</div> : null}
+                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Workflow 调用</div>
+                    <div className="mt-2 text-sm font-semibold text-amber-950">
+                      {selectedWorkflowRun ? `主 Agent 调用了流程：${workflowDecision}` : `当前入口方式：${workflowDecision}`}
+                    </div>
+                    {workflowDecisionReason ? (
+                      <div className="mt-2 text-sm text-amber-900">
+                        {selectedWorkflowRun ? `Workflow 返回：${workflowDecisionReason}` : workflowDecisionReason}
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-sm text-amber-900">
+                        {selectedWorkflowRun ? '该 Workflow 已作为主 Agent 的一个中间能力被调用。' : '当前告警未记录独立 Workflow 调用。'}
+                      </div>
+                    )}
                   </div>
                 ) : null}
                 {selectedDisposition || selectedReason || selectedSummary ? (

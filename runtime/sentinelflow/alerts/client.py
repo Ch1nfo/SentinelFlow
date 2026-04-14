@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from typing import Any
+from uuid import uuid4
 
 import requests
 import urllib3
@@ -49,10 +50,10 @@ def _stringify(value: Any) -> str:
         return str(value)
 
 
-def _normalize_script_alert(alert: dict[str, Any], index: int) -> dict[str, Any]:
+def _normalize_script_alert(alert: dict[str, Any], index: int, batch_id: str) -> dict[str, Any]:
     event_ids = _stringify(alert.get("eventIds") or alert.get("event_ids") or alert.get("id"))
     normalized = {
-        "eventIds": event_ids or f"SCRIPT-{index + 1}",
+        "eventIds": event_ids or f"SCRIPT-{batch_id}-{index + 1}",
         "alert_name": _stringify(alert.get("alert_name") or alert.get("alertName") or alert.get("title") or alert.get("name")),
         "sip": _stringify(alert.get("sip") or alert.get("source_ip") or alert.get("sourceIp")),
         "dip": _stringify(alert.get("dip") or alert.get("destination_ip") or alert.get("destinationIp")),
@@ -73,7 +74,7 @@ def _normalize_script_alert(alert: dict[str, Any], index: int) -> dict[str, Any]
     return normalized
 
 
-def _normalize_script_result(payload: Any) -> dict[str, Any]:
+def _normalize_script_result(payload: Any, *, batch_id: str) -> dict[str, Any]:
     if isinstance(payload, list):
         alerts = payload
     elif isinstance(payload, dict):
@@ -88,7 +89,7 @@ def _normalize_script_result(payload: Any) -> dict[str, Any]:
     for index, item in enumerate(alerts):
         if not isinstance(item, dict):
             continue
-        normalized = _normalize_script_alert(item, index)
+        normalized = _normalize_script_alert(item, index, batch_id)
         if any(normalized.get(key) for key in ("eventIds", "alert_name", "sip", "dip", "payload")):
             normalized_alerts.append(normalized)
     return {"count": len(normalized_alerts), "alerts": normalized_alerts}
@@ -210,12 +211,14 @@ class SOCAlertApiClient:
         except json.JSONDecodeError as exc:
             return {"error": f"脚本 stdout 不是合法 JSON：{exc}"}
 
+        batch_id = uuid4().hex[:12].upper()
         try:
-            normalized = _normalize_script_result(decoded)
+            normalized = _normalize_script_result(decoded, batch_id=batch_id)
         except ValueError as exc:
             return {"error": str(exc)}
         return {
             **normalized,
+            "batch_id": batch_id,
             "raw_payload": decoded,
         }
 

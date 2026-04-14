@@ -91,12 +91,86 @@ function getTraceTone(item: ExecutionTraceItem): 'success' | 'danger' | 'warn' |
   return 'warn'
 }
 
-function ProcessTrace({ trace }: { trace: ExecutionTraceItem[] }) {
+function buildFallbackTrace(task: AlertTask | null): ExecutionTraceItem[] {
+  if (!task) return []
+  const payload = (task.payload?.alert_data as Record<string, unknown> | undefined) ?? {}
+  const workflowSelection = (task.payload?.workflow_selection as Record<string, unknown> | undefined) ?? {}
+  const trace: ExecutionTraceItem[] = [
+    {
+      phase: 'alert_received',
+      title: '接收告警',
+      summary: '已接收任务告警上下文。',
+      success: true,
+      data: {
+        eventIds: task.event_ids,
+        alert_name: String(payload.alert_name ?? task.title ?? '').trim(),
+        sip: payload.sip ?? '',
+        dip: payload.dip ?? '',
+        alert_time: payload.alert_time ?? task.alert_time ?? '',
+        current_judgment: payload.current_judgment ?? '',
+        history_judgment: payload.history_judgment ?? '',
+        payload: payload.payload ?? '',
+      },
+    },
+  ]
+  if (Object.keys(workflowSelection).length) {
+    trace.push({
+      phase: 'workflow_selection',
+      title: 'Workflow 记录',
+      summary: String(workflowSelection.reason ?? workflowSelection.workflow_id ?? '存在历史 Workflow 记录。').trim(),
+      success: true,
+      data: workflowSelection,
+    })
+  }
+  if (task.status === 'queued') {
+    trace.push({
+      phase: 'final_status',
+      title: '当前执行状态',
+      summary: '任务已进入排队中，等待自动执行或人工处置。',
+      success: null,
+      data: {
+        status: 'queued',
+        success: null,
+      },
+    })
+  } else if (task.status === 'running') {
+    trace.push({
+      phase: 'final_status',
+      title: '当前执行状态',
+      summary: '任务正在执行中，请等待最新结果刷新。',
+      success: null,
+      data: {
+        status: 'running',
+        success: null,
+      },
+    })
+  }
+  return trace
+}
+
+function normalizeWorkflowRuns(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+}
+
+function getTaskFlowLabel(task: AlertTask): string {
+  const result = (task.last_result_data ?? {}) as Record<string, unknown>
+  const workflowRuns = normalizeWorkflowRuns(result.workflow_runs)
+  const workflowRun = workflowRuns[0] ?? null
+  if (workflowRun) {
+    return `Workflow / ${String(workflowRun.workflow_name ?? workflowRun.workflow_id ?? '未命名流程').trim() || '未命名流程'}`
+  }
+  const workflowName = String(task.workflow_name ?? '').trim()
+  if (!workflowName || workflowName === 'agent_react') return '主 Agent'
+  return workflowName
+}
+
+function ProcessTrace({ trace, traceOwnerId }: { trace: ExecutionTraceItem[]; traceOwnerId: string }) {
   const [openKeys, setOpenKeys] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     setOpenKeys({})
-  }, [trace])
+  }, [traceOwnerId])
 
   if (!trace.length) {
     return <p className="sentinelflow-muted-text">该任务生成于旧版本，暂无完整处置全流程明细。</p>
@@ -237,6 +311,8 @@ export default function SentinelFlowTasksPage() {
 
   const selectedPayload = (selectedTask?.payload?.alert_data as Record<string, unknown> | undefined) ?? {}
   const selectedResult = selectedTask?.last_result_data ?? {}
+  const selectedWorkflowRuns = normalizeWorkflowRuns(selectedResult.workflow_runs)
+  const selectedWorkflowRun = selectedWorkflowRuns[0] ?? null
   const selectedWorkflowSelection =
     (selectedResult.workflow_selection as Record<string, unknown> | undefined) ??
     (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ??
@@ -249,12 +325,16 @@ export default function SentinelFlowTasksPage() {
     ? selectedResult.evidence.map((item) => String(item).trim()).filter(Boolean)
     : []
   const hideTaskError = Boolean(selectedClosureStep.attempted) && Boolean(selectedClosureStep.success)
-  const selectedTrace = Array.isArray(selectedResult.execution_trace)
+  const selectedTrace = Array.isArray(selectedResult.execution_trace) && selectedResult.execution_trace.length
     ? (selectedResult.execution_trace as ExecutionTraceItem[])
-    : []
+    : buildFallbackTrace(selectedTask)
   const dipPreview = formatIpPreview(selectedPayload.dip, 4)
-  const workflowDecision = String(selectedWorkflowSelection.workflow_id ?? selectedTask?.workflow_name ?? '').trim()
-  const workflowDecisionReason = String(selectedWorkflowSelection.reason ?? '').trim()
+  const workflowDecision = String(
+    selectedWorkflowRun?.workflow_name ?? selectedWorkflowRun?.workflow_id ?? selectedTask?.workflow_name ?? '',
+  ).trim()
+  const workflowDecisionReason = String(
+    selectedWorkflowRun?.summary ?? selectedWorkflowRun?.reason ?? selectedWorkflowSelection.reason ?? '',
+  ).trim()
 
   return (
     <div className="sentinelflow-page-stack">
@@ -275,7 +355,7 @@ export default function SentinelFlowTasksPage() {
         }
       />
 
-      <Surface title="任务中心" subtitle={withProductName('展示任务从排队、执行到闭环的完整生命周期。已知模式优先走 Agent Workflow，复杂或未知任务则回到主 Agent 的 Agent ReAct。')}>
+      <Surface title="任务中心" subtitle={withProductName('展示任务从排队、执行到闭环的完整生命周期。当前由主 Agent 统一统筹，可按需调用子 Agent、Workflow 与技能。')}>
         <div className="grid gap-4 md:grid-cols-4">
           <div className="rounded-xl border border-gray-200 bg-white p-5">
             <div className="mb-2 flex items-center justify-between">
@@ -349,7 +429,7 @@ export default function SentinelFlowTasksPage() {
                       <StatusBadge tone={getTone(task)}>{getTaskStatusLabel(task.status)}</StatusBadge>
                     </div>
                     <span>{task.alert_time || '未提供告警时间'}</span>
-                    <span>{task.workflow_name}</span>
+                    <span>{getTaskFlowLabel(task)}</span>
                   </button>
                 )) : <p className="sentinelflow-muted-text">当前筛选条件下没有任务。</p>}
               </div>
@@ -362,7 +442,7 @@ export default function SentinelFlowTasksPage() {
                   <div className="sentinelflow-response-row">
                     <StatusBadge tone={getTone(selectedTask)}>{getTaskStatusLabel(selectedTask.status)}</StatusBadge>
                     <span>{selectedTask.alert_time || '未提供告警时间'}</span>
-                    <span>{selectedTask.workflow_name}</span>
+                    <span>{getTaskFlowLabel(selectedTask)}</span>
                   </div>
                   <p className="sentinelflow-muted-text">{selectedTask.description}</p>
 
@@ -377,9 +457,19 @@ export default function SentinelFlowTasksPage() {
 
                   {workflowDecision ? (
                     <div className="rounded-xl border border-amber-100 bg-amber-50 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Workflow 决策</div>
-                      <div className="mt-2 text-sm font-semibold text-amber-950">命中流程：{workflowDecision}</div>
-                      {workflowDecisionReason ? <div className="mt-2 text-sm text-amber-900">主 Agent 理由：{workflowDecisionReason}</div> : null}
+                      <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Workflow 调用</div>
+                      <div className="mt-2 text-sm font-semibold text-amber-950">
+                        {selectedWorkflowRun ? `主 Agent 调用了流程：${workflowDecision}` : `当前入口方式：${workflowDecision}`}
+                      </div>
+                      {workflowDecisionReason ? (
+                        <div className="mt-2 text-sm text-amber-900">
+                          {selectedWorkflowRun ? `Workflow 返回：${workflowDecisionReason}` : workflowDecisionReason}
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-sm text-amber-900">
+                          {selectedWorkflowRun ? '该 Workflow 已作为主 Agent 的一个中间能力被调用。' : '当前任务未记录独立 Workflow 调用。'}
+                        </div>
+                      )}
                     </div>
                   ) : null}
 
@@ -415,7 +505,7 @@ export default function SentinelFlowTasksPage() {
                         {processExpanded ? '收起处置全流程' : '展开处置全流程'}
                       </button>
                     </div>
-                    {processExpanded ? <div className="mt-4"><ProcessTrace trace={selectedTrace} /></div> : null}
+                    {processExpanded ? <div className="mt-4"><ProcessTrace trace={selectedTrace} traceOwnerId={selectedTask.task_id} /></div> : null}
                   </div>
 
                   {selectedTask.status === 'failed' ? (

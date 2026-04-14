@@ -1,76 +1,28 @@
 from __future__ import annotations
 
 import ipaddress
-from pathlib import Path
-from typing import Callable, Awaitable
 import uuid
 
 from sentinelflow.domain.models import AlertHandlingTask, JudgmentResult
 from sentinelflow.domain.enums import AlertDisposition
-from sentinelflow.workflows.agent_workflow_registry import list_agent_workflows
 
 
 class TriageService:
-    """Builds queued alert-handling tasks for downstream workflow execution."""
-
-    def __init__(
-        self,
-        workflow_root: Path | None = None,
-        workflow_selector: Callable[[dict], Awaitable[tuple[str | None, dict]]] | Callable[[dict], tuple[str | None, dict]] | None = None,
-    ) -> None:
-        self.workflow_root = workflow_root
-        self.workflow_selector = workflow_selector
+    """Builds queued alert-handling tasks for downstream main-agent execution."""
 
     async def build_task(self, alert: dict) -> AlertHandlingTask:
         event_ids = str(alert.get("eventIds", "")).strip()
         alert_name = str(alert.get("alert_name", "未知告警")).strip() or "未知告警"
-        workflow_name, workflow_selection = await self.select_workflow(alert)
-        effective_workflow_name = workflow_name or "agent_react"
         task_id = f"sentinelflow-task-{uuid.uuid4().hex[:12]}"
         return AlertHandlingTask(
             task_id=task_id,
             event_ids=event_ids,
-            workflow_name=effective_workflow_name,
+            workflow_name="agent_react",
             title=alert_name,
-            description=f"Handle alert {event_ids} through workflow {effective_workflow_name}.",
+            description=f"Handle alert {event_ids} through workflow agent_react.",
             alert_time=str(alert.get("alert_time", "")).strip(),
-            payload={"alert_data": alert, "workflow_selection": workflow_selection},
+            payload={"alert_data": alert},
         )
-
-    async def select_workflow(self, alert: dict) -> tuple[str, dict]:
-        if self.workflow_selector is not None:
-            import inspect
-            if inspect.iscoroutinefunction(self.workflow_selector):
-                workflow_name, workflow_selection = await self.workflow_selector(alert)
-            else:
-                workflow_name, workflow_selection = self.workflow_selector(alert)
-            if workflow_name or workflow_selection:
-                return workflow_name or "", workflow_selection
-
-        combined = ",".join(
-            [
-                str(alert.get("current_judgment", "")).strip(),
-                str(alert.get("history_judgment", "")).strip(),
-                str(alert.get("alert_name", "")).strip(),
-                str(alert.get("payload", "")).strip(),
-            ]
-        )
-        if self.workflow_root is not None:
-            for workflow in list_agent_workflows(self.workflow_root):
-                if not workflow.enabled:
-                    continue
-                if "alert" not in workflow.scenarios and "task" not in workflow.scenarios:
-                    continue
-                if workflow.selection_keywords and any(keyword in combined for keyword in workflow.selection_keywords):
-                    return workflow.id, {
-                        "strategy": "workflow",
-                        "workflow_id": workflow.id,
-                        "reason": "按 workflow 关键字规则匹配。",
-                    }
-        return "agent_react", {
-            "strategy": "direct",
-            "reason": "当前没有命中已配置的 Agent Workflow，回退到主 Agent ReAct。",
-        }
 
     def analyze_alert(self, alert: dict) -> JudgmentResult:
         current = str(alert.get("current_judgment", "")).strip()

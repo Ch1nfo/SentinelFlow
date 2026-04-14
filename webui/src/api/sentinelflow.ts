@@ -14,6 +14,7 @@ export type AlertTaskResultData = Record<string, unknown> & {
   reason?: string
   evidence?: string[]
   workflow_selection?: Record<string, unknown>
+  workflow_runs?: Array<Record<string, unknown>>
   analysis_step?: Record<string, unknown>
   action_steps?: Array<Record<string, unknown>>
   closure_step?: Record<string, unknown>
@@ -292,7 +293,6 @@ export type AgentDetail = AgentSummary & {
   prompt: string
   prompt_command?: string
   prompt_alert?: string
-  prompt_workflow_select?: string
   prompt_synthesize?: string
   skills: string[]
   tools: string[]
@@ -453,7 +453,6 @@ export async function createAgent(payload: {
   prompt: string
   promptCommand?: string
   promptAlert?: string
-  promptWorkflowSelect?: string
   promptSynthesize?: string
   mode?: string
   role?: string
@@ -485,7 +484,6 @@ export async function saveAgent(name: string, payload: {
   prompt: string
   promptCommand?: string
   promptAlert?: string
-  promptWorkflowSelect?: string
   promptSynthesize?: string
   mode?: string
   role?: string

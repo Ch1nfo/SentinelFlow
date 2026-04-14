@@ -21,6 +21,7 @@ ToolMessage.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -30,6 +31,7 @@ from sentinelflow.agent.orchestrator_state import OrchestratorState
 from sentinelflow.agent.policy import can_agent_execute_skill, can_agent_read_skill
 from sentinelflow.agent.tools import build_agent_tools
 from sentinelflow.skills.adapters import SentinelFlowSkillRuntime
+from sentinelflow.workflows.agent_workflow_registry import load_agent_workflow, list_agent_workflows
 
 try:
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -89,7 +91,7 @@ def _build_worker_subgraph_tool(
             enable_read_skill_document=True,
             enable_execute_skill=True,
         )
-        worker_alert_data = dict(alert_data)
+        worker_alert_data = copy.deepcopy(alert_data)
         worker_alert_data["delegated_task_prompt"] = task_prompt
 
         try:
@@ -178,6 +180,8 @@ def build_orchestrator_graph(
     *,
     alert_data: dict[str, Any],
     cancel_event: Any = None,
+    workflow_root: Path | None = None,
+    workflow_runner: Any = None,
 ):
     """
     Build and return the compiled Supervisor + Worker SubGraph orchestrator.
@@ -218,6 +222,45 @@ def build_orchestrator_graph(
         enable_read_skill_document=bool(readable_skills),
         enable_execute_skill=bool(executable_skills),
     )
+    workflow_catalog = {
+        workflow.id: workflow
+        for workflow in (list_agent_workflows(workflow_root) if workflow_root is not None else [])
+        if workflow.enabled
+    }
+
+    @tool
+    async def run_workflow(
+        workflow_id: str,
+        task_prompt: str,
+        state: Annotated[OrchestratorState, InjectedState()],  # type: ignore[misc]
+    ) -> str:
+        """调用一个已配置的 Agent Workflow 执行固定多步骤流程，并返回结构化结果。"""
+        cancel = state.get("cancel_event")
+        if cancel is not None and getattr(cancel, "is_set", lambda: False)():
+            return json.dumps({"success": False, "workflow_id": workflow_id, "error": "用户已停止当前任务。"}, ensure_ascii=False)
+        workflow_id = str(workflow_id or "").strip()
+        if not workflow_id:
+            return json.dumps({"success": False, "workflow_id": "", "error": "必须提供 workflow_id。"}, ensure_ascii=False)
+        if workflow_runner is None or workflow_root is None:
+            return json.dumps({"success": False, "workflow_id": workflow_id, "error": "当前未启用 Workflow 运行时。"}, ensure_ascii=False)
+        workflow = workflow_catalog.get(workflow_id)
+        if workflow is None:
+            try:
+                workflow = load_agent_workflow(workflow_root, workflow_id)
+            except Exception as exc:
+                return json.dumps({"success": False, "workflow_id": workflow_id, "error": f"Workflow 不存在或无法加载：{exc}"}, ensure_ascii=False)
+        if not workflow.enabled:
+            return json.dumps({"success": False, "workflow_id": workflow_id, "error": "该 Workflow 当前未启用。"}, ensure_ascii=False)
+        try:
+            result = await workflow_runner.execute_workflow(
+                workflow,
+                dict(state.get("alert_data", {}) or {}),
+                task_prompt=str(task_prompt or "").strip(),
+            )
+        except Exception as exc:
+            return json.dumps({"success": False, "workflow_id": workflow_id, "error": f"Workflow 执行失败：{exc}"}, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False)
+
     @tool
     async def delegate_parallel(
         tasks: list[dict[str, str]],
@@ -295,7 +338,7 @@ def build_orchestrator_graph(
             ensure_ascii=False,
         )
 
-    supervisor_tools = worker_tools + [delegate_parallel] + primary_skill_tools
+    supervisor_tools = worker_tools + [run_workflow, delegate_parallel] + primary_skill_tools
 
     # ── Build Supervisor LLM (bound with worker + primary skill tools) ───────
     supervisor_config = primary_agent.resolve_runtime_config(runtime_config)

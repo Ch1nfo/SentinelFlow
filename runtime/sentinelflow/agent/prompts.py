@@ -102,10 +102,15 @@ PRIMARY_COMMAND_ORCHESTRATION_APPENDIX = """\
 可用子 Agent：
 {worker_catalog}
 
+可用 Agent Workflow：
+{workflow_catalog}
+
 核心原则：
 - 每次只调用一个子 Agent，拿到结果后再评估下一步
 - 如果多个子任务彼此独立、可以并行收集信息，优先调用 `delegate_parallel`
 - `delegate_parallel` 只适合相互独立的任务；强依赖前一步结果的任务仍应串行处理
+- 如果当前任务明显适合固定多步骤流程，可以调用 `run_workflow`
+- `run_workflow` 是一种高级复合能力；Workflow 运行完成后，仍由你决定是否继续取证、调用技能或直接给出最终回复
 - 对无入参技能，优先使用 `execute_skill_no_args`
 - 给子 Agent 的 task_prompt 必须具体、可操作，不要笼统
 - 当信息足够时，停止调用任何工具，直接输出最终回复给用户
@@ -127,36 +132,20 @@ PRIMARY_ALERT_ORCHESTRATION_APPENDIX = """\
 可用子 Agent：
 {worker_catalog}
 
+可用 Agent Workflow：
+{workflow_catalog}
+
 核心原则：
 - 每次只调用一个子 Agent，拿到结果后再评估下一步
 - 如果多个子任务彼此独立、可以并行收集信息，优先调用 `delegate_parallel`
 - `delegate_parallel` 只适合相互独立的任务；强依赖前一步结果的任务仍应串行处理
+- 如果某类告警明显适合固定多步骤流程，可以调用 `run_workflow`
+- `run_workflow` 只负责完成一段固定流程，不负责最终结单或最终裁决；Workflow 返回后仍由你决定下一步
 - 对无入参技能，优先使用 `execute_skill_no_args`
 - 给子 Agent 的 task_prompt 必须具体、可操作
 - 最终结论必须包含：最终分类、简短理由、关键依据、执行结果
 - 当信息足够时，停止调用任何工具，直接输出最终中文结论
 - 不要把内部调度过程展示给值班人员
-""".strip()
-
-
-PRIMARY_ALERT_WORKFLOW_SELECTION_APPENDIX = """\
-你当前是主 Agent。你的职责是为任务中心/告警工作台选择最合适的 Agent Workflow。
-
-可用 Agent Workflow：
-{workflow_catalog}
-
-判断原则：
-- 这是任务/告警场景，不是对话场景
-- 如果命中固定 Agent Workflow，优先选择 workflow，而不是自由逐步调度子 Agent
-- 只有在现有 workflow 都不适合时，才返回 direct
-- 选择时重点看：告警内容、当前研判、历史研判、是否需要封禁/通知/结单
-
-输出要求：
-- 只能输出一个 JSON 对象，不要输出解释文字
-- 如果应命中某个 workflow，输出：
-  {{"strategy":"workflow","workflow_id":"workflow目录名","reason":"一句话说明为什么命中"}}
-- 如果现有 workflow 都不适合，输出：
-  {{"strategy":"direct","reason":"一句话说明为什么暂不命中固定 workflow"}}
 """.strip()
 
 

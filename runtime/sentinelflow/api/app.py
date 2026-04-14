@@ -45,20 +45,12 @@ agent_service = SentinelFlowAgentService(
     project_root=PROJECT_ROOT,
     skill_runtime=skill_runtime,
 )
-
-
-async def _workflow_selector(alert):
-    return await agent_service.resolve_alert_workflow(alert, WORKFLOW_ROOT)
-
-
-triage_service = TriageService(
-    workflow_root=WORKFLOW_ROOT,
-    workflow_selector=_workflow_selector,
-)
+triage_service = TriageService()
 agent_workflow_runner = SentinelFlowAgentWorkflowRunner(
     agent_service=agent_service,
     audit_service=audit_service,
 )
+agent_service.attach_workflow_runner(agent_workflow_runner)
 dispatch_service = AlertDispatchService(
     dedup=AlertDedupStore(),
     triage_service=triage_service,
