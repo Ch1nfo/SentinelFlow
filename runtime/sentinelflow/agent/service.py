@@ -745,10 +745,11 @@ class SentinelFlowAgentService:
         evidence = self._infer_evidence(final_text, alert, fallback_judgment)
         analysis_step = self._build_analysis_step(graph_result, disposition, summary, reason, evidence)
         enrichment = self._first_enrichment_payload(skill_runs)
-        closure_result = self._first_closure_payload(skill_runs)
-        actions = self._build_actions(skill_runs)
-        action_steps = self._build_action_steps(skill_runs)
-        closure_step = self._build_closure_step(skill_runs)
+        closure_run = self._select_closure_run(skill_runs, action_hint)
+        closure_result = self._first_closure_payload(skill_runs, closure_run)
+        actions = self._build_actions(skill_runs, closure_run)
+        action_steps = self._build_action_steps(skill_runs, closure_run)
+        closure_step = self._build_closure_step(skill_runs, closure_run)
         workflow_runs = graph_result.get("workflow_runs", [])
         if not isinstance(workflow_runs, list):
             workflow_runs = []
@@ -801,7 +802,7 @@ class SentinelFlowAgentService:
             "execution_mode": "agent",
             "execution_trace": execution_trace,
             "used_agent": True,
-            "has_close_action": any(self._is_closure_run(run) for run in skill_runs),
+            "has_close_action": closure_run is not None,
             "has_disposal_action": bool(actions),
         }
 
@@ -979,7 +980,7 @@ class SentinelFlowAgentService:
                 "success": success,
                 "data": {
                     "success": success,
-                    "has_close_action": bool(closure_step.get("attempted")) or any(self._is_closure_run(run) for run in skill_runs),
+                    "has_close_action": bool(closure_step.get("attempted")),
                     "has_disposal_action": bool(action_steps) or bool(actions),
                     "tool_calls": graph_result.get("tool_calls", []),
                     "messages": graph_result.get("messages", []),
@@ -1009,11 +1010,15 @@ class SentinelFlowAgentService:
             "final_response": graph_result.get("final_response", ""),
         }
 
-    def _build_action_steps(self, skill_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _build_action_steps(
+        self,
+        skill_runs: list[dict[str, Any]],
+        closure_run: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
         steps: list[dict[str, Any]] = []
         for run in skill_runs:
             skill_name = str(run.get("skill_name", "")).strip()
-            if not skill_name or self._is_closure_run(run) or self._is_enrichment_run(run):
+            if not skill_name or self._is_same_skill_run(run, closure_run) or self._is_enrichment_run(run):
                 continue
             payload = run.get("payload", {})
             steps.append(
@@ -1032,16 +1037,18 @@ class SentinelFlowAgentService:
             )
         return steps
 
-    def _build_closure_step(self, skill_runs: list[dict[str, Any]]) -> dict[str, Any]:
-        for run in skill_runs:
-            skill_name = str(run.get("skill_name", "")).strip()
-            if not skill_name or not self._is_closure_run(run):
-                continue
-            payload = run.get("payload", {})
-            arguments = run.get("arguments", {})
+    def _build_closure_step(
+        self,
+        skill_runs: list[dict[str, Any]],
+        closure_run: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if closure_run is not None:
+            skill_name = str(closure_run.get("skill_name", "")).strip()
+            payload = closure_run.get("payload", {})
+            arguments = closure_run.get("arguments", {})
             payload = payload if isinstance(payload, dict) else {}
             arguments = arguments if isinstance(arguments, dict) else {}
-            success = self._is_successful_closure_run(run)
+            success = self._is_successful_closure_run(closure_run)
             summary = str(
                 payload.get("detailMsg")
                 or payload.get("detail_msg")
@@ -1053,10 +1060,10 @@ class SentinelFlowAgentService:
                 "attempted": True,
                 "success": success,
                 "skill_name": skill_name,
-                "tool_name": run.get("tool_name", ""),
-                "tool_call_id": run.get("tool_call_id", ""),
-                "tool_success": run.get("tool_success"),
-                "tool_error": run.get("tool_error"),
+                "tool_name": closure_run.get("tool_name", ""),
+                "tool_call_id": closure_run.get("tool_call_id", ""),
+                "tool_success": closure_run.get("tool_success"),
+                "tool_error": closure_run.get("tool_error"),
                 "arguments": arguments,
                 "result": payload,
                 "error": payload.get("error"),
@@ -1181,22 +1188,30 @@ class SentinelFlowAgentService:
             )
         return runs
 
-    def _build_actions(self, skill_runs: list[dict[str, Any]]) -> dict[str, Any]:
+    def _build_actions(
+        self,
+        skill_runs: list[dict[str, Any]],
+        closure_run: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         actions: dict[str, Any] = {}
         for run in skill_runs:
             skill_name = str(run.get("skill_name", "")).strip()
-            if not skill_name or self._is_closure_run(run) or self._is_enrichment_run(run):
+            if not skill_name or self._is_same_skill_run(run, closure_run) or self._is_enrichment_run(run):
                 continue
             payload = run.get("payload", {})
             if isinstance(payload, dict) and payload:
                 actions[skill_name.replace("-", "_")] = payload
         return actions
 
-    def _first_closure_payload(self, skill_runs: list[dict[str, Any]]) -> dict[str, Any]:
-        for run in skill_runs:
-            if self._is_closure_run(run):
-                payload = run.get("payload", {})
-                return payload if isinstance(payload, dict) else {}
+    def _first_closure_payload(
+        self,
+        skill_runs: list[dict[str, Any]],
+        closure_run: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        selected = closure_run or self._select_closure_run(skill_runs, None)
+        if selected is not None:
+            payload = selected.get("payload", {})
+            return payload if isinstance(payload, dict) else {}
         return {}
 
     def _first_enrichment_payload(self, skill_runs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1224,10 +1239,79 @@ class SentinelFlowAgentService:
 
     def _is_closure_skill_name(self, skill_name: str) -> bool:
         normalized = skill_name.strip().lower()
-        return normalized in {"exec", "close", "soc_close", "alert_close"}
+        if normalized in {"exec", "close", "soc_close", "alert_close"}:
+            return True
+        closure_keywords = (
+            "exec",
+            "close",
+            "closure",
+            "socclose",
+            "alertclose",
+            "ticketclose",
+            "结单",
+            "闭环",
+            "关单",
+        )
+        compact = normalized.replace("-", "").replace("_", "").replace(" ", "")
+        return any(keyword in compact for keyword in closure_keywords)
+
+    def _looks_like_closure_fallback(self, run: dict[str, Any]) -> bool:
+        skill_name = str(run.get("skill_name", "")).strip()
+        if self._is_closure_skill_name(skill_name):
+            return True
+        payload = run.get("payload", {})
+        arguments = run.get("arguments", {})
+        payload = payload if isinstance(payload, dict) else {}
+        arguments = arguments if isinstance(arguments, dict) else {}
+        combined_keys = set(payload.keys()) | set(arguments.keys())
+        if {"status", "memo", "detailMsg"} <= combined_keys:
+            return True
+        closure_markers = {"status", "memo", "detailMsg", "detail_msg", "closeStatus", "close_status"}
+        if combined_keys & closure_markers:
+            return True
+        text_candidates = [
+            skill_name,
+            str(payload.get("message", "")),
+            str(payload.get("result", "")),
+            str(payload.get("raw", "")),
+            str(arguments.get("message", "")),
+            str(arguments.get("result", "")),
+        ]
+        normalized_text = " ".join(item.strip().lower() for item in text_candidates if item and str(item).strip())
+        return any(marker in normalized_text for marker in ("结单", "闭环", "关单", "close", "closed", "closure", "exec"))
+
+    def _select_closure_run(
+        self,
+        skill_runs: list[dict[str, Any]],
+        action_hint: str | None,
+    ) -> dict[str, Any] | None:
+        for run in skill_runs:
+            if self._is_closure_run(run):
+                return run
+        if action_hint not in {"triage_close", "triage_dispose"}:
+            return None
+        fallback_candidates = [
+            run
+            for run in skill_runs
+            if str(run.get("skill_name", "")).strip()
+            and not self._is_enrichment_run(run)
+            and self._looks_like_closure_fallback(run)
+        ]
+        if fallback_candidates:
+            return fallback_candidates[-1]
+        return None
+
+    def _is_same_skill_run(self, left: dict[str, Any], right: dict[str, Any] | None) -> bool:
+        if right is None:
+            return False
+        left_id = str(left.get("tool_call_id", "")).strip()
+        right_id = str(right.get("tool_call_id", "")).strip()
+        if left_id and right_id:
+            return left_id == right_id
+        return left is right
 
     def _is_successful_closure_run(self, run: dict[str, Any]) -> bool:
-        if not self._is_closure_run(run):
+        if not (self._is_closure_run(run) or self._looks_like_closure_fallback(run)):
             return False
         payload = run.get("payload", {})
         arguments = run.get("arguments", {})
@@ -1363,8 +1447,11 @@ class SentinelFlowAgentService:
         return result[:3]
 
     def _infer_closure_field(self, skill_runs: list[dict[str, Any]], field_name: str, fallback: str) -> str:
-        for run in skill_runs:
-            if not self._is_closure_run(run):
+        closure_run = self._select_closure_run(skill_runs, None)
+        if closure_run is None:
+            return fallback
+        for run in [closure_run]:
+            if not self._is_same_skill_run(run, closure_run):
                 continue
             payload = run.get("payload", {})
             if isinstance(payload, dict):
