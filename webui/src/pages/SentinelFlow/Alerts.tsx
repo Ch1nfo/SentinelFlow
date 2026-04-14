@@ -56,6 +56,30 @@ function formatIpPreview(value: unknown): { text: string; fullText: string } {
   }
 }
 
+function buildPayloadPreview(text: string, maxLines = 10, maxCharsPerLine = 120): { text: string; truncated: boolean } {
+  const rawLines = text ? text.split(/\r?\n/) : []
+  const visualLines: string[] = []
+  for (const rawLine of rawLines) {
+    if (!rawLine) {
+      visualLines.push('')
+      continue
+    }
+    let remaining = rawLine
+    while (remaining.length > maxCharsPerLine) {
+      visualLines.push(remaining.slice(0, maxCharsPerLine))
+      remaining = remaining.slice(maxCharsPerLine)
+    }
+    visualLines.push(remaining)
+  }
+  if (visualLines.length <= maxLines) {
+    return { text, truncated: false }
+  }
+  return {
+    text: visualLines.slice(0, maxLines).join('\n'),
+    truncated: true,
+  }
+}
+
 function getTaskStatusClass(task: AlertTask): string {
   if (task.status === 'running') return 'running'
   if (task.status === 'queued') return 'queued'
@@ -190,12 +214,9 @@ export default function SentinelFlowAlertsPage() {
   const selectedTask = tasks.find((task) => task.task_id === selectedTaskId) ?? tasks[0] ?? null
   const selectedPayload = getSelectedAlertPayload(selectedTask)
   const selectedPayloadText = String(selectedPayload.payload ?? '').trim()
-  const selectedPayloadLines = selectedPayloadText ? selectedPayloadText.split(/\r?\n/) : []
-  const selectedPayloadLineCount = selectedPayloadLines.length
-  const shouldCollapsePayload = selectedPayloadLineCount > 10
-  const collapsedPayloadText = shouldCollapsePayload
-    ? selectedPayloadLines.slice(0, 10).join('\n')
-    : selectedPayloadText
+  const payloadPreview = buildPayloadPreview(selectedPayloadText, 10, 120)
+  const shouldCollapsePayload = payloadPreview.truncated
+  const collapsedPayloadText = payloadPreview.text
   const workflowSelection = (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ?? {}
   const selectedResult = (selectedTask?.last_result_data ?? {}) as Record<string, unknown>
   const selectedWorkflowRuns = normalizeWorkflowRuns(selectedResult.workflow_runs)
