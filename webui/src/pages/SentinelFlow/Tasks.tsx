@@ -457,19 +457,19 @@ export default function SentinelFlowTasksPage() {
                     <div className="sentinelflow-context-card"><strong>当前研判</strong><span>{String(selectedPayload.current_judgment ?? '未提供')}</span></div>
                   </div>
 
-                  {workflowDecision ? (
+                  {selectedWorkflowRun && workflowDecision ? (
                     <div className="rounded-xl border border-amber-100 bg-amber-50 p-4">
                       <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Workflow 调用</div>
                       <div className="mt-2 text-sm font-semibold text-amber-950">
-                        {selectedWorkflowRun ? `主 Agent 调用了流程：${workflowDecision}` : `当前入口方式：${workflowDecision}`}
+                        {`主 Agent 调用了流程：${workflowDecision}`}
                       </div>
                       {workflowDecisionReason ? (
                         <div className="mt-2 text-sm text-amber-900">
-                          {selectedWorkflowRun ? `Workflow 返回：${workflowDecisionReason}` : workflowDecisionReason}
+                          {`Workflow 返回：${workflowDecisionReason}`}
                         </div>
                       ) : (
                         <div className="mt-2 text-sm text-amber-900">
-                          {selectedWorkflowRun ? '该 Workflow 已作为主 Agent 的一个中间能力被调用。' : '当前任务未记录独立 Workflow 调用。'}
+                          该 Workflow 已作为主 Agent 的一个中间能力被调用。
                         </div>
                       )}
                     </div>

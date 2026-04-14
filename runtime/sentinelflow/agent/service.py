@@ -1171,9 +1171,10 @@ class SentinelFlowAgentService:
             if not isinstance(business_payload, dict):
                 business_payload = {"result": business_payload}
 
-            merged_payload = dict(business_payload)
-            for key, value in arguments.items():
-                merged_payload.setdefault(key, value)
+            computed_success = self._compute_skill_run_success(
+                tool_payload=tool_payload,
+                business_payload=business_payload,
+            )
             runs.append(
                 {
                     "skill_name": skill_name,
@@ -1183,13 +1184,30 @@ class SentinelFlowAgentService:
                     "tool_error": tool_payload.get("error"),
                     "tool_payload": tool_payload,
                     "arguments": arguments,
-                    "payload": merged_payload,
-                    "success": (bool(tool_payload.get("success")) if isinstance(tool_payload.get("success"), bool) else not bool(tool_payload.get("error")))
-                    and not bool(merged_payload.get("error"))
-                    and not (isinstance(merged_payload.get("success"), bool) and not bool(merged_payload.get("success"))),
+                    "payload": dict(business_payload),
+                    "success": computed_success,
                 }
             )
         return runs
+
+    def _compute_skill_run_success(
+        self,
+        *,
+        tool_payload: dict[str, Any],
+        business_payload: dict[str, Any],
+    ) -> bool:
+        tool_error = tool_payload.get("error")
+        if bool(tool_error):
+            return False
+        tool_success = tool_payload.get("success")
+        if isinstance(tool_success, bool) and not tool_success:
+            return False
+        if bool(business_payload.get("error")):
+            return False
+        business_success = business_payload.get("success")
+        if isinstance(business_success, bool):
+            return business_success
+        return True
 
     def _build_actions(
         self,
@@ -1235,7 +1253,7 @@ class SentinelFlowAgentService:
         combined_keys = set(payload.keys()) | set(arguments.keys())
         if {"status", "memo", "detailMsg"}.issubset(combined_keys):
             return True
-        closure_markers = {"status", "memo", "detailMsg", "detail_msg", "closeStatus", "close_status", "result", "success"}
+        closure_markers = {"status", "memo", "detailMsg", "detail_msg", "closeStatus", "close_status"}
         return bool(combined_keys & closure_markers) and (
             "memo" in combined_keys or "detailMsg" in combined_keys or "detail_msg" in combined_keys or "status" in combined_keys
         )
@@ -1340,10 +1358,13 @@ class SentinelFlowAgentService:
             if normalized in {"fail", "failed", "false", "error"}:
                 return False
         if isinstance(status_value, str) and status_value.strip():
+            normalized_status = status_value.strip().lower()
+            if normalized_status in {"fail", "failed", "false", "error", "0", "-1"}:
+                return False
             return True
         if isinstance(tool_success, bool):
             return tool_success
-        return bool(payload)
+        return False
 
     def _is_enrichment_run(self, run: dict[str, Any]) -> bool:
         if self._is_closure_run(run):

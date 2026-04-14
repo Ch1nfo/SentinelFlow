@@ -127,6 +127,7 @@ export default function SentinelFlowAlertsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [payloadExpanded, setPayloadExpanded] = useState(false)
   const [actionState, setActionState] = useState<{ action: string; running: boolean }>({ action: '', running: false })
   const [actionResult, setActionResult] = useState<AlertActionResponse | null>(null)
   const autoExecuteEnabled = Boolean(data?.auto_execute_enabled)
@@ -182,8 +183,15 @@ export default function SentinelFlowAlertsPage() {
     })
   }, [tasks])
 
+  useEffect(() => {
+    setPayloadExpanded(false)
+  }, [selectedTaskId])
+
   const selectedTask = tasks.find((task) => task.task_id === selectedTaskId) ?? tasks[0] ?? null
   const selectedPayload = getSelectedAlertPayload(selectedTask)
+  const selectedPayloadText = String(selectedPayload.payload ?? '').trim()
+  const selectedPayloadLineCount = selectedPayloadText ? selectedPayloadText.split(/\r?\n/).length : 0
+  const shouldCollapsePayload = selectedPayloadLineCount > 10
   const workflowSelection = (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ?? {}
   const selectedResult = (selectedTask?.last_result_data ?? {}) as Record<string, unknown>
   const selectedWorkflowRuns = normalizeWorkflowRuns(selectedResult.workflow_runs)
@@ -351,10 +359,22 @@ export default function SentinelFlowAlertsPage() {
                   <div className="sentinelflow-context-card"><strong>当前研判</strong><span>{String(selectedPayload.current_judgment ?? '未提供')}</span></div>
                   <div className="sentinelflow-context-card"><strong>历史研判</strong><span>{String(selectedPayload.history_judgment ?? '未提供')}</span></div>
                 </div>
-                {String(selectedPayload.payload ?? '').trim() ? (
+                {selectedPayloadText ? (
                   <div className="rounded-xl border border-slate-200 bg-white p-4">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">告警 Payload</div>
-                    <pre className="overflow-x-auto whitespace-pre-wrap text-xs leading-6 text-slate-700">{String(selectedPayload.payload ?? '')}</pre>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">告警 Payload</div>
+                      {shouldCollapsePayload ? (
+                        <button type="button" className="sentinelflow-ghost-button" onClick={() => setPayloadExpanded((current) => !current)}>
+                          {payloadExpanded ? '收起' : '展开'}
+                        </button>
+                      ) : null}
+                    </div>
+                    <pre
+                      className="overflow-x-auto whitespace-pre-wrap text-xs leading-6 text-slate-700"
+                      style={shouldCollapsePayload && !payloadExpanded ? { maxHeight: '15rem', overflow: 'hidden' } : undefined}
+                    >
+                      {selectedPayloadText}
+                    </pre>
                   </div>
                 ) : null}
                 <div className="sentinelflow-action-bar">
@@ -363,19 +383,19 @@ export default function SentinelFlowAlertsPage() {
                     <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('retry_task')} disabled={actionState.running}>重试任务</button>
                   ) : null}
                 </div>
-                {workflowDecision ? (
+                {selectedWorkflowRun && workflowDecision ? (
                   <div className="rounded-xl border border-amber-100 bg-amber-50 p-4">
                     <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Workflow 调用</div>
                     <div className="mt-2 text-sm font-semibold text-amber-950">
-                      {selectedWorkflowRun ? `主 Agent 调用了流程：${workflowDecision}` : `当前入口方式：${workflowDecision}`}
+                      {`主 Agent 调用了流程：${workflowDecision}`}
                     </div>
                     {workflowDecisionReason ? (
                       <div className="mt-2 text-sm text-amber-900">
-                        {selectedWorkflowRun ? `Workflow 返回：${workflowDecisionReason}` : workflowDecisionReason}
+                        {`Workflow 返回：${workflowDecisionReason}`}
                       </div>
                     ) : (
                       <div className="mt-2 text-sm text-amber-900">
-                        {selectedWorkflowRun ? '该 Workflow 已作为主 Agent 的一个中间能力被调用。' : '当前告警未记录独立 Workflow 调用。'}
+                        该 Workflow 已作为主 Agent 的一个中间能力被调用。
                       </div>
                     )}
                   </div>
