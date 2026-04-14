@@ -1145,7 +1145,10 @@ class SentinelFlowAgentService:
                     tool_message = ordered_tool_messages[tool_index]
                     tool_index += 1
                     candidate_id = str(tool_message.get("tool_call_id", "")).strip()
+                    candidate_name = str(tool_message.get("name", "")).strip()
                     if candidate_id and candidate_id != tool_call_id:
+                        continue
+                    if candidate_name and candidate_name != tool_name:
                         continue
                     matched_message = tool_message
                     break

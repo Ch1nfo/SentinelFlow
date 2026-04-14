@@ -421,17 +421,19 @@ export default function SentinelFlowTasksPage() {
           <div className="sentinelflow-grid-2">
             <div className="sentinelflow-detail-panel">
               <h3>筛选结果</h3>
-              <div className="sentinelflow-task-list">
-                {filteredTasks.length ? filteredTasks.map((task) => (
-                  <button key={task.task_id} type="button" className={`sentinelflow-task-tile${selectedTask?.task_id === task.task_id ? ' sentinelflow-task-tile-active' : ''}`} onClick={() => setSelectedTaskId(task.task_id)}>
-                    <div className="sentinelflow-response-row">
-                      <strong>{task.title}</strong>
-                      <StatusBadge tone={getTone(task)}>{getTaskStatusLabel(task.status)}</StatusBadge>
-                    </div>
-                    <span>{task.alert_time || '未提供告警时间'}</span>
-                    <span>{getTaskFlowLabel(task)}</span>
-                  </button>
-                )) : <p className="sentinelflow-muted-text">当前筛选条件下没有任务。</p>}
+              <div className="sentinelflow-task-list-scroll">
+                <div className="sentinelflow-task-list">
+                  {filteredTasks.length ? filteredTasks.map((task) => (
+                    <button key={task.task_id} type="button" className={`sentinelflow-task-tile${selectedTask?.task_id === task.task_id ? ' sentinelflow-task-tile-active' : ''}`} onClick={() => setSelectedTaskId(task.task_id)}>
+                      <div className="sentinelflow-response-row">
+                        <strong>{task.title}</strong>
+                        <StatusBadge tone={getTone(task)}>{getTaskStatusLabel(task.status)}</StatusBadge>
+                      </div>
+                      <span>{task.alert_time || '未提供告警时间'}</span>
+                      <span>{getTaskFlowLabel(task)}</span>
+                    </button>
+                  )) : <p className="sentinelflow-muted-text">当前筛选条件下没有任务。</p>}
+                </div>
               </div>
             </div>
 
