@@ -190,8 +190,12 @@ export default function SentinelFlowAlertsPage() {
   const selectedTask = tasks.find((task) => task.task_id === selectedTaskId) ?? tasks[0] ?? null
   const selectedPayload = getSelectedAlertPayload(selectedTask)
   const selectedPayloadText = String(selectedPayload.payload ?? '').trim()
-  const selectedPayloadLineCount = selectedPayloadText ? selectedPayloadText.split(/\r?\n/).length : 0
+  const selectedPayloadLines = selectedPayloadText ? selectedPayloadText.split(/\r?\n/) : []
+  const selectedPayloadLineCount = selectedPayloadLines.length
   const shouldCollapsePayload = selectedPayloadLineCount > 10
+  const collapsedPayloadText = shouldCollapsePayload
+    ? selectedPayloadLines.slice(0, 10).join('\n')
+    : selectedPayloadText
   const workflowSelection = (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ?? {}
   const selectedResult = (selectedTask?.last_result_data ?? {}) as Record<string, unknown>
   const selectedWorkflowRuns = normalizeWorkflowRuns(selectedResult.workflow_runs)
@@ -371,9 +375,8 @@ export default function SentinelFlowAlertsPage() {
                     </div>
                     <pre
                       className="overflow-x-auto whitespace-pre-wrap text-xs leading-6 text-slate-700"
-                      style={shouldCollapsePayload && !payloadExpanded ? { maxHeight: '15rem', overflow: 'hidden' } : undefined}
                     >
-                      {selectedPayloadText}
+                      {shouldCollapsePayload && !payloadExpanded ? collapsedPayloadText : selectedPayloadText}
                     </pre>
                   </div>
                 ) : null}
