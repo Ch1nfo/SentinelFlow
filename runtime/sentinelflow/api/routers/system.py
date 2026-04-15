@@ -45,6 +45,7 @@ def runtime_settings() -> dict[str, Any]:
         },
         "runtime": {
             "poll_interval_seconds": str(runtime_config.poll_interval_seconds),
+            "failed_retry_interval_seconds": str(runtime_config.failed_retry_interval_seconds),
             "workflow_engine": branding.workflow_engine_label,
             "agent_enabled": runtime_config.agent_enabled,
             "auto_execute_enabled": runtime_config.auto_execute_enabled,

@@ -83,6 +83,7 @@ class AlertHandlingTask:
     title: str
     description: str
     alert_time: str = ""
+    updated_at: str = ""
     status: str = "queued"
     retry_count: int = 0
     last_action: str = ""

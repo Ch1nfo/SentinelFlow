@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Clock, ListTodo, RotateCcw, ShieldCheck, XCircle } from 'lucide-react'
 import {
   fetchPollAlerts,
@@ -223,6 +223,9 @@ export default function SentinelFlowTasksPage() {
   const [filter, setFilter] = useState<TaskFilter>(() => readSessionValue<TaskFilter>(TASK_FILTER_KEY, 'all'))
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [processExpanded, setProcessExpanded] = useState(false)
+  const taskListPanelRef = useRef<HTMLDivElement | null>(null)
+  const detailPanelRef = useRef<HTMLDivElement | null>(null)
+  const [taskListMaxHeight, setTaskListMaxHeight] = useState<number | null>(null)
   const tasks = poll?.tasks ?? []
   const autoExecuteEnabled = Boolean(poll?.auto_execute_enabled)
   const autoExecuteRunning = Boolean(poll?.auto_execute_running)
@@ -254,6 +257,30 @@ export default function SentinelFlowTasksPage() {
   useEffect(() => {
     setProcessExpanded(false)
   }, [selectedTaskId])
+
+  useEffect(() => {
+    const detailNode = detailPanelRef.current
+    const listPanelNode = taskListPanelRef.current
+    if (!detailNode || !listPanelNode || typeof ResizeObserver === 'undefined') return
+
+    const syncHeight = () => {
+      const detailHeight = Math.max(0, Math.round(detailNode.getBoundingClientRect().height))
+      const scrollNode = listPanelNode.querySelector('.sentinelflow-task-list-scroll') as HTMLDivElement | null
+      const scrollHeight = scrollNode?.clientHeight ?? 0
+      const chromeHeight = Math.max(
+        0,
+        Math.round(listPanelNode.scrollHeight - scrollHeight),
+      )
+      const nextHeight = Math.max(0, detailHeight - chromeHeight)
+      setTaskListMaxHeight(nextHeight || null)
+    }
+
+    syncHeight()
+    const observer = new ResizeObserver(() => syncHeight())
+    observer.observe(detailNode)
+    observer.observe(listPanelNode)
+    return () => observer.disconnect()
+  }, [selectedTaskId, processExpanded, filteredTasks.length, selectedTask?.task_id, selectedTask?.status])
 
   const refreshTasks = useCallback(() => {
     void fetchPollAlerts().then((next) => {
@@ -422,9 +449,12 @@ export default function SentinelFlowTasksPage() {
         {error ? <div className="sentinelflow-message-block sentinelflow-message-error">{error}</div> : null}
         {!loading && !error ? (
           <div className="sentinelflow-grid-2">
-            <div className="sentinelflow-detail-panel">
+            <div ref={taskListPanelRef} className="sentinelflow-detail-panel">
               <h3>筛选结果</h3>
-              <div className="sentinelflow-task-list-scroll">
+              <div
+                className="sentinelflow-task-list-scroll"
+                style={taskListMaxHeight ? { maxHeight: `${taskListMaxHeight}px` } : undefined}
+              >
                 <div className="sentinelflow-task-list">
                   {filteredTasks.length ? filteredTasks.map((task) => (
                     <button key={task.task_id} type="button" className={`sentinelflow-task-tile${selectedTask?.task_id === task.task_id ? ' sentinelflow-task-tile-active' : ''}`} onClick={() => setSelectedTaskId(task.task_id)}>
@@ -440,7 +470,7 @@ export default function SentinelFlowTasksPage() {
               </div>
             </div>
 
-            <div className="sentinelflow-detail-panel">
+            <div ref={detailPanelRef} className="sentinelflow-detail-panel">
               <h3>任务详情</h3>
               {selectedTask ? (
                 <div className="sentinelflow-response-stack">

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from sentinelflow.config.runtime import load_runtime_config
 from sentinelflow.services.audit_service import AuditService
 from sentinelflow.services.dispatch_service import AlertDispatchService
 
@@ -93,7 +94,9 @@ class AlertAutoExecutionService:
 
     async def _run_pending_once(self) -> list[dict[str, Any]]:
         queued_tasks = [task for task in self.dispatch_service.list_tasks() if task.status == "queued"]
-        if not queued_tasks:
+        retry_interval_seconds = max(int(load_runtime_config().failed_retry_interval_seconds or 0), 0)
+        retry_tasks = self.dispatch_service.list_failed_retry_candidates(retry_interval_seconds, max_retry_count=3)
+        if not queued_tasks and not retry_tasks:
             return []
 
         self._running = True
@@ -103,6 +106,23 @@ class AlertAutoExecutionService:
                 if self._stop_event.is_set() or not self._enabled:
                     break
                 results.append(await self.task_runner_service.run_task(task))
+            for failed_task in retry_tasks:
+                if self._stop_event.is_set() or not self._enabled:
+                    break
+                prepared = self.dispatch_service.prepare_retry(failed_task.task_id)
+                if not prepared:
+                    continue
+                self.audit_service.record(
+                    "auto_retry_scheduled",
+                    f"Automatically retried failed alert task {prepared.task_id}.",
+                    {
+                        "taskId": prepared.task_id,
+                        "eventIds": prepared.event_ids,
+                        "retryCount": prepared.retry_count,
+                        "retryIntervalSeconds": retry_interval_seconds,
+                    },
+                )
+                results.append(await self.task_runner_service.run_task(prepared))
         finally:
             self._running = False
         return results

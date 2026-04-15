@@ -132,6 +132,7 @@ export type RuntimeSettingsResponse = {
   }
   runtime: {
     poll_interval_seconds: string
+    failed_retry_interval_seconds: string
     workflow_engine: string
     agent_enabled: boolean
   }
@@ -601,6 +602,7 @@ export async function fetchRuntimeSettings(): Promise<RuntimeSettingsResponse> {
 
 export async function saveRuntimeSettings(payload: {
   pollIntervalSeconds: string
+  failedRetryIntervalSeconds: string
   agentEnabled: boolean
   llmApiBaseUrl: string
   llmApiKey?: string

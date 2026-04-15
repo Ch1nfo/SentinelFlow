@@ -8,7 +8,7 @@ from sentinelflow.api.deps import dispatch_service, SKILL_ROOT, AGENT_ROOT, WORK
 from sentinelflow.agent.registry import SYSTEM_PRIMARY_AGENT_NAME, list_agent_definitions, load_agent_definition
 
 VISIBLE_RUNTIME_OVERRIDE_KEYS = {
-    "poll_interval_seconds", "agent_enabled", "llm_api_base_url", "llm_api_key",
+    "poll_interval_seconds", "failed_retry_interval_seconds", "agent_enabled", "llm_api_base_url", "llm_api_key",
     "llm_model", "llm_temperature", "llm_timeout", "alert_source_enabled",
     "alert_source_type", "alert_source_url", "alert_source_method",
     "alert_source_headers", "alert_source_query", "alert_source_body",

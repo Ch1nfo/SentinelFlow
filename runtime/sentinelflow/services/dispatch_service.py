@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import threading
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from sentinelflow.alerts.dedup import AlertDedupStore
@@ -11,6 +12,10 @@ from sentinelflow.services.triage_service import TriageService
 from sentinelflow.config.runtime import CONFIG_DIR
 
 DB_PATH = CONFIG_DIR / "sys_queue.db"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 class AlertDispatchService:
     """Dispatches fresh alerts into queued SentinelFlow handling tasks (SQLite backed)."""
@@ -36,6 +41,7 @@ class AlertDispatchService:
                     title TEXT,
                     description TEXT,
                     alert_time TEXT,
+                    updated_at TEXT,
                     status TEXT,
                     retry_count INTEGER,
                     last_action TEXT,
@@ -51,6 +57,9 @@ class AlertDispatchService:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(alert_tasks)").fetchall()}
         if "alert_time" not in columns:
             conn.execute("ALTER TABLE alert_tasks ADD COLUMN alert_time TEXT DEFAULT ''")
+        if "updated_at" not in columns:
+            conn.execute("ALTER TABLE alert_tasks ADD COLUMN updated_at TEXT DEFAULT ''")
+            conn.execute("UPDATE alert_tasks SET updated_at = COALESCE(updated_at, '') WHERE updated_at = ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_tasks_event_ids ON alert_tasks(event_ids)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_tasks_status ON alert_tasks(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_tasks_event_status ON alert_tasks(event_ids, status)")
@@ -68,6 +77,7 @@ class AlertDispatchService:
             title=row["title"],
             description=row["description"],
             alert_time=row["alert_time"] if "alert_time" in row.keys() else "",
+            updated_at=row["updated_at"] if "updated_at" in row.keys() else "",
             status=row["status"],
             retry_count=row["retry_count"],
             last_action=row["last_action"],
@@ -81,11 +91,11 @@ class AlertDispatchService:
         with self.lock, sqlite_transaction(DB_PATH, begin_mode="IMMEDIATE") as conn:
             conn.execute('''
                 INSERT OR REPLACE INTO alert_tasks
-                (task_id, event_ids, workflow_name, title, description, alert_time, status, retry_count, last_action, last_result_success, last_result_error, last_result_data, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (task_id, event_ids, workflow_name, title, description, alert_time, updated_at, status, retry_count, last_action, last_result_success, last_result_error, last_result_data, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 task.task_id, task.event_ids, task.workflow_name, task.title, task.description,
-                task.alert_time, task.status, task.retry_count, task.last_action, 
+                task.alert_time, task.updated_at or _now_iso(), task.status, task.retry_count, task.last_action,
                 1 if task.last_result_success else (0 if task.last_result_success is False else None),
                 task.last_result_error, json.dumps(task.last_result_data), json.dumps(task.payload)
             ))
@@ -95,8 +105,8 @@ class AlertDispatchService:
             cursor = conn.execute(
                 '''
                 INSERT INTO alert_tasks
-                (task_id, event_ids, workflow_name, title, description, alert_time, status, retry_count, last_action, last_result_success, last_result_error, last_result_data, payload)
-                SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                (task_id, event_ids, workflow_name, title, description, alert_time, updated_at, status, retry_count, last_action, last_result_success, last_result_error, last_result_data, payload)
+                SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 WHERE NOT EXISTS (
                     SELECT 1 FROM alert_tasks WHERE event_ids = ?
                 )
@@ -108,6 +118,7 @@ class AlertDispatchService:
                     task.title,
                     task.description,
                     task.alert_time,
+                    task.updated_at or _now_iso(),
                     task.status,
                     task.retry_count,
                     task.last_action,
@@ -129,6 +140,10 @@ class AlertDispatchService:
     ) -> AlertHandlingTask | None:
         if not updates:
             return self.get_task(task_id)
+        updates = {
+            **updates,
+            "updated_at": updates.get("updated_at") or _now_iso(),
+        }
 
         assignments = ", ".join(f"{column} = ?" for column in updates)
         params: list[Any] = list(updates.values())
@@ -204,6 +219,61 @@ class AlertDispatchService:
             if task.event_ids in active_event_ids:
                 continue
             previous_status = task.status
+            existing_result = dict(task.last_result_data) if isinstance(task.last_result_data, dict) else {}
+            existing_trace = existing_result.get("execution_trace", [])
+            if not isinstance(existing_trace, list):
+                existing_trace = []
+            preserved_trace = [
+                dict(item)
+                for item in existing_trace
+                if isinstance(item, dict)
+            ]
+            if not preserved_trace:
+                alert_data = (
+                    task.payload.get("alert_data", {})
+                    if isinstance(task.payload, dict) and isinstance(task.payload.get("alert_data"), dict)
+                    else {}
+                )
+                preserved_trace = [
+                    {
+                        "phase": "alert_received",
+                        "title": "接收告警",
+                        "summary": "已接收任务告警上下文。",
+                        "success": True,
+                        "data": {
+                            "eventIds": task.event_ids,
+                            "alert_name": str(alert_data.get("alert_name", task.title)).strip(),
+                            "sip": alert_data.get("sip", ""),
+                            "dip": alert_data.get("dip", ""),
+                            "alert_time": alert_data.get("alert_time", task.alert_time),
+                        },
+                    }
+                ]
+            updated_result = {
+                **existing_result,
+                "summary": str(existing_result.get("summary") or "已被人工处置").strip(),
+                "reason": str(
+                    existing_result.get("reason")
+                    or f"本次轮询未再发现该 {previous_status} 告警，按人工处置完成收口。"
+                ).strip(),
+                "disposition": str(existing_result.get("disposition") or "handled_manually").strip(),
+                "success": True,
+                "execution_trace": [
+                    *preserved_trace,
+                    {
+                        "phase": "completed_externally",
+                        "title": "外部收口",
+                        "summary": f"本次轮询未再发现该 {previous_status} 告警，按人工处置完成收口。",
+                        "success": True,
+                        "data": {
+                            "success": True,
+                            "status": "completed",
+                            "previous_status": previous_status,
+                            "action": "refresh_poll",
+                        },
+                    },
+                ],
+            }
             updated_task = self._update_task_columns(
                 task.task_id,
                 {
@@ -211,58 +281,7 @@ class AlertDispatchService:
                     "last_action": "refresh_poll",
                     "last_result_success": 1,
                     "last_result_error": None,
-                    "last_result_data": json.dumps(
-                        {
-                            "summary": "已被人工处置",
-                            "reason": f"本次轮询未再发现该 {previous_status} 告警，按人工处置完成收口。",
-                            "disposition": "handled_manually",
-                            "execution_trace": [
-                                {
-                                    "phase": "alert_received",
-                                    "title": "接收告警",
-                                    "summary": "已接收任务告警上下文。",
-                                    "success": True,
-                                    "data": {
-                                        "eventIds": task.event_ids,
-                                        "alert_name": str(
-                                            (
-                                                task.payload.get("alert_data", {})
-                                                if isinstance(task.payload, dict) and isinstance(task.payload.get("alert_data"), dict)
-                                                else {}
-                                            ).get("alert_name", task.title)
-                                        ).strip(),
-                                        "sip": (
-                                            task.payload.get("alert_data", {}).get("sip", "")
-                                            if isinstance(task.payload, dict) and isinstance(task.payload.get("alert_data"), dict)
-                                            else ""
-                                        ),
-                                        "dip": (
-                                            task.payload.get("alert_data", {}).get("dip", "")
-                                            if isinstance(task.payload, dict) and isinstance(task.payload.get("alert_data"), dict)
-                                            else ""
-                                        ),
-                                        "alert_time": (
-                                            task.payload.get("alert_data", {}).get("alert_time", task.alert_time)
-                                            if isinstance(task.payload, dict) and isinstance(task.payload.get("alert_data"), dict)
-                                            else task.alert_time
-                                        ),
-                                    },
-                                },
-                                {
-                                    "phase": "final_status",
-                                    "title": "最终执行状态",
-                                    "summary": f"本次轮询未再发现该 {previous_status} 告警，按人工处置完成收口。",
-                                    "success": True,
-                                    "data": {
-                                        "success": True,
-                                        "status": "completed",
-                                        "previous_status": previous_status,
-                                        "action": "refresh_poll",
-                                    },
-                                },
-                            ],
-                        }
-                    ),
+                    "last_result_data": json.dumps(updated_result),
                 },
                 expected_statuses=["queued", "failed"],
             )
@@ -370,6 +389,31 @@ class AlertDispatchService:
                 "SELECT * FROM alert_tasks WHERE status IN ('queued', 'failed')"
             ).fetchall()
             return [self._row_to_task(row) for row in rows]
+
+    def list_failed_retry_candidates(self, retry_interval_seconds: int, max_retry_count: int = 3) -> list[AlertHandlingTask]:
+        if retry_interval_seconds <= 0:
+            return []
+        with self.lock, self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM alert_tasks WHERE status = 'failed' AND retry_count < ?",
+                (max_retry_count,),
+            ).fetchall()
+            candidates = [self._row_to_task(row) for row in rows]
+        now = datetime.now(timezone.utc)
+        eligible: list[AlertHandlingTask] = []
+        for task in candidates:
+            updated_at = str(task.updated_at or "").strip()
+            if not updated_at:
+                continue
+            try:
+                updated_dt = datetime.fromisoformat(updated_at)
+            except ValueError:
+                continue
+            if updated_dt.tzinfo is None:
+                updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+            if (now - updated_dt).total_seconds() >= retry_interval_seconds:
+                eligible.append(task)
+        return eligible
 
     def list_tasks(self) -> list[AlertHandlingTask]:
         with self.lock, self._get_conn() as conn:

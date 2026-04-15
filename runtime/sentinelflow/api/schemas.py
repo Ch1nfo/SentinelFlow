@@ -17,6 +17,7 @@ class AlertActionRequest(BaseModel):
 
 class RuntimeConfigRequest(BaseModel):
     poll_interval_seconds: int | None = Field(default=None, alias="pollIntervalSeconds")
+    failed_retry_interval_seconds: int | None = Field(default=None, alias="failedRetryIntervalSeconds")
     demo_mode: bool | None = Field(default=None, alias="demoMode")
     demo_fallback: bool | None = Field(default=None, alias="demoFallback")
     verify_ssl: bool | None = Field(default=None, alias="verifySsl")
@@ -43,6 +44,7 @@ class RuntimeConfigRequest(BaseModel):
     def to_payload(self) -> dict[str, Any]:
         payload = {
             "poll_interval_seconds": self.poll_interval_seconds,
+            "failed_retry_interval_seconds": self.failed_retry_interval_seconds,
             "demo_mode": self.demo_mode,
             "demo_fallback": self.demo_fallback,
             "verify_ssl": self.verify_ssl,

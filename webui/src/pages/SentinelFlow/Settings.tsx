@@ -22,6 +22,7 @@ const SETTINGS_DRAFT_KEY = 'sentinelflow:settings:draft'
 
 type SettingsDraft = {
   pollIntervalSeconds: string
+  failedRetryIntervalSeconds: string
   agentEnabled: boolean
   llmApiBaseUrl: string
   llmApiKey: string
@@ -45,6 +46,7 @@ type SettingsDraft = {
 function buildDraft(settings: RuntimeSettingsResponse): SettingsDraft {
   return {
     pollIntervalSeconds: settings.runtime.poll_interval_seconds,
+    failedRetryIntervalSeconds: settings.runtime.failed_retry_interval_seconds,
     agentEnabled: settings.runtime.agent_enabled,
     llmApiBaseUrl: settings.llm.api_base_url,
     llmApiKey: '',
@@ -77,6 +79,7 @@ export default function SentinelFlowSettingsPage() {
   const [draft, setDraft] = useState<SettingsDraft>(() =>
     readSessionValue<SettingsDraft>(SETTINGS_DRAFT_KEY, {
       pollIntervalSeconds: '',
+      failedRetryIntervalSeconds: '0',
       agentEnabled: true,
       llmApiBaseUrl: 'https://api.openai.com/v1',
       llmApiKey: '',
@@ -317,6 +320,7 @@ export default function SentinelFlowSettingsPage() {
                   { label: '产品名称', value: settings.branding.product_name || brand.productName },
                   { label: '控制台标题', value: settings.branding.console_title || brand.consoleTitle },
                   { label: '轮询周期', value: `${settings.runtime.poll_interval_seconds} 秒` },
+                  { label: '失败重试', value: Number(settings.runtime.failed_retry_interval_seconds) > 0 ? `${settings.runtime.failed_retry_interval_seconds} 秒后自动重试` : '未启用' },
                   { label: '告警接入', value: settings.alert_source.enabled ? `已启用 · ${settings.alert_source.type === 'script' ? '脚本' : '接口'}` : '未启用' },
                 ]}
               />
@@ -371,6 +375,7 @@ export default function SentinelFlowSettingsPage() {
           </div>
           <div className="sentinelflow-settings-form">
             <label className="sentinelflow-settings-field"><span>告警轮询间隔（秒）</span><input className="sentinelflow-settings-input" value={draft.pollIntervalSeconds} onChange={(event) => updateDraft('pollIntervalSeconds', event.target.value)} /></label>
+            <label className="sentinelflow-settings-field"><span>处置失败重试间隔（秒）</span><input className="sentinelflow-settings-input" value={draft.failedRetryIntervalSeconds} onChange={(event) => updateDraft('failedRetryIntervalSeconds', event.target.value)} placeholder="0 表示关闭自动重试" /></label>
             <label className="sentinelflow-settings-field"><span>接入方式</span><select className="sentinelflow-settings-input" value={draft.alertSourceType} onChange={(event) => updateDraft('alertSourceType', event.target.value)}><option value="api">接口接入</option><option value="script">脚本接入</option></select></label>
             {!isScriptMode ? (
               <>

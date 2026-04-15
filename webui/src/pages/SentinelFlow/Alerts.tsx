@@ -487,17 +487,13 @@ export default function SentinelFlowAlertsPage() {
                 <div className="text-xs text-emerald-800">封禁 IP 数</div>
                 <div className="mt-1 text-2xl font-bold text-emerald-950">{summary?.operations.banned_ip_count ?? 0}</div>
               </div>
-              <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-                <div className="text-xs text-blue-800">成功处置</div>
-                <div className="mt-1 text-2xl font-bold text-blue-950">{summary?.operations.disposed_success ?? 0}</div>
-              </div>
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
                 <div className="text-xs text-amber-800">人工处置</div>
                 <div className="mt-1 text-2xl font-bold text-amber-950">{summary?.operations.manual_completed ?? 0}</div>
               </div>
             </div>
-            <div className="mt-4">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">已封禁 IP</div>
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="text-xs text-slate-700">已封禁 IP</div>
               <div className="sentinelflow-quick-actions">
                 {(summary?.operations.banned_ips ?? []).length > 0 ? (
                   (summary?.operations.banned_ips ?? []).map((ip) => (
