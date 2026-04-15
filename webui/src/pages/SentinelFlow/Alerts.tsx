@@ -312,7 +312,7 @@ export default function SentinelFlowAlertsPage() {
         </div>
 
         <div className="mb-4 grid gap-4 xl:grid-cols-2 xl:items-start">
-          <div className="sentinelflow-inline-metrics">
+          <div className="sentinelflow-inline-metrics xl:min-h-[42px] xl:items-center">
             <span>拉取：{data?.fetched_count ?? 0}</span>
             <span>排队：{data?.queued_count ?? 0}</span>
             <span>更新：{data?.updated_count ?? 0}</span>

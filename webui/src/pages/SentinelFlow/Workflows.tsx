@@ -389,11 +389,14 @@ export default function SentinelFlowWorkflowsPage() {
                   <textarea className="sentinelflow-command-input" rows={4} placeholder="流程描述" value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} />
 
                   <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-                    <input className="sentinelflow-settings-input" placeholder="明显已知模式的命中关键词，用逗号分隔，如 攻击, 恶意, 封禁" value={draft.selectionKeywords} onChange={(event) => setDraft((current) => ({ ...current, selectionKeywords: event.target.value }))} />
+                    <input className="sentinelflow-settings-input" placeholder="推荐命中线索，用逗号分隔，如 攻击, 恶意, 封禁" value={draft.selectionKeywords} onChange={(event) => setDraft((current) => ({ ...current, selectionKeywords: event.target.value }))} />
                     <select className="sentinelflow-settings-input" value={draft.enabled ? 'enabled' : 'disabled'} onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.value === 'enabled' }))}>
                       <option value="enabled">已启用</option>
                       <option value="disabled">已停用</option>
                     </select>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                    推荐命中线索只作为主 Agent 判断是否调用该 Workflow 的参考信息；当你切换为“已停用”后，该 Workflow 不会出现在主 Agent 的可用 Workflow 列表中，也无法被调用。
                   </div>
 
                   <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
@@ -525,7 +528,7 @@ export default function SentinelFlowWorkflowsPage() {
 
                   {detail.selection_keywords?.length ? (
                     <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                      <div className="mb-2 text-sm font-semibold text-gray-900">明显已知模式关键词</div>
+                      <div className="mb-2 text-sm font-semibold text-gray-900">推荐命中线索</div>
                       <div className="flex flex-wrap gap-2">
                         {detail.selection_keywords.map((item: string) => (
                           <span key={item} className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs text-gray-700">{item}</span>

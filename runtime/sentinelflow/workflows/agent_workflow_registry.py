@@ -105,6 +105,7 @@ def serialize_agent_workflow_summary(workflow: AgentWorkflowDefinition) -> dict[
 
 
 def serialize_agent_workflow_detail(workflow: AgentWorkflowDefinition) -> dict[str, Any]:
+    has_steps = bool(workflow.steps)
     return {
         **serialize_agent_workflow_summary(workflow),
         "selection_keywords": workflow.selection_keywords,
@@ -118,7 +119,7 @@ def serialize_agent_workflow_detail(workflow: AgentWorkflowDefinition) -> dict[s
             for step in workflow.steps
         ],
         "validation": {
-            "valid": workflow.enabled and bool(workflow.steps),
-            "errors": [] if workflow.enabled and workflow.steps else ["Workflow 必须至少包含一个启用步骤。"],
+            "valid": has_steps,
+            "errors": [] if has_steps else ["Workflow 必须至少包含一个启用步骤。"],
         },
     }
