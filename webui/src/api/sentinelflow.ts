@@ -303,7 +303,8 @@ export type AgentDetail = AgentSummary & {
   doc_skill_denylist: string[]
   hybrid_doc_allowlist: string[]
   exec_skill_allowlist: string[]
-  worker_allowlist: string[]
+  worker_allowlist_command: string[]
+  worker_allowlist_alert: string[]
   worker_max_steps: number
   worker_parallel_limit: number
   use_global_model: boolean

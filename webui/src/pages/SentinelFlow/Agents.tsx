@@ -39,7 +39,8 @@ type AgentDraft = {
   docSkillDenylist: string[]
   hybridDocAllowlist: string[]
   execSkillAllowlist: string[]
-  workerAllowlist: string[]
+  workerAllowlistCommand: string[]
+  workerAllowlistAlert: string[]
   workerMaxSteps: string
   workerParallelLimit: string
 }
@@ -66,7 +67,8 @@ const EMPTY_DRAFT: AgentDraft = {
   docSkillDenylist: [],
   hybridDocAllowlist: [],
   execSkillAllowlist: [],
-  workerAllowlist: [],
+  workerAllowlistCommand: [],
+  workerAllowlistAlert: [],
   workerMaxSteps: '3',
   workerParallelLimit: '3',
 }
@@ -94,7 +96,8 @@ function detailToDraft(detail: AgentDetail): AgentDraft {
     docSkillDenylist: detail.doc_skill_denylist || [],
     hybridDocAllowlist: detail.hybrid_doc_allowlist || [],
     execSkillAllowlist: detail.exec_skill_allowlist || [],
-    workerAllowlist: detail.worker_allowlist || [],
+    workerAllowlistCommand: detail.worker_allowlist_command || [],
+    workerAllowlistAlert: detail.worker_allowlist_alert || [],
     workerMaxSteps: String(detail.worker_max_steps ?? 3),
     workerParallelLimit: String(detail.worker_parallel_limit ?? 3),
   }
@@ -120,7 +123,8 @@ function buildPayload(draft: AgentDraft) {
     docSkillDenylist: draft.docSkillDenylist,
     hybridDocAllowlist: draft.hybridDocAllowlist,
     execSkillAllowlist: draft.execSkillAllowlist,
-    workerAllowlist: draft.workerAllowlist,
+    workerAllowlistCommand: draft.workerAllowlistCommand,
+    workerAllowlistAlert: draft.workerAllowlistAlert,
     workerMaxSteps: Number(draft.workerMaxSteps || '3'),
     workerParallelLimit: Number(draft.workerParallelLimit || '3'),
     useGlobalModel: draft.useGlobalModel,
@@ -320,10 +324,20 @@ function AgentForm({
 
       {draft.role === 'primary' ? (
         <div className="mt-4">
-          <div className="mb-2 text-sm font-semibold text-gray-900">允许调度的子 Agent</div>
-          <SkillChips items={workerAgents} selected={draft.workerAllowlist} onToggle={(name) => onChange((current) => ({ ...current, workerAllowlist: toggleName(current.workerAllowlist, name) }))} />
+          <div className="mb-2 text-sm font-semibold text-gray-900">对话模式允许调度的子 Agent</div>
+          <SkillChips items={workerAgents} selected={draft.workerAllowlistCommand} onToggle={(name) => onChange((current) => ({ ...current, workerAllowlistCommand: toggleName(current.workerAllowlistCommand, name) }))} />
           <div className="mt-2 text-sm leading-6 text-gray-500">
-            这里只允许主 Agent 调度被明确选中的子 Agent；如果一个都不选，主 Agent 将不会委派任何子 Agent。
+            用于自然语言对话、人工指令等对话入口；如果一个都不选，对话模式下主 Agent 不会委派任何子 Agent。
+          </div>
+        </div>
+      ) : null}
+
+      {draft.role === 'primary' ? (
+        <div className="mt-4">
+          <div className="mb-2 text-sm font-semibold text-gray-900">告警分析模式允许调度的子 Agent</div>
+          <SkillChips items={workerAgents} selected={draft.workerAllowlistAlert} onToggle={(name) => onChange((current) => ({ ...current, workerAllowlistAlert: toggleName(current.workerAllowlistAlert, name) }))} />
+          <div className="mt-2 text-sm leading-6 text-gray-500">
+            用于轮询告警、单条告警处置等告警入口；如果一个都不选，告警分析模式下主 Agent 不会委派任何子 Agent。
           </div>
         </div>
       ) : null}
@@ -612,7 +626,8 @@ export default function SentinelFlowAgentsPage() {
                     <div className="sentinelflow-stack-item"><strong>Prompt</strong><span>{detail.prompt?.trim() ? '已配置' : '未配置'}</span></div>
                     {detail.role === 'primary' ? (
                       <>
-                        <div className="sentinelflow-stack-item"><strong>允许调度的子 Agent</strong><span>{detail.worker_allowlist.length || 0}</span></div>
+                        <div className="sentinelflow-stack-item"><strong>对话模式子 Agent</strong><span>{detail.worker_allowlist_command.length || 0}</span></div>
+                        <div className="sentinelflow-stack-item"><strong>告警分析子 Agent</strong><span>{detail.worker_allowlist_alert.length || 0}</span></div>
                         <div className="sentinelflow-stack-item"><strong>子 Agent 调用深度</strong><span>{detail.worker_max_steps}</span></div>
                         <div className="sentinelflow-stack-item"><strong>单次并行调度上限</strong><span>{detail.worker_parallel_limit}</span></div>
                       </>
@@ -623,6 +638,8 @@ export default function SentinelFlowAgentsPage() {
                     <SkillSummaryChips title="纯文本禁用名单" items={detail.doc_skill_denylist} />
                     <SkillSummaryChips title="可读取的“文本 + 可执行”Skill 文档" items={detail.hybrid_doc_allowlist} />
                     <SkillSummaryChips title="可执行的“文本 + 可执行”Skill" items={detail.exec_skill_allowlist} />
+                    {detail.role === 'primary' ? <SkillSummaryChips title="对话模式允许调度的子 Agent" items={detail.worker_allowlist_command} /> : null}
+                    {detail.role === 'primary' ? <SkillSummaryChips title="告警分析模式允许调度的子 Agent" items={detail.worker_allowlist_alert} /> : null}
                   </div>
                   {detail.prompt?.trim() ? (
                     <div>

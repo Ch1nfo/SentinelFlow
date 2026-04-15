@@ -115,7 +115,7 @@ class SentinelFlowAgentService:
             return []
         # Allow multi-agent routing for both conversation and alert entry types
         workers = [agent for agent in list_agent_definitions(self.agent_root) if agent.role == "worker" and agent.enabled]
-        return [agent for agent in workers if can_agent_delegate_to_worker(primary_agent, agent.name)]
+        return [agent for agent in workers if can_agent_delegate_to_worker(primary_agent, agent.name, entry_type=entry_type)]
 
     async def _run_agent_graph(
         self,

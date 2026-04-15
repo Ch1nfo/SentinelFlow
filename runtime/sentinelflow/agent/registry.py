@@ -36,7 +36,8 @@ class SentinelFlowAgentDefinition:
     doc_skill_denylist: list[str]
     hybrid_doc_allowlist: list[str]
     exec_skill_allowlist: list[str]
-    worker_allowlist: list[str]
+    worker_allowlist_command: list[str]
+    worker_allowlist_alert: list[str]
     worker_max_steps: int
     worker_parallel_limit: int
     use_global_model: bool
@@ -94,7 +95,8 @@ def _build_system_primary(agent_root: Path) -> SentinelFlowAgentDefinition:
         doc_skill_denylist=[],
         hybrid_doc_allowlist=[],
         exec_skill_allowlist=[],
-        worker_allowlist=[],
+        worker_allowlist_command=[],
+        worker_allowlist_alert=[],
         worker_max_steps=3,
         worker_parallel_limit=3,
         use_global_model=True,
@@ -132,7 +134,8 @@ def _parse_agent_yaml(agent_dir: Path) -> SentinelFlowAgentDefinition:
         "doc_skill_denylist": [],
         "hybrid_doc_allowlist": [],
         "exec_skill_allowlist": [],
-        "worker_allowlist": [],
+        "worker_allowlist_command": [],
+        "worker_allowlist_alert": [],
         "worker_max_steps": 3,
         "worker_parallel_limit": 3,
         "use_global_model": True,
@@ -172,8 +175,11 @@ def _parse_agent_yaml(agent_dir: Path) -> SentinelFlowAgentDefinition:
         if line.startswith("exec_skill_allowlist:"):
             current_list_key = "exec_skill_allowlist"
             continue
-        if line.startswith("worker_allowlist:"):
-            current_list_key = "worker_allowlist"
+        if line.startswith("worker_allowlist_command:"):
+            current_list_key = "worker_allowlist_command"
+            continue
+        if line.startswith("worker_allowlist_alert:"):
+            current_list_key = "worker_allowlist_alert"
             continue
         if line.startswith("  - ") and current_list_key is not None:
             target = data[current_list_key]
@@ -234,7 +240,8 @@ def _parse_agent_yaml(agent_dir: Path) -> SentinelFlowAgentDefinition:
         doc_skill_denylist=list(data["doc_skill_denylist"]),  # type: ignore[arg-type]
         hybrid_doc_allowlist=list(data["hybrid_doc_allowlist"] or data["skills"]),  # type: ignore[arg-type]
         exec_skill_allowlist=list(data["exec_skill_allowlist"] or data["skills"]),  # type: ignore[arg-type]
-        worker_allowlist=list(data["worker_allowlist"]),  # type: ignore[arg-type]
+        worker_allowlist_command=list(data["worker_allowlist_command"]),  # type: ignore[arg-type]
+        worker_allowlist_alert=list(data["worker_allowlist_alert"]),  # type: ignore[arg-type]
         worker_max_steps=max(1, int(data["worker_max_steps"])) if isinstance(data["worker_max_steps"], int) else 3,
         worker_parallel_limit=max(1, int(data["worker_parallel_limit"])) if isinstance(data["worker_parallel_limit"], int) else 3,
         use_global_model=bool(data["use_global_model"]),

@@ -27,11 +27,12 @@ def can_agent_execute_skill(agent: SentinelFlowAgentDefinition, skill: SentinelF
     return skill.spec.name in agent.exec_skill_allowlist
 
 
-def can_agent_delegate_to_worker(agent: SentinelFlowAgentDefinition, worker_name: str) -> bool:
+def can_agent_delegate_to_worker(agent: SentinelFlowAgentDefinition, worker_name: str, entry_type: str = "conversation") -> bool:
     if not agent.enabled:
         return False
     if agent.role != "primary":
         return False
-    if not agent.worker_allowlist:
+    allowlist = agent.worker_allowlist_alert if entry_type == "alert" else agent.worker_allowlist_command
+    if not allowlist:
         return False
-    return worker_name in agent.worker_allowlist
+    return worker_name in allowlist

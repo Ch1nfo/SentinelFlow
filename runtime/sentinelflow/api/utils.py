@@ -301,9 +301,12 @@ def _build_agent_yaml(req: AgentCreateRequest) -> str:
     if req.exec_skill_allowlist:
         lines.append("exec_skill_allowlist:")
         lines.extend([f"  - {item}" for item in req.exec_skill_allowlist])
-    if req.worker_allowlist:
-        lines.append("worker_allowlist:")
-        lines.extend([f"  - {item}" for item in req.worker_allowlist])
+    if req.worker_allowlist_command:
+        lines.append("worker_allowlist_command:")
+        lines.extend([f"  - {item}" for item in req.worker_allowlist_command])
+    if req.worker_allowlist_alert:
+        lines.append("worker_allowlist_alert:")
+        lines.extend([f"  - {item}" for item in req.worker_allowlist_alert])
     lines.append(f"worker_max_steps: {max(1, int(req.worker_max_steps or 3))}")
     lines.append(f"worker_parallel_limit: {max(1, int(req.worker_parallel_limit or 3))}")
     lines.append(f"use_global_model: {'true' if req.use_global_model else 'false'}")
@@ -369,7 +372,8 @@ def _read_agent_yaml(agent_name: str) -> dict[str, Any]:
         "doc_skill_denylist": agent.doc_skill_denylist,
         "hybrid_doc_allowlist": agent.hybrid_doc_allowlist,
         "exec_skill_allowlist": agent.exec_skill_allowlist,
-        "worker_allowlist": agent.worker_allowlist,
+        "worker_allowlist_command": agent.worker_allowlist_command,
+        "worker_allowlist_alert": agent.worker_allowlist_alert,
         "worker_max_steps": agent.worker_max_steps,
         "worker_parallel_limit": agent.worker_parallel_limit,
         "use_global_model": agent.use_global_model,
