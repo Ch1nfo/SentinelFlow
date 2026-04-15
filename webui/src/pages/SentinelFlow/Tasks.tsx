@@ -225,6 +225,7 @@ export default function SentinelFlowTasksPage() {
   const [processExpanded, setProcessExpanded] = useState(false)
   const taskListPanelRef = useRef<HTMLDivElement | null>(null)
   const detailPanelRef = useRef<HTMLDivElement | null>(null)
+  const [taskListPanelHeight, setTaskListPanelHeight] = useState<number | null>(null)
   const [taskListMaxHeight, setTaskListMaxHeight] = useState<number | null>(null)
   const tasks = poll?.tasks ?? []
   const autoExecuteEnabled = Boolean(poll?.auto_execute_enabled)
@@ -278,8 +279,10 @@ export default function SentinelFlowTasksPage() {
           Math.round(listPanelNode.scrollHeight - scrollHeight),
         )
         const nextHeight = Math.max(0, detailHeight - chromeHeight)
+        setTaskListPanelHeight(detailHeight || null)
         setTaskListMaxHeight(nextHeight || null)
       } catch {
+        setTaskListPanelHeight(null)
         setTaskListMaxHeight(null)
       }
     }
@@ -291,6 +294,7 @@ export default function SentinelFlowTasksPage() {
       observer.observe(listPanelNode)
       return () => observer.disconnect()
     } catch {
+      setTaskListPanelHeight(null)
       setTaskListMaxHeight(null)
       return
     }
@@ -458,7 +462,11 @@ export default function SentinelFlowTasksPage() {
         {error ? <div className="sentinelflow-message-block sentinelflow-message-error">{error}</div> : null}
         {!loading && !error ? (
           <div className="sentinelflow-grid-2">
-            <div ref={taskListPanelRef} className="sentinelflow-detail-panel">
+            <div
+              ref={taskListPanelRef}
+              className="sentinelflow-detail-panel overflow-hidden"
+              style={taskListPanelHeight ? { height: `${taskListPanelHeight}px` } : undefined}
+            >
               <h3>筛选结果</h3>
               <div
                 className="sentinelflow-task-list-scroll"
