@@ -273,10 +273,10 @@ export default function SentinelFlowTasksPage() {
       try {
         const detailHeight = Math.max(0, Math.round(detailNode.getBoundingClientRect().height))
         const scrollNode = listPanelNode.querySelector('.sentinelflow-task-list-scroll') as HTMLDivElement | null
-        const scrollHeight = scrollNode?.clientHeight ?? 0
+        const scrollHeight = scrollNode?.offsetHeight ?? 0
         const chromeHeight = Math.max(
           0,
-          Math.round(listPanelNode.scrollHeight - scrollHeight),
+          Math.round(listPanelNode.offsetHeight - scrollHeight),
         )
         const nextHeight = Math.max(0, detailHeight - chromeHeight)
         setTaskListPanelHeight(detailHeight || null)
@@ -291,7 +291,6 @@ export default function SentinelFlowTasksPage() {
       syncHeight()
       const observer = new ResizeObserver(() => syncHeight())
       observer.observe(detailNode)
-      observer.observe(listPanelNode)
       return () => observer.disconnect()
     } catch {
       setTaskListPanelHeight(null)
@@ -461,10 +460,10 @@ export default function SentinelFlowTasksPage() {
         {loading ? <p className="sentinelflow-muted-text">正在读取任务分发结果...</p> : null}
         {error ? <div className="sentinelflow-message-block sentinelflow-message-error">{error}</div> : null}
         {!loading && !error ? (
-          <div className="sentinelflow-grid-2">
+          <div className="sentinelflow-grid-2 items-start">
             <div
               ref={taskListPanelRef}
-              className="sentinelflow-detail-panel overflow-hidden"
+              className="sentinelflow-detail-panel h-auto overflow-hidden"
               style={taskListPanelHeight ? { height: `${taskListPanelHeight}px` } : undefined}
             >
               <h3>筛选结果</h3>
@@ -487,7 +486,7 @@ export default function SentinelFlowTasksPage() {
               </div>
             </div>
 
-            <div ref={detailPanelRef} className="sentinelflow-detail-panel">
+            <div ref={detailPanelRef} className="sentinelflow-detail-panel h-auto self-start">
               <h3>任务详情</h3>
               {selectedTask ? (
                 <div className="sentinelflow-response-stack">
