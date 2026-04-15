@@ -258,28 +258,42 @@ export default function SentinelFlowTasksPage() {
     setProcessExpanded(false)
   }, [selectedTaskId])
 
+  const selectedTask =
+    filteredTasks.find((task) => task.task_id === selectedTaskId) ??
+    filteredTasks[0] ??
+    null
+
   useEffect(() => {
     const detailNode = detailPanelRef.current
     const listPanelNode = taskListPanelRef.current
     if (!detailNode || !listPanelNode || typeof ResizeObserver === 'undefined') return
 
     const syncHeight = () => {
-      const detailHeight = Math.max(0, Math.round(detailNode.getBoundingClientRect().height))
-      const scrollNode = listPanelNode.querySelector('.sentinelflow-task-list-scroll') as HTMLDivElement | null
-      const scrollHeight = scrollNode?.clientHeight ?? 0
-      const chromeHeight = Math.max(
-        0,
-        Math.round(listPanelNode.scrollHeight - scrollHeight),
-      )
-      const nextHeight = Math.max(0, detailHeight - chromeHeight)
-      setTaskListMaxHeight(nextHeight || null)
+      try {
+        const detailHeight = Math.max(0, Math.round(detailNode.getBoundingClientRect().height))
+        const scrollNode = listPanelNode.querySelector('.sentinelflow-task-list-scroll') as HTMLDivElement | null
+        const scrollHeight = scrollNode?.clientHeight ?? 0
+        const chromeHeight = Math.max(
+          0,
+          Math.round(listPanelNode.scrollHeight - scrollHeight),
+        )
+        const nextHeight = Math.max(0, detailHeight - chromeHeight)
+        setTaskListMaxHeight(nextHeight || null)
+      } catch {
+        setTaskListMaxHeight(null)
+      }
     }
 
-    syncHeight()
-    const observer = new ResizeObserver(() => syncHeight())
-    observer.observe(detailNode)
-    observer.observe(listPanelNode)
-    return () => observer.disconnect()
+    try {
+      syncHeight()
+      const observer = new ResizeObserver(() => syncHeight())
+      observer.observe(detailNode)
+      observer.observe(listPanelNode)
+      return () => observer.disconnect()
+    } catch {
+      setTaskListMaxHeight(null)
+      return
+    }
   }, [selectedTaskId, processExpanded, filteredTasks.length, selectedTask?.task_id, selectedTask?.status])
 
   const refreshTasks = useCallback(() => {
@@ -291,11 +305,6 @@ export default function SentinelFlowTasksPage() {
   useSentinelFlowLiveRefresh(refreshTasks, {
     intervalMs: autoExecuteEnabled || tasks.some((task) => task.status === 'running') ? 2000 : 5000,
   })
-
-  const selectedTask =
-    filteredTasks.find((task) => task.task_id === selectedTaskId) ??
-    filteredTasks[0] ??
-    null
 
   async function handleAutoExecuteToggle() {
     const action = autoExecuteEnabled ? 'auto_execute_stop' : 'auto_execute_start'
