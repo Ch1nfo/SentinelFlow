@@ -143,55 +143,6 @@ class SentinelFlowAgentWorkflowRunner:
             "execution_trace": execution_trace,
         }
 
-    async def run_alert_workflow(
-        self,
-        workflow: AgentWorkflowDefinition,
-        alert: dict[str, Any],
-        action_hint: str | None = None,
-    ) -> dict[str, Any]:
-        workflow_result = await self.execute_workflow(workflow, alert)
-        if not workflow_result.get("success"):
-            return workflow_result
-
-        final_action = action_hint or workflow.final_handler.action or workflow.recommended_action
-        if workflow.final_handler.type == "primary":
-            final_alert = dict(alert)
-            final_alert["payload"] = json.dumps(
-                {
-                    "original_alert": alert,
-                    "workflow_id": workflow.id,
-                    "workflow_name": workflow.name,
-                    "workflow_step_results": workflow_result.get("worker_results", []),
-                    "instruction": "请基于这些固定子 Agent 步骤结果给出最终值班结论，并在需要时完成处置或结单。",
-                },
-                ensure_ascii=False,
-            )
-            # ✅ Critical fix: run_alert is async — must be awaited
-            final_result = await self.agent_service.run_alert(final_alert, final_action)
-        else:
-            latest = workflow_result.get("worker_results", [])[-1] if workflow_result.get("worker_results") else {}
-            final_result = {
-                "success": bool(latest.get("success")),
-                "event_ids": str(alert.get("eventIds", "")).strip(),
-                "summary": str(latest.get("final_response", "")).strip(),
-                "reason": str(latest.get("final_response", "")).strip(),
-                "evidence": [],
-                "final_response": str(latest.get("final_response", "")).strip(),
-            }
-
-        return {
-            **final_result,
-            "workflow_id": workflow.id,
-            "workflow_name": workflow.name,
-            "workflow_description": workflow.description,
-            "workflow_steps": workflow_result.get("workflow_steps", []),
-            "worker_results": workflow_result.get("worker_results", []),
-            "execution_mode": "agent_workflow",
-            "used_agent_workflow": True,
-            "actions": workflow_result.get("actions", {}),
-            "workflow_execution_trace": workflow_result.get("execution_trace", []),
-        }
-
     def _build_worker_prompt(
         self,
         workflow: AgentWorkflowDefinition,

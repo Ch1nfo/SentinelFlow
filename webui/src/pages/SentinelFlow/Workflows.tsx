@@ -14,11 +14,8 @@ type WorkflowCard = {
   description: string
   enabled: boolean
   scenarios: string[]
-  recommended_action: string
   steps_count: number
   step_agents: string[]
-  final_handler_type: string
-  final_handler_action: string
   location: string
   tone?: 'neutral' | 'success' | 'warn' | 'danger'
 }
@@ -26,7 +23,6 @@ type WorkflowCard = {
 type WorkflowDraft = {
   name: string
   description: string
-  recommendedAction: string
   enabled: boolean
   selectionKeywords: string
   stepAgents: string[]
@@ -35,7 +31,6 @@ type WorkflowDraft = {
 const EMPTY_DRAFT: WorkflowDraft = {
   name: '',
   description: '',
-  recommendedAction: 'triage_close',
   enabled: true,
   selectionKeywords: '',
   stepAgents: [],
@@ -50,7 +45,6 @@ function detailToDraft(detail: WorkflowDetail): WorkflowDraft {
   return {
     name: detail.name,
     description: detail.description,
-    recommendedAction: detail.recommended_action,
     enabled: detail.enabled,
     selectionKeywords: (detail.selection_keywords ?? []).join(', '),
     stepAgents: (detail.steps ?? []).map((step) => step.agent),
@@ -64,23 +58,17 @@ function draftToPayload(draft: WorkflowDraft) {
     name: `${index + 1}. ${agent}`,
     agent,
   }))
-  const recommendedAction = draft.recommendedAction === 'triage_dispose' ? 'triage_dispose' : 'triage_close'
   return {
     name: draft.name.trim(),
     description: draft.description.trim(),
-    template: recommendedAction === 'triage_dispose' ? 'dispose' : 'close',
+    template: 'close',
     workflow: {
       name: draft.name.trim(),
       description: draft.description.trim(),
       enabled: draft.enabled,
       scenarios: ['alert', 'task'],
       selection_keywords: draft.selectionKeywords.split(',').map((item) => item.trim()).filter(Boolean),
-      recommended_action: recommendedAction,
       steps,
-      final_handler: {
-        type: 'primary',
-        action: recommendedAction,
-      },
     },
   }
 }
@@ -389,17 +377,13 @@ export default function SentinelFlowWorkflowsPage() {
           <div className="grid gap-4">
             <Surface
               title={editingId ? (editingId === '__new__' ? '新建 Agent Workflow' : '编辑 Agent Workflow') : (detail?.name ?? 'Agent Workflow 详情')}
-              subtitle={editingId ? '这里只编排固定顺序和命中条件；子 Agent 的提示词、Skill 权限和模型都在 Agents 页面管理。' : (detail?.description ?? '选择左侧工作流后，可查看固定步骤、最终处理方式和校验状态。')}
+              subtitle={editingId ? '这里只编排固定顺序和命中条件；子 Agent 的提示词、Skill 权限和模型都在 Agents 页面管理。Workflow 执行完后会把结果返回给主 Agent，再由主 Agent 决定下一步。' : (detail?.description ?? '选择左侧工作流后，可查看固定步骤、返回方式和校验状态。')}
             >
               {editingId ? (
                 <div className="grid gap-4">
                   {formError ? <div className="sentinelflow-message-block sentinelflow-message-error">{formError}</div> : null}
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3">
                     <input className="sentinelflow-settings-input" placeholder="流程名称，如 研判并封禁" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
-                    <select className="sentinelflow-settings-input" value={draft.recommendedAction} onChange={(event) => setDraft((current) => ({ ...current, recommendedAction: event.target.value }))}>
-                      <option value="triage_close">最终研判并结单</option>
-                      <option value="triage_dispose">最终研判并处置</option>
-                    </select>
                   </div>
 
                   <textarea className="sentinelflow-command-input" rows={4} placeholder="流程描述" value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} />
@@ -530,12 +514,12 @@ export default function SentinelFlowWorkflowsPage() {
 
                   <div className="grid gap-3 md:grid-cols-2">
                     <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                      <div className="text-xs text-gray-500">推荐动作</div>
-                      <div className="mt-2 text-base font-semibold text-gray-900">{detail.recommended_action}</div>
+                      <div className="text-xs text-gray-500">返回方式</div>
+                      <div className="mt-2 text-base font-semibold text-gray-900">返回主 Agent</div>
                     </div>
                     <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                      <div className="text-xs text-gray-500">最终处理</div>
-                      <div className="mt-2 text-base font-semibold text-gray-900">{`${detail.final_handler?.type ?? detail.final_handler_type} / ${detail.final_handler?.action ?? detail.final_handler_action}`}</div>
+                      <div className="text-xs text-gray-500">主 Agent 后续决策</div>
+                      <div className="mt-2 text-base font-semibold text-gray-900">主 Agent 自主决定是否继续查询、处置、结单或回复</div>
                     </div>
                   </div>
 

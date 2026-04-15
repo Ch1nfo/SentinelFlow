@@ -237,11 +237,8 @@ export type WorkflowSummary = {
   description: string
   enabled: boolean
   scenarios: string[]
-  recommended_action: string
   steps_count: number
   step_agents: string[]
-  final_handler_type: string
-  final_handler_action: string
   location: string
 }
 
@@ -253,10 +250,6 @@ export type WorkflowDetail = WorkflowSummary & {
     agent: string
     task_prompt?: string
   }>
-  final_handler: {
-    type: string
-    action: string
-  }
   validation?: {
     valid: boolean
     errors: string[]

@@ -152,7 +152,7 @@ class AlertTaskRunnerService:
             return self._finalize_failure(task, selected_action, f"Workflow 加载失败：{exc}")
 
         try:
-            agent_result = await self.agent_workflow_runner.run_alert_workflow(workflow_definition, alert, selected_action)
+            agent_result = await self.agent_workflow_runner.execute_workflow(workflow_definition, alert)
         except Exception as exc:
             self.audit_service.record("agent_workflow_task_failed", f"Workflow failed during {selected_action}.", {"error": str(exc)})
             return self._finalize_failure(task, selected_action, f"Workflow 执行失败：{exc}")
@@ -182,14 +182,7 @@ class AlertTaskRunnerService:
 
         selected_action = action
         if not selected_action:
-            if task.workflow_name == "agent_react":
-                selected_action = "triage_close"
-            else:
-                try:
-                    workflow_definition = load_agent_workflow(self.workflow_root, task.workflow_name)
-                    selected_action = workflow_definition.recommended_action
-                except Exception:
-                    selected_action = "triage_close"
+            selected_action = "triage_close"
 
         running_task = self.dispatch_service.mark_task_running(task.task_id, selected_action)
         if not running_task:

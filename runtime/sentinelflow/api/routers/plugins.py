@@ -121,8 +121,7 @@ def create_sentinelflow_workflow(payload: WorkflowCreateRequest) -> dict[str, An
     workflow_data = payload.workflow if isinstance(payload.workflow, dict) else {
         "name": payload.name.strip(), "description": payload.description.strip(),
         "enabled": True, "scenarios": ["alert", "task"], "selection_keywords": [],
-        "recommended_action": "triage_close" if payload.template.strip() != "dispose" else "triage_dispose",
-        "steps": [], "final_handler": {"type": "primary", "action": "triage_close" if payload.template.strip() != "dispose" else "triage_dispose"}
+        "steps": [],
     }
     workflow_data["name"] = payload.name.strip()
     workflow_data["description"] = payload.description.strip() or workflow_data.get("description", "")
@@ -158,7 +157,7 @@ async def run_sentinelflow_workflow(workflow_id: str, payload: WorkflowRunReques
         return {"success": False, "workflow_id": workflow.id, "error": "Agent Workflow 校验未通过。"}
     context = payload.context or {}
     alert = context.get("alert") if isinstance(context.get("alert"), dict) else context
-    return await agent_workflow_runner.run_alert_workflow(workflow, alert if isinstance(alert, dict) else {}, workflow.recommended_action)
+    return await agent_workflow_runner.execute_workflow(workflow, alert if isinstance(alert, dict) else {})
 
 @router.get("/agents")
 def list_sentinelflow_agents() -> dict[str, Any]:

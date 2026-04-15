@@ -311,7 +311,7 @@ export default function SentinelFlowAlertsPage() {
           </div>
         </div>
 
-        <div className="sentinelflow-toolbar-row mb-4">
+        <div className="mb-4 grid gap-4 xl:grid-cols-2 xl:items-start">
           <div className="sentinelflow-inline-metrics">
             <span>拉取：{data?.fetched_count ?? 0}</span>
             <span>排队：{data?.queued_count ?? 0}</span>
@@ -324,15 +324,17 @@ export default function SentinelFlowAlertsPage() {
             <span>已处置：{summary?.operations.disposed_success ?? 0}</span>
             <span>人工处置：{summary?.operations.manual_completed ?? 0}</span>
           </div>
-          <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('refresh_poll')} disabled={actionState.running}>重新轮询</button>
-          <button
-            type="button"
-            className={autoExecuteEnabled ? 'sentinelflow-ghost-button' : 'sentinelflow-primary-button'}
-            onClick={() => void runAction(autoExecuteEnabled ? 'auto_execute_stop' : 'auto_execute_start')}
-            disabled={actionState.running}
-          >
-            {autoExecuteEnabled ? (autoExecuteRunning ? '自动执行中' : '停止自动执行') : '开始自动执行'}
-          </button>
+          <div className="sentinelflow-action-bar xl:justify-start">
+            <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('refresh_poll')} disabled={actionState.running}>重新轮询</button>
+            <button
+              type="button"
+              className={autoExecuteEnabled ? 'sentinelflow-ghost-button' : 'sentinelflow-primary-button'}
+              onClick={() => void runAction(autoExecuteEnabled ? 'auto_execute_stop' : 'auto_execute_start')}
+              disabled={actionState.running}
+            >
+              {autoExecuteEnabled ? (autoExecuteRunning ? '自动执行中' : '停止自动执行') : '开始自动执行'}
+            </button>
+          </div>
         </div>
 
         <div className="sentinelflow-grid-2">

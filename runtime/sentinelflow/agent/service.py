@@ -260,7 +260,6 @@ class SentinelFlowAgentService:
                         f"  name: {workflow.name}",
                         f"  description: {workflow.description or workflow.name}",
                         f"  scenarios: {', '.join(workflow.scenarios) if workflow.scenarios else '未设置'}",
-                        f"  recommended_action: {workflow.recommended_action}",
                         f"  selection_keywords: {', '.join(workflow.selection_keywords) if workflow.selection_keywords else '未设置'}",
                         f"  step_agents: {', '.join(step.agent for step in workflow.steps) if workflow.steps else '无步骤'}",
                     ]

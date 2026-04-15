@@ -12,14 +12,6 @@ class AgentWorkflowStepDefinition:
     name: str
     agent: str
     task_prompt: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class AgentWorkflowFinalHandler:
-    type: str = "primary"
-    action: str = "triage_close"
-
-
 @dataclass(frozen=True, slots=True)
 class AgentWorkflowDefinition:
     id: str
@@ -28,9 +20,7 @@ class AgentWorkflowDefinition:
     enabled: bool
     scenarios: list[str] = field(default_factory=list)
     selection_keywords: list[str] = field(default_factory=list)
-    recommended_action: str = "triage_close"
     steps: list[AgentWorkflowStepDefinition] = field(default_factory=list)
-    final_handler: AgentWorkflowFinalHandler = field(default_factory=AgentWorkflowFinalHandler)
     location: str = ""
 
 
@@ -76,10 +66,6 @@ def _parse_workflow_file(workflow_dir: Path) -> AgentWorkflowDefinition:
             )
         )
 
-    final_handler_raw = raw.get("final_handler") or {}
-    if not isinstance(final_handler_raw, dict):
-        final_handler_raw = {}
-
     return AgentWorkflowDefinition(
         id=workflow_dir.name,
         name=str(raw.get("name") or workflow_dir.name).strip(),
@@ -87,13 +73,7 @@ def _parse_workflow_file(workflow_dir: Path) -> AgentWorkflowDefinition:
         enabled=_coerce_bool(raw.get("enabled"), True),
         scenarios=_coerce_list(raw.get("scenarios")),
         selection_keywords=_coerce_list(raw.get("selection_keywords")),
-        recommended_action=str(raw.get("recommended_action") or "triage_close").strip() or "triage_close",
         steps=steps,
-        final_handler=AgentWorkflowFinalHandler(
-            type=str(final_handler_raw.get("type") or "primary").strip() or "primary",
-            action=str(final_handler_raw.get("action") or raw.get("recommended_action") or "triage_close").strip()
-            or "triage_close",
-        ),
         location=str(workflow_dir),
     )
 
@@ -118,11 +98,8 @@ def serialize_agent_workflow_summary(workflow: AgentWorkflowDefinition) -> dict[
         "description": workflow.description,
         "enabled": workflow.enabled,
         "scenarios": workflow.scenarios,
-        "recommended_action": workflow.recommended_action,
         "steps_count": len(workflow.steps),
         "step_agents": [step.agent for step in workflow.steps],
-        "final_handler_type": workflow.final_handler.type,
-        "final_handler_action": workflow.final_handler.action,
         "location": workflow.location,
     }
 
@@ -140,10 +117,6 @@ def serialize_agent_workflow_detail(workflow: AgentWorkflowDefinition) -> dict[s
             }
             for step in workflow.steps
         ],
-        "final_handler": {
-            "type": workflow.final_handler.type,
-            "action": workflow.final_handler.action,
-        },
         "validation": {
             "valid": workflow.enabled and bool(workflow.steps),
             "errors": [] if workflow.enabled and workflow.steps else ["Workflow 必须至少包含一个启用步骤。"],
