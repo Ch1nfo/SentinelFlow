@@ -338,7 +338,7 @@ export default function SentinelFlowSettingsPage() {
               </div>
             </div>
           </div>
-      ) : null}
+        ) : null}
       </Surface>
 
       <Surface title="配置中心" subtitle="这里统一配置平台级通用参数，以及单个告警源的接入、轮询和解析规则。">
@@ -393,9 +393,6 @@ export default function SentinelFlowSettingsPage() {
                   <span>Python 脚本</span>
                   <textarea className="sentinelflow-settings-input min-h-[320px] font-mono text-xs" value={draft.alertScriptCode} onChange={(event) => updateDraft('alertScriptCode', event.target.value)} placeholder={'import json\n\nprint(json.dumps({"count": 0, "alerts": []}, ensure_ascii=False))'} />
                 </label>
-                <div className="sentinelflow-message-block">
-                  脚本不读取 stdin。请在脚本内部完成拉取、过滤和解析，并且只向 stdout 打印最终 JSON；调试输出请写到 stderr。
-                </div>
               </>
             )}
           </div>
