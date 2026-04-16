@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { RefreshCw, Siren } from 'lucide-react'
 import {
   fetchDashboardSummary,
@@ -24,10 +24,11 @@ function getDispositionLabel(value: string) {
 }
 
 function getTaskTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
-  if (task.status === 'running') return 'info'
-  if (task.status === 'queued') return 'warn'
-  if (task.status === 'failed') return 'danger'
-  if (task.status === 'succeeded' || task.status === 'completed') return 'success'
+  const status = getEffectiveTaskStatus(task)
+  if (status === 'running') return 'info'
+  if (status === 'queued') return 'warn'
+  if (status === 'failed') return 'danger'
+  if (status === 'succeeded' || status === 'completed') return 'success'
   return 'neutral'
 }
 
@@ -56,6 +57,17 @@ function formatIpPreview(value: unknown): { text: string; fullText: string } {
   }
 }
 
+function formatAlertTitle(value: unknown, limit = 30): { text: string; fullText: string } {
+  const fullText = String(value ?? '').trim() || '未命名告警'
+  if (fullText.length <= limit) {
+    return { text: fullText, fullText }
+  }
+  return {
+    text: `${fullText.slice(0, limit)}...`,
+    fullText,
+  }
+}
+
 function buildPayloadPreview(text: string, maxLines = 10, maxCharsPerLine = 120): { text: string; truncated: boolean } {
   const rawLines = text ? text.split(/\r?\n/) : []
   const visualLines: string[] = []
@@ -81,20 +93,30 @@ function buildPayloadPreview(text: string, maxLines = 10, maxCharsPerLine = 120)
 }
 
 function getTaskStatusClass(task: AlertTask): string {
-  if (task.status === 'running') return 'running'
-  if (task.status === 'queued') return 'queued'
-  if (task.status === 'failed') return 'danger'
-  if (task.status === 'succeeded' || task.status === 'completed') return 'success'
+  const status = getEffectiveTaskStatus(task)
+  if (status === 'running') return 'running'
+  if (status === 'queued') return 'queued'
+  if (status === 'failed') return 'danger'
+  if (status === 'succeeded' || status === 'completed') return 'success'
   return 'neutral'
 }
 
 function getTaskStatusLabel(task: AlertTask): string {
-  if (task.status === 'queued') return '排队中'
-  if (task.status === 'running') return '执行中'
-  if (task.status === 'completed') return '已被人工处置'
-  if (task.status === 'succeeded') return '已完成'
-  if (task.status === 'failed') return '失败'
-  return task.status
+  const status = getEffectiveTaskStatus(task)
+  if (status === 'queued') return '排队中'
+  if (status === 'running') return '执行中'
+  if (status === 'completed') return '已被人工处置'
+  if (status === 'succeeded') return '已完成'
+  if (status === 'failed') return '失败'
+  return status
+}
+
+function getEffectiveTaskStatus(task: AlertTask): AlertTask['status'] | string {
+  const result = (task.last_result_data ?? {}) as Record<string, unknown>
+  const finalFacts = (result.final_facts as Record<string, unknown> | undefined) ?? {}
+  const taskOutcome = (finalFacts.task_outcome as Record<string, unknown> | undefined) ?? {}
+  const status = String(taskOutcome.status ?? '').trim()
+  return status || task.status
 }
 
 function toSortableTime(value: string | undefined): number {
@@ -154,6 +176,10 @@ export default function SentinelFlowAlertsPage() {
   const [payloadExpanded, setPayloadExpanded] = useState(false)
   const [actionState, setActionState] = useState<{ action: string; running: boolean }>({ action: '', running: false })
   const [actionResult, setActionResult] = useState<AlertActionResponse | null>(null)
+  const queuePanelRef = useRef<HTMLDivElement | null>(null)
+  const detailPanelRef = useRef<HTMLDivElement | null>(null)
+  const [queuePanelHeight, setQueuePanelHeight] = useState<number | null>(null)
+  const [queueListMaxHeight, setQueueListMaxHeight] = useState<number | null>(null)
   const autoExecuteEnabled = Boolean(data?.auto_execute_enabled)
   const autoExecuteRunning = Boolean(data?.auto_execute_running)
   const liveRefreshing = autoExecuteEnabled || actionState.running || (data?.tasks ?? []).some((task) => task.status === 'running')
@@ -219,6 +245,12 @@ export default function SentinelFlowAlertsPage() {
   const collapsedPayloadText = payloadPreview.text
   const workflowSelection = (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ?? {}
   const selectedResult = (selectedTask?.last_result_data ?? {}) as Record<string, unknown>
+  const selectedFinalFacts = (selectedResult.final_facts as Record<string, unknown> | undefined) ?? {}
+  const selectedFinalJudgment = (selectedFinalFacts.judgment as Record<string, unknown> | undefined) ?? {}
+  const selectedFinalConsistency = (selectedFinalFacts.consistency as Record<string, unknown> | undefined) ?? {}
+  const selectedConsistencyIssues = Array.isArray(selectedFinalConsistency.issues)
+    ? selectedFinalConsistency.issues.map((item) => String(item).trim()).filter(Boolean)
+    : []
   const selectedWorkflowRuns = normalizeWorkflowRuns(selectedResult.workflow_runs)
   const selectedWorkflowRun = selectedWorkflowRuns[0] ?? null
   const selectedClosureStep = (
@@ -226,7 +258,7 @@ export default function SentinelFlowAlertsPage() {
     ?? (selectedResult.closure_step as Record<string, unknown> | undefined)
   ) ?? {}
   const selectedReason = String(selectedResult.reason ?? '').trim()
-  const selectedDisposition = String(selectedResult.disposition ?? '').trim()
+  const selectedDisposition = String(selectedFinalJudgment.disposition ?? selectedResult.disposition ?? '').trim()
   const selectedSummary = String(selectedResult.summary ?? '').trim()
   const selectedEvidence = Array.isArray(selectedResult.evidence)
     ? selectedResult.evidence.map((item) => String(item).trim()).filter(Boolean)
@@ -239,6 +271,38 @@ export default function SentinelFlowAlertsPage() {
   const workflowDecisionReason = String(
     selectedWorkflowRun?.summary ?? selectedWorkflowRun?.reason ?? workflowSelection.reason ?? '',
   ).trim()
+
+  useEffect(() => {
+    const detailNode = detailPanelRef.current
+    const queueNode = queuePanelRef.current
+    if (!detailNode || !queueNode || typeof ResizeObserver === 'undefined') return
+
+    const syncHeight = () => {
+      try {
+        const detailHeight = Math.max(0, Math.round(detailNode.getBoundingClientRect().height))
+        const scrollNode = queueNode.querySelector('.sentinelflow-alert-queue-scroll') as HTMLDivElement | null
+        const scrollHeight = scrollNode?.offsetHeight ?? 0
+        const chromeHeight = Math.max(0, Math.round(queueNode.offsetHeight - scrollHeight))
+        const nextHeight = Math.max(0, detailHeight - chromeHeight)
+        setQueuePanelHeight(detailHeight || null)
+        setQueueListMaxHeight(nextHeight || null)
+      } catch {
+        setQueuePanelHeight(null)
+        setQueueListMaxHeight(null)
+      }
+    }
+
+    try {
+      syncHeight()
+      const observer = new ResizeObserver(() => syncHeight())
+      observer.observe(detailNode)
+      return () => observer.disconnect()
+    } catch {
+      setQueuePanelHeight(null)
+      setQueueListMaxHeight(null)
+      return
+    }
+  }, [selectedTaskId, payloadExpanded, selectedTask?.task_id, selectedTask?.status, selectedDisposition, selectedReason, selectedSummary, selectedEvidence.length, selectedConsistencyIssues.length])
 
   async function runAction(action: string) {
     setActionState({ action, running: true })
@@ -337,10 +401,17 @@ export default function SentinelFlowAlertsPage() {
           </div>
         </div>
 
-        <div className="sentinelflow-grid-2">
-          <div className="sentinelflow-detail-panel">
+        <div className="sentinelflow-grid-2 items-start">
+          <div
+            ref={queuePanelRef}
+            className="sentinelflow-detail-panel h-auto overflow-hidden"
+            style={queuePanelHeight ? { height: `${queuePanelHeight}px` } : undefined}
+          >
             <h3>告警队列</h3>
-            <div className="sentinelflow-alert-queue-scroll">
+            <div
+              className="sentinelflow-alert-queue-scroll"
+              style={queueListMaxHeight ? { maxHeight: `${queueListMaxHeight}px` } : undefined}
+            >
               <table className="sentinelflow-data-table">
                 <thead>
                   <tr><th>告警</th><th>告警时间</th><th>状态</th><th>执行方式</th></tr>
@@ -358,7 +429,7 @@ export default function SentinelFlowAlertsPage() {
                       ].filter(Boolean).join(' ')}
                       onClick={() => setSelectedTaskId(task.task_id)}
                     >
-                      <td>{task.title || '未命名告警'}</td>
+                      <td title={formatAlertTitle(task.title).fullText}>{formatAlertTitle(task.title).text}</td>
                       <td>{formatAlertTime(task.alert_time)}</td>
                       <td><StatusBadge tone={getTaskTone(task)}>{getTaskStatusLabel(task)}</StatusBadge></td>
                       <td>{getTaskFlowLabel(task)}</td>
@@ -369,7 +440,7 @@ export default function SentinelFlowAlertsPage() {
             </div>
           </div>
 
-          <div className={`sentinelflow-detail-panel sentinelflow-detail-panel-${selectedTask ? getTaskStatusClass(selectedTask) : 'neutral'}`}>
+          <div ref={detailPanelRef} className={`sentinelflow-detail-panel h-auto self-start sentinelflow-detail-panel-${selectedTask ? getTaskStatusClass(selectedTask) : 'neutral'}`}>
             <h3>当前选中告警</h3>
             {selectedTask ? (
               <div className="sentinelflow-response-stack">
@@ -408,7 +479,7 @@ export default function SentinelFlowAlertsPage() {
                 ) : null}
                 <div className="sentinelflow-action-bar">
                   <button type="button" className="sentinelflow-primary-button" onClick={() => void runAction('triage_dispose')} disabled={actionState.running}>处置当前告警</button>
-                  {selectedTask.status === 'failed' ? (
+                  {getEffectiveTaskStatus(selectedTask) === 'failed' ? (
                     <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('retry_task')} disabled={actionState.running}>重试任务</button>
                   ) : null}
                 </div>
@@ -447,6 +518,12 @@ export default function SentinelFlowAlertsPage() {
                         </ul>
                       </div>
                     ) : null}
+                  </div>
+                ) : null}
+                {selectedConsistencyIssues.length ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">结果收敛提示</div>
+                    <div className="mt-2 text-sm text-amber-900">检测到过程结果存在冲突，当前页面已按真实执行事实优先收敛展示。</div>
                   </div>
                 ) : null}
                 {selectedTask.last_result_error && !hideTaskError ? <div className="sentinelflow-message-block sentinelflow-message-error">{selectedTask.last_result_error}</div> : null}

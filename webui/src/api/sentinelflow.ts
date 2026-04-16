@@ -8,6 +8,42 @@ export type ExecutionTraceItem = {
   data?: Record<string, unknown>
 }
 
+export type FinalFacts = {
+  judgment?: {
+    disposition?: string
+    source?: string
+    confidence?: string
+  }
+  closure?: {
+    attempted?: boolean
+    success?: boolean
+    status?: string
+    memo?: string
+    detail_msg?: string
+    source_type?: string
+    source_name?: string
+  }
+  disposal?: {
+    attempted?: boolean
+    success?: boolean
+    actions?: Array<Record<string, unknown>>
+  }
+  workflow?: {
+    used?: boolean
+    count?: number
+    workflow_ids?: string[]
+  }
+  task_outcome?: {
+    success?: boolean
+    status?: string
+    source?: string
+  }
+  consistency?: {
+    consistent?: boolean
+    issues?: string[]
+  }
+}
+
 export type AlertTaskResultData = Record<string, unknown> & {
   disposition?: string
   summary?: string
@@ -24,6 +60,7 @@ export type AlertTaskResultData = Record<string, unknown> & {
   effective_closure_step?: Record<string, unknown>
   action_steps?: Array<Record<string, unknown>>
   closure_step?: Record<string, unknown>
+  final_facts?: FinalFacts
   execution_trace?: ExecutionTraceItem[]
 }
 

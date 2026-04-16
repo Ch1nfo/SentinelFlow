@@ -736,7 +736,8 @@ class SentinelFlowAgentService:
         skill_runs = self._extract_skill_runs(graph_result)
         fallback_judgment = self.triage_service.analyze_alert(alert)
         final_text = str(graph_result.get("final_response", "")).strip()
-        disposition = self._infer_disposition(final_text, fallback_judgment.disposition.value)
+        inferred_disposition = self._infer_disposition(final_text, fallback_judgment.disposition.value)
+        disposition = inferred_disposition
         summary = self._infer_summary(final_text, fallback_judgment.summary)
         reason = self._infer_reason(final_text, alert, fallback_judgment)
         if not summary or summary in {"--", "-", "—"}:
@@ -807,11 +808,38 @@ class SentinelFlowAgentService:
             skill_runs=skill_runs,
             success=success,
         )
+        final_facts = self._build_final_facts(
+            structured_disposition=disposition,
+            closure_step=closure_step,
+            closure_result=closure_result,
+            action_steps=action_steps,
+            workflow_runs=workflow_runs,
+            success=success,
+        )
+        if execution_trace:
+            finalizer_step = {
+                "phase": "final_facts",
+                "title": "最终事实收敛",
+                "summary": (
+                    "已按执行事实优先完成最终结果收敛。"
+                    if bool(((final_facts.get("consistency", {}) if isinstance(final_facts, dict) else {}).get("consistent", True)))
+                    else "检测到结果冲突，已按执行事实优先完成最终结果收敛。"
+                ),
+                "success": bool(success),
+                "data": final_facts,
+            }
+            if isinstance(execution_trace[-1], dict) and str(execution_trace[-1].get("phase", "")).strip() == "final_status":
+                execution_trace = execution_trace[:-1] + [finalizer_step, execution_trace[-1]]
+            else:
+                execution_trace.append(finalizer_step)
+        final_disposition = str(
+            ((final_facts.get("judgment", {}) if isinstance(final_facts, dict) else {}).get("disposition", disposition))
+        ).strip() or disposition
 
         return {
             **graph_result,
             "event_ids": str(alert.get("eventIds", "")).strip(),
-            "disposition": disposition,
+            "disposition": final_disposition,
             "summary": summary,
             "reason": reason,
             "evidence": evidence,
@@ -845,6 +873,7 @@ class SentinelFlowAgentService:
             "success": success,
             "execution_mode": "agent",
             "execution_trace": execution_trace,
+            "final_facts": final_facts,
             "used_agent": True,
             "has_close_action": bool(closure_step.get("attempted")),
             "has_disposal_action": bool(actions),
@@ -1080,6 +1109,145 @@ class SentinelFlowAgentService:
                 }
             )
         return steps
+
+    def _resolve_closure_disposition(self, status_value: str, memo: str, detail_msg: str) -> str:
+        normalized = str(status_value or "").strip()
+        if normalized == "4":
+            return "false_positive"
+        if normalized != "6":
+            return ""
+        normalized_text = _clean_model_text(f"{memo} {detail_msg}").replace(" ", "")
+        if any(keyword in normalized_text for keyword in ("真实攻击", "恶意攻击", "确认攻击", "高危攻击")):
+            return "true_attack"
+        if any(keyword in normalized_text for keyword in ("规则误报", "误报")):
+            return "false_positive"
+        if any(keyword in normalized_text for keyword in ("测试/业务触发", "业务触发", "测试触发", "正常业务", "业务测试")):
+            return "business_trigger"
+        return ""
+
+    def _extract_action_target(self, payload: dict[str, Any], arguments: dict[str, Any]) -> str:
+        for candidate in ("ban_ip", "banned_ip", "blocked_ip", "ip", "source_ip", "sip", "target", "target_ip", "dip"):
+            value = str(payload.get(candidate) or arguments.get(candidate) or "").strip()
+            if value:
+                return value
+        return ""
+
+    def _classify_action_kind(self, skill_name: str, payload: dict[str, Any], arguments: dict[str, Any]) -> str:
+        normalized_name = str(skill_name or "").strip().lower()
+        combined = " ".join(
+            [
+                normalized_name,
+                str(payload.get("action", "")).strip().lower(),
+                str(payload.get("result", "")).strip().lower(),
+                str(payload.get("message", "")).strip().lower(),
+            ]
+        )
+        if "ban" in normalized_name or "封禁" in combined:
+            return "ban_ip"
+        if "notify" in normalized_name or "通知" in combined:
+            return "notify"
+        if "isolate" in normalized_name or "隔离" in combined:
+            return "isolate_host"
+        if "query" in normalized_name or "info" in normalized_name or "lookup" in normalized_name or "查询" in combined:
+            return "collect_context"
+        return "other"
+
+    def _build_final_facts(
+        self,
+        *,
+        structured_disposition: str,
+        closure_step: dict[str, Any],
+        closure_result: dict[str, Any],
+        action_steps: list[dict[str, Any]],
+        workflow_runs: list[dict[str, Any]],
+        success: bool,
+    ) -> dict[str, Any]:
+        closure_step = closure_step if isinstance(closure_step, dict) else {}
+        closure_result = closure_result if isinstance(closure_result, dict) else {}
+        closure_attempted = bool(closure_step.get("attempted"))
+        closure_success = bool(closure_step.get("success"))
+        closure_status = str(
+            closure_result.get("status")
+            or ((closure_step.get("result") or {}) if isinstance(closure_step.get("result"), dict) else {}).get("status")
+            or ((closure_step.get("arguments") or {}) if isinstance(closure_step.get("arguments"), dict) else {}).get("status")
+            or ""
+        ).strip()
+        closure_memo = str(closure_result.get("memo") or "").strip()
+        closure_detail = str(closure_result.get("detailMsg") or closure_result.get("detail_msg") or "").strip()
+        mapped_disposition = self._resolve_closure_disposition(closure_status, closure_memo, closure_detail) if closure_success else ""
+
+        final_disposition = mapped_disposition or str(structured_disposition or "").strip() or "unknown"
+        judgment_source = "closure_result_mapping" if mapped_disposition else "structured_analysis"
+        judgment_confidence = "high" if mapped_disposition else ("medium" if structured_disposition else "low")
+
+        disposal_actions: list[dict[str, Any]] = []
+        for step in action_steps:
+            if not isinstance(step, dict):
+                continue
+            payload = step.get("result", {})
+            payload = payload if isinstance(payload, dict) else {}
+            arguments = step.get("arguments", {})
+            arguments = arguments if isinstance(arguments, dict) else {}
+            step_success = bool(step.get("success"))
+            action_kind = self._classify_action_kind(str(step.get("skill_name", "")).strip(), payload, arguments)
+            target = self._extract_action_target(payload, arguments)
+            disposal_actions.append(
+                {
+                    "kind": action_kind,
+                    "skill_name": str(step.get("skill_name", "")).strip(),
+                    "target": target,
+                    "success": step_success,
+                    "source_type": str(step.get("source_type", "primary") or "primary").strip(),
+                    "source_name": str(step.get("source_name", "primary") or "primary").strip(),
+                }
+            )
+
+        successful_disposal_actions = [item for item in disposal_actions if isinstance(item, dict) and bool(item.get("success"))]
+        consistency_issues: list[str] = []
+        if mapped_disposition and structured_disposition and mapped_disposition != structured_disposition:
+            consistency_issues.append(
+                f"closure_result_implies_{mapped_disposition}_but_structured_disposition_{structured_disposition}"
+            )
+
+        return {
+            "judgment": {
+                "disposition": final_disposition,
+                "source": judgment_source,
+                "confidence": judgment_confidence,
+            },
+            "closure": {
+                "attempted": closure_attempted,
+                "success": closure_success,
+                "status": closure_status,
+                "memo": closure_memo,
+                "detail_msg": closure_detail,
+                "source_type": str(closure_step.get("source_type", "")).strip(),
+                "source_name": str(closure_step.get("source_name", "")).strip(),
+            },
+            "disposal": {
+                "attempted": bool(action_steps),
+                "success": bool(successful_disposal_actions),
+                "actions": disposal_actions,
+            },
+            "workflow": {
+                "used": bool(workflow_runs),
+                "count": len(workflow_runs) if isinstance(workflow_runs, list) else 0,
+                "workflow_ids": [
+                    str(item.get("workflow_id", "")).strip()
+                    for item in workflow_runs
+                    if isinstance(item, dict) and str(item.get("workflow_id", "")).strip()
+                ] if isinstance(workflow_runs, list) else [],
+            },
+            "task_outcome": {
+                "success": bool(success),
+                "status": "succeeded" if success else "failed",
+                "source": "finalizer",
+            },
+            "consistency": {
+                "consistent": not consistency_issues,
+                "issues": consistency_issues,
+            },
+        }
 
     def _build_closure_step(
         self,

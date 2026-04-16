@@ -44,6 +44,22 @@ def _extract_ban_ip(payload: dict[str, Any]) -> str:
 
 def _collect_banned_ips_from_result(result: dict[str, Any]) -> set[str]:
     banned_ips: set[str] = set()
+    final_facts = result.get("final_facts")
+    if isinstance(final_facts, dict):
+        disposal = final_facts.get("disposal", {})
+        if isinstance(disposal, dict):
+            actions = disposal.get("actions", [])
+            if isinstance(actions, list):
+                for action in actions:
+                    if not isinstance(action, dict):
+                        continue
+                    if str(action.get("kind", "")).strip() != "ban_ip" or not bool(action.get("success")):
+                        continue
+                    banned_ip = str(action.get("target", "")).strip()
+                    if banned_ip:
+                        banned_ips.add(banned_ip)
+            if banned_ips:
+                return banned_ips
     aggregated_action_steps = result.get("aggregated_action_steps")
     if isinstance(aggregated_action_steps, list):
         for step in aggregated_action_steps:
@@ -73,6 +89,28 @@ def _collect_banned_ips_from_result(result: dict[str, Any]) -> set[str]:
     return banned_ips
 
 
+def _resolve_result_disposition(result: dict[str, Any]) -> str:
+    final_facts = result.get("final_facts")
+    if isinstance(final_facts, dict):
+        judgment = final_facts.get("judgment", {})
+        if isinstance(judgment, dict):
+            value = str(judgment.get("disposition", "")).strip()
+            if value:
+                return value
+    return str(result.get("disposition", "")).strip() or "unknown"
+
+
+def _resolve_task_outcome_status(task, result: dict[str, Any]) -> str:
+    final_facts = result.get("final_facts")
+    if isinstance(final_facts, dict):
+        outcome = final_facts.get("task_outcome", {})
+        if isinstance(outcome, dict):
+            value = str(outcome.get("status", "")).strip()
+            if value:
+                return value
+    return str(task.status or "").strip()
+
+
 def _dashboard_summary() -> dict[str, Any]:
     tasks = dispatch_service.list_tasks()
     agents = [
@@ -94,16 +132,17 @@ def _dashboard_summary() -> dict[str, Any]:
 
     for task in tasks:
         result = task.last_result_data if isinstance(task.last_result_data, dict) else {}
-        disposition = str(result.get("disposition", "")).strip() or "unknown"
+        disposition = _resolve_result_disposition(result)
         if disposition not in dispositions:
             disposition = "unknown"
         dispositions[disposition] += 1
-        if task.last_result_success:
+        task_outcome_status = _resolve_task_outcome_status(task, result)
+        if task_outcome_status == "succeeded":
             if task.last_action == "triage_close":
                 closed_success += 1
             if task.last_action == "triage_dispose":
                 disposed_success += 1
-        if task.status == "completed":
+        if task_outcome_status == "completed":
             manual_completed += 1
 
         banned_ips.update(_collect_banned_ips_from_result(result))

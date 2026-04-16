@@ -45,6 +45,14 @@ function getDispositionLabel(value: string) {
   return value || '未明确'
 }
 
+function getEffectiveTaskStatus(task: AlertTask): AlertTask['status'] | string {
+  const result = (task.last_result_data ?? {}) as Record<string, unknown>
+  const finalFacts = (result.final_facts as Record<string, unknown> | undefined) ?? {}
+  const taskOutcome = (finalFacts.task_outcome as Record<string, unknown> | undefined) ?? {}
+  const status = String(taskOutcome.status ?? '').trim()
+  return status || task.status
+}
+
 function splitAlertIps(value: unknown): string[] {
   const text = String(value ?? '').trim()
   if (!text) return []
@@ -71,9 +79,10 @@ function formatIpPreview(value: unknown, limit = 4): { text: string; fullText: s
 }
 
 function getTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' {
-  if (task.status === 'succeeded' || task.status === 'completed') return 'success'
-  if (task.status === 'failed') return 'danger'
-  if (task.status === 'running') return 'warn'
+  const status = getEffectiveTaskStatus(task)
+  if (status === 'succeeded' || status === 'completed') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'running') return 'warn'
   return 'neutral'
 }
 
@@ -182,6 +191,14 @@ function ProcessTrace({ trace, traceOwnerId }: { trace: ExecutionTraceItem[]; tr
         const detailKey = `${item.phase}-${index}`
         const open = Boolean(openKeys[detailKey])
         const data = item.data && Object.keys(item.data).length ? item.data : null
+        const isFinalFactsStep = item.phase === 'final_facts' && data
+        const finalFactsJudgment = isFinalFactsStep ? ((data.judgment as Record<string, unknown> | undefined) ?? {}) : {}
+        const finalFactsClosure = isFinalFactsStep ? ((data.closure as Record<string, unknown> | undefined) ?? {}) : {}
+        const finalFactsConsistency = isFinalFactsStep ? ((data.consistency as Record<string, unknown> | undefined) ?? {}) : {}
+        const finalFactsOutcome = isFinalFactsStep ? ((data.task_outcome as Record<string, unknown> | undefined) ?? {}) : {}
+        const finalFactsIssues = isFinalFactsStep && Array.isArray(finalFactsConsistency.issues)
+          ? finalFactsConsistency.issues.map((issue) => String(issue).trim()).filter(Boolean)
+          : []
         return (
           <div key={detailKey} className="rounded-xl border border-gray-200 bg-white p-4">
             <div className="flex items-start justify-between gap-3">
@@ -203,6 +220,39 @@ function ProcessTrace({ trace, traceOwnerId }: { trace: ExecutionTraceItem[]; tr
                 </button>
               ) : null}
             </div>
+            {isFinalFactsStep ? (
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">最终研判分类</div>
+                  <div className="mt-1 text-sm font-semibold text-blue-950">{getDispositionLabel(String(finalFactsJudgment.disposition ?? '').trim())}</div>
+                  <div className="mt-1 text-xs text-blue-900">
+                    {`来源：${String(finalFactsJudgment.source ?? 'unknown').trim() || 'unknown'} / 置信度：${String(finalFactsJudgment.confidence ?? 'unknown').trim() || 'unknown'}`}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">最终任务状态</div>
+                  <div className="mt-1 text-sm font-semibold text-emerald-950">{getTaskStatusLabel(String(finalFactsOutcome.status ?? '').trim() || 'failed')}</div>
+                  <div className="mt-1 text-xs text-emerald-900">
+                    {`结单：${Boolean(finalFactsClosure.attempted) ? (Boolean(finalFactsClosure.success) ? '成功' : '失败') : '未执行'}${String(finalFactsClosure.status ?? '').trim() ? ` / 状态码：${String(finalFactsClosure.status ?? '').trim()}` : ''}`}
+                  </div>
+                </div>
+                <div className={`rounded-lg border p-3 ${finalFactsIssues.length ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50'} md:col-span-2`}>
+                  <div className={`text-xs font-semibold uppercase tracking-wide ${finalFactsIssues.length ? 'text-amber-700' : 'text-slate-600'}`}>
+                    一致性检查
+                  </div>
+                  <div className={`mt-1 text-sm ${finalFactsIssues.length ? 'text-amber-900' : 'text-slate-700'}`}>
+                    {finalFactsIssues.length ? '检测到过程结果存在冲突，当前结果已按真实执行事实优先收敛。' : '未发现结果冲突，最终结果已与执行事实保持一致。'}
+                  </div>
+                  {finalFactsIssues.length ? (
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-900">
+                      {finalFactsIssues.map((issue) => (
+                        <li key={`${detailKey}-${issue}`}>{issue}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             {open && data ? (
               <div className="mt-3">
                 <JsonPreview value={data} />
@@ -243,7 +293,7 @@ export default function SentinelFlowTasksPage() {
   }, [reloadPoll])
 
   const filteredTasks = useMemo(() => {
-    const base = filter === 'all' ? tasks : tasks.filter((task) => task.status === filter)
+    const base = filter === 'all' ? tasks : tasks.filter((task) => getEffectiveTaskStatus(task) === filter)
     return [...base].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
   }, [filter, tasks])
 
@@ -350,6 +400,12 @@ export default function SentinelFlowTasksPage() {
 
   const selectedPayload = (selectedTask?.payload?.alert_data as Record<string, unknown> | undefined) ?? {}
   const selectedResult = selectedTask?.last_result_data ?? {}
+  const selectedFinalFacts = (selectedResult.final_facts as Record<string, unknown> | undefined) ?? {}
+  const selectedFinalJudgment = (selectedFinalFacts.judgment as Record<string, unknown> | undefined) ?? {}
+  const selectedFinalConsistency = (selectedFinalFacts.consistency as Record<string, unknown> | undefined) ?? {}
+  const selectedConsistencyIssues = Array.isArray(selectedFinalConsistency.issues)
+    ? selectedFinalConsistency.issues.map((item) => String(item).trim()).filter(Boolean)
+    : []
   const selectedWorkflowRuns = normalizeWorkflowRuns(selectedResult.workflow_runs)
   const selectedWorkflowRun = selectedWorkflowRuns[0] ?? null
   const selectedWorkflowSelection =
@@ -361,7 +417,7 @@ export default function SentinelFlowTasksPage() {
     ?? (selectedResult.closure_step as Record<string, unknown> | undefined)
   ) ?? {}
   const selectedReason = String(selectedResult.reason ?? '').trim()
-  const selectedDisposition = String(selectedResult.disposition ?? '').trim()
+  const selectedDisposition = String(selectedFinalJudgment.disposition ?? selectedResult.disposition ?? '').trim()
   const selectedSummary = String(selectedResult.summary ?? '').trim()
   const selectedEvidence = Array.isArray(selectedResult.evidence)
     ? selectedResult.evidence.map((item) => String(item).trim()).filter(Boolean)
@@ -404,28 +460,31 @@ export default function SentinelFlowTasksPage() {
               <span className="text-sm text-gray-500">排队中</span>
               <Clock className="h-4 w-4 text-amber-500" />
             </div>
-            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => task.status === 'queued').length}</div>
+            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => getEffectiveTaskStatus(task) === 'queued').length}</div>
           </div>
           <div className="rounded-xl border border-gray-200 bg-white p-5">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm text-gray-500">执行中</span>
               <RotateCcw className="h-4 w-4 text-sky-500" />
             </div>
-            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => task.status === 'running').length}</div>
+            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => getEffectiveTaskStatus(task) === 'running').length}</div>
           </div>
           <div className="rounded-xl border border-gray-200 bg-white p-5">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm text-gray-500">已完成</span>
               <ShieldCheck className="h-4 w-4 text-emerald-500" />
             </div>
-            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => task.status === 'succeeded' || task.status === 'completed').length}</div>
+            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => {
+              const status = getEffectiveTaskStatus(task)
+              return status === 'succeeded' || status === 'completed'
+            }).length}</div>
           </div>
           <div className="rounded-xl border border-gray-200 bg-white p-5">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-sm text-gray-500">失败</span>
               <XCircle className="h-4 w-4 text-red-500" />
             </div>
-            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => task.status === 'failed').length}</div>
+            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => getEffectiveTaskStatus(task) === 'failed').length}</div>
           </div>
         </div>
 
@@ -476,7 +535,7 @@ export default function SentinelFlowTasksPage() {
                     <button key={task.task_id} type="button" className={`sentinelflow-task-tile${selectedTask?.task_id === task.task_id ? ' sentinelflow-task-tile-active' : ''}`} onClick={() => setSelectedTaskId(task.task_id)}>
                       <div className="sentinelflow-response-row">
                         <strong>{task.title}</strong>
-                        <StatusBadge tone={getTone(task)}>{getTaskStatusLabel(task.status)}</StatusBadge>
+                        <StatusBadge tone={getTone(task)}>{getTaskStatusLabel(getEffectiveTaskStatus(task))}</StatusBadge>
                       </div>
                       <span>{task.alert_time || '未提供告警时间'}</span>
                       <span>{getTaskFlowLabel(task)}</span>
@@ -491,7 +550,7 @@ export default function SentinelFlowTasksPage() {
               {selectedTask ? (
                 <div className="sentinelflow-response-stack">
                   <div className="sentinelflow-response-row">
-                    <StatusBadge tone={getTone(selectedTask)}>{getTaskStatusLabel(selectedTask.status)}</StatusBadge>
+                    <StatusBadge tone={getTone(selectedTask)}>{getTaskStatusLabel(getEffectiveTaskStatus(selectedTask))}</StatusBadge>
                     <span>{selectedTask.alert_time || '未提供告警时间'}</span>
                     <span>{getTaskFlowLabel(selectedTask)}</span>
                   </div>
@@ -542,6 +601,12 @@ export default function SentinelFlowTasksPage() {
                       ) : null}
                     </div>
                   ) : null}
+                  {selectedConsistencyIssues.length ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">结果收敛提示</div>
+                      <div className="mt-2 text-sm text-amber-900">检测到过程结果存在冲突，当前页面已按真实执行事实优先收敛展示。</div>
+                    </div>
+                  ) : null}
 
                   {selectedTask.last_result_error && !hideTaskError ? <div className="sentinelflow-message-block sentinelflow-message-error">{selectedTask.last_result_error}</div> : null}
 
@@ -559,7 +624,7 @@ export default function SentinelFlowTasksPage() {
                     {processExpanded ? <div className="mt-4"><ProcessTrace trace={selectedTrace} traceOwnerId={selectedTask.task_id} /></div> : null}
                   </div>
 
-                  {selectedTask.status === 'failed' ? (
+                  {getEffectiveTaskStatus(selectedTask) === 'failed' ? (
                     <div className="flex justify-end">
                       <button type="button" className="sentinelflow-ghost-button" onClick={() => void handleRetry(selectedTask)} disabled={runningAction !== ''}>
                         {runningAction === selectedTask.task_id ? '重试中...' : '重试任务'}

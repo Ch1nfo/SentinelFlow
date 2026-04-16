@@ -10,6 +10,13 @@ import { useSentinelFlowAsyncData } from '@/hooks/useSentinelFlowAsyncData'
 import { useSentinelFlowLiveRefresh } from '@/hooks/useSentinelFlowLiveRefresh'
 import { readRuntimeActivity, subscribeRuntimeActivity, type RuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
 
+function getEffectiveTaskStatus(task: Record<string, unknown>): string {
+  const result = (task.last_result_data as Record<string, unknown> | undefined) ?? {}
+  const finalFacts = (result.final_facts as Record<string, unknown> | undefined) ?? {}
+  const taskOutcome = (finalFacts.task_outcome as Record<string, unknown> | undefined) ?? {}
+  return String(taskOutcome.status ?? task.status ?? '').trim()
+}
+
 export default function SentinelFlowOverviewPage() {
   const { data: health, reload: reloadHealth } = useSentinelFlowAsyncData(fetchHealth, [])
   const { data: poll, reload: reloadPoll } = useSentinelFlowAsyncData(fetchPollAlerts, [])
@@ -32,8 +39,8 @@ export default function SentinelFlowOverviewPage() {
 
   const tasks = poll?.tasks ?? []
   const skillCount = skills?.skills?.length ?? 0
-  const runningCount = tasks.filter((task) => task.status === 'running').length
-  const failedCount = tasks.filter((task) => task.status === 'failed').length
+  const runningCount = tasks.filter((task) => getEffectiveTaskStatus(task) === 'running').length
+  const failedCount = tasks.filter((task) => getEffectiveTaskStatus(task) === 'failed').length
 
   return (
     <div className="sentinelflow-page-stack">
@@ -179,21 +186,21 @@ export default function SentinelFlowOverviewPage() {
         </div>
       </Surface>
 
-      <Surface title="研判与处置摘要" subtitle="把业务触发、误报、真实攻击和封禁 IP 显示到首页，方便值班直接看分布情况。">
+      <Surface title="研判与处置摘要" subtitle="以下统计均按最终事实收敛结果计算，优先以真实执行结果为准。">
         <div className="grid gap-4 xl:grid-cols-2">
           <div className="rounded-xl border border-gray-200 bg-white p-5">
             <h3 className="mb-3 text-sm font-semibold text-gray-900">研判结果分布</h3>
             <div className="sentinelflow-stack-list">
-              <div className="sentinelflow-stack-item"><strong>业务触发 / 测试</strong><span>{summary?.judgment.business_trigger ?? 0} 条</span></div>
-              <div className="sentinelflow-stack-item"><strong>误报</strong><span>{summary?.judgment.false_positive ?? 0} 条</span></div>
-              <div className="sentinelflow-stack-item"><strong>真实攻击</strong><span>{summary?.judgment.true_attack ?? 0} 条</span></div>
+              <div className="sentinelflow-stack-item"><strong>业务触发 / 测试</strong><span>{summary?.judgment.business_trigger ?? 0} 条（按最终研判分类）</span></div>
+              <div className="sentinelflow-stack-item"><strong>误报</strong><span>{summary?.judgment.false_positive ?? 0} 条（按最终研判分类）</span></div>
+              <div className="sentinelflow-stack-item"><strong>真实攻击</strong><span>{summary?.judgment.true_attack ?? 0} 条（按最终研判分类）</span></div>
             </div>
           </div>
           <div className="rounded-xl border border-gray-200 bg-white p-5">
             <h3 className="mb-3 text-sm font-semibold text-gray-900">处置结果</h3>
             <div className="sentinelflow-stack-list">
-              <div className="sentinelflow-stack-item"><strong>成功结单</strong><span>{summary?.operations.closed_success ?? 0} 条</span></div>
-              <div className="sentinelflow-stack-item"><strong>成功处置</strong><span>{summary?.operations.disposed_success ?? 0} 条</span></div>
+              <div className="sentinelflow-stack-item"><strong>成功结单</strong><span>{summary?.operations.closed_success ?? 0} 条（按最终任务结果）</span></div>
+              <div className="sentinelflow-stack-item"><strong>成功处置</strong><span>{summary?.operations.disposed_success ?? 0} 条（按成功动作收敛）</span></div>
               <div className="sentinelflow-stack-item"><strong>封禁 IP</strong><span>{(summary?.operations.banned_ips ?? []).join('、') || '暂无'}</span></div>
             </div>
           </div>
