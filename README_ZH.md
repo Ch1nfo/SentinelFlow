@@ -4,7 +4,7 @@
 
 ### AI 驱动的安全运营平台 — 多 Agent SOC 自动化分析引擎
 
-[![版本](https://img.shields.io/badge/版本-0.1.0-blue.svg)](https://github.com/Ch1nfo/SentinelFlow/releases)
+[![版本](https://img.shields.io/badge/版本-0.3.0-blue.svg)](https://github.com/Ch1nfo/SentinelFlow/releases)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![许可证](https://img.shields.io/badge/许可证-MIT-green.svg)](LICENSE)
 [![平台](https://img.shields.io/badge/平台-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#)

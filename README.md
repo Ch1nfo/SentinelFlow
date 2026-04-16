@@ -4,7 +4,7 @@
 
 ### AI-Powered Security Operations Platform — Multi-Agent SOC Automation
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/Ch1nfo/SentinelFlow/releases)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/Ch1nfo/SentinelFlow/releases)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#)
