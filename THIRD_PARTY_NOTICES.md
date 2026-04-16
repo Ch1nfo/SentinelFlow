@@ -1,40 +1,55 @@
-# 第三方组件与开源合规说明
+# Third-Party Notices
 
-`SentinelFlow` 采用 `Apache-2.0` 许可证发布。
+`SentinelFlow` is released under the MIT License.
 
-本项目中包含以下两类第三方开源使用方式：
+This file documents third-party open source components used in this project and the obligations arising from their licenses.
 
-## 1. 依赖型第三方组件
+---
 
-包括但不限于：
+## 1. Runtime Dependencies
 
-- Python 运行时依赖
-- JavaScript / TypeScript 前端依赖
-- 构建工具、开发工具与测试工具
+This project depends on third-party packages at runtime. Key dependency manifests:
 
-当前依赖清单来源：
+- Python dependencies: `runtime/requirements.txt`
+- Frontend dependencies: `webui/package.json`
 
-- Python：`runtime/requirements.txt`
-- Python 开发依赖：`runtime/requirements-dev.txt`
-- 前端依赖：`webui/package.json`
+Each dependency is governed by its own license. Please refer to the respective package's license file or registry entry for details.
 
-## 2. 参考、改造或演化而来的开源实现
+---
 
-本项目在演进过程中，曾参考并吸收过基于 `Apache-2.0` 许可证发布的开源实现思路与部分代码结构。  
-当前仓库已经统一为 `SentinelFlow` 品牌与目录结构，但这并不改变对相关开源许可证义务的遵守。
+## 2. Incorporated or Adapted Third-Party Code
 
-处理原则如下：
+### flocks
 
-- 不继续保留不必要的旧品牌对外展示
-- 对直接复制、改造或演化而来的代码，遵守原始开源许可证要求
-- 以当前仓库根目录的 `LICENSE` 作为项目整体许可证
-- 如后续进一步整理到可公开发布状态，建议继续补充更细粒度的依赖许可证导出结果
+Portions of the frontend UI in this project are based on or adapted from **flocks**,
+which is licensed under the Apache License, Version 2.0.
 
-## 建议的发布前检查
+```
+Copyright The flocks Authors
 
-正式公开发布前，建议至少完成以下检查：
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-1. 确认仓库根目录许可证文件与项目说明一致
-2. 检查依赖清单是否完整
-3. 对明显来源于第三方开源项目的代码保留必要说明
-4. 如需要，补充更详细的依赖许可证汇总文件
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+The full text of the Apache License, Version 2.0 is available at:
+https://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+## 3. Pre-Release Checklist
+
+Before any public release, ensure the following:
+
+1. This file accurately lists all incorporated third-party components
+2. The root `LICENSE` file is consistent with the project's stated license
+3. Copyright and attribution notices for Apache 2.0 components are preserved as required by §4(c) of that license
+4. Dependency license summaries are generated if needed (e.g., via `pip-licenses` or `license-checker`)
