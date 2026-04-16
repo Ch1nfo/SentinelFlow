@@ -1,4 +1,4 @@
-export type AlertTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'completed'
+export type AlertTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'completed' | 'pending_closure'
 
 export type ExecutionTraceItem = {
   phase: string

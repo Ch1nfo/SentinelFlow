@@ -32,6 +32,7 @@ const TASK_FILTER_LABELS: Record<TaskFilter, string> = {
 function getTaskStatusLabel(status: TaskFilter | AlertTask['status']) {
   if (status === 'queued') return '排队中'
   if (status === 'running') return '执行中'
+  if (status === 'pending_closure') return '未执行'
   if (status === 'succeeded') return '已完成'
   if (status === 'completed') return '已被人工处置'
   if (status === 'failed') return '失败'
@@ -81,9 +82,18 @@ function formatIpPreview(value: unknown, limit = 4): { text: string; fullText: s
 function getTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' {
   const status = getEffectiveTaskStatus(task)
   if (status === 'succeeded' || status === 'completed') return 'success'
+  if (status === 'pending_closure') return 'warn'
   if (status === 'failed') return 'danger'
   if (status === 'running') return 'warn'
   return 'neutral'
+}
+
+function isFailedBucketStatus(status: string): boolean {
+  return status === 'failed' || status === 'pending_closure'
+}
+
+function isReDisposableTask(task: AlertTask): boolean {
+  return isFailedBucketStatus(String(getEffectiveTaskStatus(task)))
 }
 
 function toSortableTime(value: string | undefined) {
@@ -293,7 +303,13 @@ export default function SentinelFlowTasksPage() {
   }, [reloadPoll])
 
   const filteredTasks = useMemo(() => {
-    const base = filter === 'all' ? tasks : tasks.filter((task) => getEffectiveTaskStatus(task) === filter)
+    const base = filter === 'all'
+      ? tasks
+      : tasks.filter((task) => {
+          const status = String(getEffectiveTaskStatus(task))
+          if (filter === 'failed') return isFailedBucketStatus(status)
+          return status === filter
+        })
     return [...base].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
   }, [filter, tasks])
 
@@ -484,7 +500,7 @@ export default function SentinelFlowTasksPage() {
               <span className="text-sm text-gray-500">失败</span>
               <XCircle className="h-4 w-4 text-red-500" />
             </div>
-            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => getEffectiveTaskStatus(task) === 'failed').length}</div>
+            <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => isFailedBucketStatus(String(getEffectiveTaskStatus(task)))).length}</div>
           </div>
         </div>
 
@@ -624,10 +640,10 @@ export default function SentinelFlowTasksPage() {
                     {processExpanded ? <div className="mt-4"><ProcessTrace trace={selectedTrace} traceOwnerId={selectedTask.task_id} /></div> : null}
                   </div>
 
-                  {getEffectiveTaskStatus(selectedTask) === 'failed' ? (
+                  {isReDisposableTask(selectedTask) ? (
                     <div className="flex justify-end">
                       <button type="button" className="sentinelflow-ghost-button" onClick={() => void handleRetry(selectedTask)} disabled={runningAction !== ''}>
-                        {runningAction === selectedTask.task_id ? '重试中...' : '重试任务'}
+                        {runningAction === selectedTask.task_id ? '重试中...' : getEffectiveTaskStatus(selectedTask) === 'pending_closure' ? '重新处置' : '重试任务'}
                       </button>
                     </div>
                   ) : null}

@@ -1049,7 +1049,15 @@ class SentinelFlowAgentService:
             {
                 "phase": "final_status",
                 "title": "最终执行状态",
-                "summary": "任务成功完成。" if success else "任务未完成或未返回成功结果。",
+                "summary": (
+                    "任务成功完成。"
+                    if success
+                    else (
+                        "未执行结单，任务未完成。"
+                        if not bool(closure_step.get("attempted"))
+                        else "结单未成功，任务未完成。"
+                    )
+                ),
                 "success": success,
                 "data": {
                     "success": success,
@@ -1208,6 +1216,20 @@ class SentinelFlowAgentService:
             consistency_issues.append(
                 f"closure_result_implies_{mapped_disposition}_but_structured_disposition_{structured_disposition}"
             )
+        if successful_disposal_actions and not closure_attempted:
+            consistency_issues.append("disposal_executed_but_closure_not_attempted")
+        elif closure_attempted and not closure_success:
+            consistency_issues.append("closure_attempted_but_not_successful")
+
+        if closure_success:
+            outcome_status = "succeeded"
+            outcome_success = True
+        elif closure_attempted:
+            outcome_status = "failed"
+            outcome_success = False
+        else:
+            outcome_status = "pending_closure"
+            outcome_success = False
 
         return {
             "judgment": {
@@ -1239,8 +1261,8 @@ class SentinelFlowAgentService:
                 ] if isinstance(workflow_runs, list) else [],
             },
             "task_outcome": {
-                "success": bool(success),
-                "status": "succeeded" if success else "failed",
+                "success": outcome_success,
+                "status": outcome_status,
                 "source": "finalizer",
             },
             "consistency": {
@@ -1476,13 +1498,7 @@ class SentinelFlowAgentService:
         skill_runs: list[dict[str, Any]],
         actions: dict[str, Any],
     ) -> bool:
-        if bool(closure_step.get("attempted")) and bool(closure_step.get("success")):
-            return True
-        if action_hint == "triage_dispose" and action_steps and all(bool(step.get("success")) for step in action_steps):
-            return True
-        closure_success = any(self._is_successful_closure_run(run) for run in skill_runs)
-        disposal_success = any(not bool(payload.get("error")) for payload in actions.values() if isinstance(payload, dict))
-        return closure_success or (action_hint == "triage_dispose" and disposal_success)
+        return bool(closure_step.get("attempted")) and bool(closure_step.get("success"))
 
     def _extract_skill_runs(self, graph_result: dict[str, Any]) -> list[dict[str, Any]]:
         tool_calls = [item for item in graph_result.get("tool_calls", []) if isinstance(item, dict)]

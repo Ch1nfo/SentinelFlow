@@ -40,7 +40,10 @@ export default function SentinelFlowOverviewPage() {
   const tasks = poll?.tasks ?? []
   const skillCount = skills?.skills?.length ?? 0
   const runningCount = tasks.filter((task) => getEffectiveTaskStatus(task) === 'running').length
-  const failedCount = tasks.filter((task) => getEffectiveTaskStatus(task) === 'failed').length
+  const failedCount = tasks.filter((task) => {
+    const status = getEffectiveTaskStatus(task)
+    return status === 'failed' || status === 'pending_closure'
+  }).length
 
   return (
     <div className="sentinelflow-page-stack">

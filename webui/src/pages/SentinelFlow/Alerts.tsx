@@ -27,6 +27,7 @@ function getTaskTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger'
   const status = getEffectiveTaskStatus(task)
   if (status === 'running') return 'info'
   if (status === 'queued') return 'warn'
+  if (status === 'pending_closure') return 'warn'
   if (status === 'failed') return 'danger'
   if (status === 'succeeded' || status === 'completed') return 'success'
   return 'neutral'
@@ -96,6 +97,7 @@ function getTaskStatusClass(task: AlertTask): string {
   const status = getEffectiveTaskStatus(task)
   if (status === 'running') return 'running'
   if (status === 'queued') return 'queued'
+  if (status === 'pending_closure') return 'queued'
   if (status === 'failed') return 'danger'
   if (status === 'succeeded' || status === 'completed') return 'success'
   return 'neutral'
@@ -105,10 +107,16 @@ function getTaskStatusLabel(task: AlertTask): string {
   const status = getEffectiveTaskStatus(task)
   if (status === 'queued') return '排队中'
   if (status === 'running') return '执行中'
+  if (status === 'pending_closure') return '未执行'
   if (status === 'completed') return '已被人工处置'
   if (status === 'succeeded') return '已完成'
   if (status === 'failed') return '失败'
   return status
+}
+
+function isReDisposableStatus(task: AlertTask): boolean {
+  const status = getEffectiveTaskStatus(task)
+  return status === 'failed' || status === 'pending_closure'
 }
 
 function getEffectiveTaskStatus(task: AlertTask): AlertTask['status'] | string {
@@ -479,8 +487,10 @@ export default function SentinelFlowAlertsPage() {
                 ) : null}
                 <div className="sentinelflow-action-bar">
                   <button type="button" className="sentinelflow-primary-button" onClick={() => void runAction('triage_dispose')} disabled={actionState.running}>处置当前告警</button>
-                  {getEffectiveTaskStatus(selectedTask) === 'failed' ? (
-                    <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('retry_task')} disabled={actionState.running}>重试任务</button>
+                  {isReDisposableStatus(selectedTask) ? (
+                    <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('retry_task')} disabled={actionState.running}>
+                      {getEffectiveTaskStatus(selectedTask) === 'pending_closure' ? '重新处置' : '重试任务'}
+                    </button>
                   ) : null}
                 </div>
                 {selectedWorkflowRun && workflowDecision ? (
