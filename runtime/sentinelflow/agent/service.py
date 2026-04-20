@@ -166,7 +166,8 @@ class SentinelFlowAgentService:
                 "approved_fingerprints": list((execution_context or {}).get("approved_fingerprints", []) or []),
                 "rejected_fingerprints": list((execution_context or {}).get("rejected_fingerprints", []) or []),
                 "executed_skill_cache": dict((execution_context or {}).get("executed_skill_cache", {}) or {}),
-            }
+            },
+            {"recursion_limit": self._resolve_agent_recursion_limit(agent_definition)},
         )
         return state
 
@@ -501,6 +502,9 @@ class SentinelFlowAgentService:
             return 3
         return max(1, raw_value)
 
+    def _resolve_agent_recursion_limit(self, agent_definition) -> int:
+        return max(10, self._resolve_worker_max_steps(agent_definition) * 4 + 4)
+
     def _build_execution_context(
         self,
         *,
@@ -829,7 +833,10 @@ class SentinelFlowAgentService:
                 enable_read_skill_document=bool(readable_skills),
                 enable_execute_skill=bool(executable_skills),
             )
-            resumed_state = await graph.ainvoke(state)
+            resumed_state = await graph.ainvoke(
+                state,
+                {"recursion_limit": self._resolve_agent_recursion_limit(agent_definition)},
+            )
             graph_result = self._serialize_graph_result(
                 str((state.get("alert_data", {}) or {}).get("payload") or (state.get("alert_data", {}) or {}).get("eventIds") or "").strip(),
                 resumed_state,
@@ -957,6 +964,8 @@ class SentinelFlowAgentService:
         if parent_checkpoint_id and not result.get("approval_pending"):
             parent_checkpoint = self.approval_service.load_checkpoint(parent_checkpoint_id)
             if parent_checkpoint is not None:
+                if status_callback:
+                    status_callback("正在恢复上层编排状态...")
                 parent_kind = str(parent_checkpoint.get("checkpoint_kind", "")).strip()
                 if parent_kind == "workflow_runner":
                     result = await self._resume_workflow_checkpoint(parent_checkpoint, result, approval)
@@ -1009,6 +1018,13 @@ class SentinelFlowAgentService:
                     rejected.add(approval.arguments_fingerprint)
                 parent_state["approved_fingerprints"] = list(approved)
                 parent_state["rejected_fingerprints"] = list(rejected)
+                child_cache = state.get("executed_skill_cache", {})
+                parent_cache = parent_state.get("executed_skill_cache", {})
+                if isinstance(child_cache, dict):
+                    if not isinstance(parent_cache, dict):
+                        parent_cache = {}
+                    parent_cache.update(child_cache)
+                    parent_state["executed_skill_cache"] = parent_cache
                 parent_state = self._replace_parent_tool_result(parent_state, approval.parent_tool_call_id, approval.approval_id, wrapped_result)
                 self.approval_service.save_checkpoint(
                     checkpoint_thread_id=parent_checkpoint_id,

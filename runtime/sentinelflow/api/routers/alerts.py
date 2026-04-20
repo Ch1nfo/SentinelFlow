@@ -473,11 +473,21 @@ async def _resolve_approval_json(
             task=None,
             error="找不到待审批记录。",
         )
-    result = await agent_service.resolve_skill_approval(
-        approval_id,
-        decision,
-        status_callback=status_callback,
-    )
+    try:
+        result = await agent_service.resolve_skill_approval(
+            approval_id,
+            decision,
+            status_callback=status_callback,
+        )
+    except Exception as exc:
+        return _build_approval_resolution_response(
+            success=False,
+            route="approval_resolution_failed",
+            approval=skill_approval_service.serialize_approval(skill_approval_service.get_by_id(approval_id) or approval),
+            data={},
+            task=None,
+            error=f"审批恢复执行失败：{exc}",
+        )
     payload = result.get("data", {})
     payload = payload if isinstance(payload, dict) else {}
     serialized_approval = skill_approval_service.serialize_approval(skill_approval_service.get_by_id(approval_id) or approval)
@@ -547,7 +557,15 @@ def _stream_approval_resolution(approval_id: str, decision: str):
                 last_status_at = time.monotonic()
                 continue
             if event_type == "error":
-                raise payload_data
+                response = {
+                    "route": "approval_resolution_failed",
+                    "success": False,
+                    "data": {},
+                    "approval": None,
+                    "task": None,
+                    "error": f"审批恢复执行失败：{payload_data}",
+                }
+                break
             response = payload_data
             break
         except queue.Empty:
