@@ -34,3 +34,4 @@ class SentinelFlowAgentState(TypedDict):
     parent_tool_call_id: NotRequired[str]
     approved_fingerprints: NotRequired[list[str]]
     rejected_fingerprints: NotRequired[list[str]]
+    executed_skill_cache: NotRequired[dict[str, Any]]

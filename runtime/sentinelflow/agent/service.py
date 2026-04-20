@@ -165,6 +165,7 @@ class SentinelFlowAgentService:
                 "parent_tool_call_id": str((execution_context or {}).get("parent_tool_call_id", "")).strip(),
                 "approved_fingerprints": list((execution_context or {}).get("approved_fingerprints", []) or []),
                 "rejected_fingerprints": list((execution_context or {}).get("rejected_fingerprints", []) or []),
+                "executed_skill_cache": dict((execution_context or {}).get("executed_skill_cache", {}) or {}),
             }
         )
         return state
@@ -514,6 +515,7 @@ class SentinelFlowAgentService:
         parent_tool_call_id: str | None = None,
         approved_fingerprints: list[str] | None = None,
         rejected_fingerprints: list[str] | None = None,
+        executed_skill_cache: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "run_id": (run_id or uuid4().hex).strip(),
@@ -527,12 +529,16 @@ class SentinelFlowAgentService:
             "parent_tool_call_id": (parent_tool_call_id or "").strip(),
             "approved_fingerprints": list(approved_fingerprints or []),
             "rejected_fingerprints": list(rejected_fingerprints or []),
+            "executed_skill_cache": dict(executed_skill_cache or {}),
         }
 
     def _normalize_graph_state_keys(self, state: dict[str, Any]) -> dict[str, Any]:
         if "graph_checkpoint_ns" not in state and "checkpoint_ns" in state:
             state["graph_checkpoint_ns"] = state.get("checkpoint_ns")
         return state
+
+    def _skill_cache_key(self, skill_name: str, arguments_fingerprint: str) -> str:
+        return f"{skill_name}:{arguments_fingerprint}"
 
     def _extract_pending_tool_message(self, state: dict[str, Any]) -> tuple[dict[str, Any], str] | tuple[None, str]:
         messages = list(state.get("messages", []))
@@ -739,11 +745,17 @@ class SentinelFlowAgentService:
                 "error": f"审批通过后执行 Skill 失败：{exc}",
             }
         payload = result.data if isinstance(result.data, dict) else {"result": result.data}
-        return {
+        tool_payload = {
             "success": result.success,
             "data": payload,
             "error": result.error,
         }
+        cache = state.get("executed_skill_cache", {})
+        if not isinstance(cache, dict):
+            cache = {}
+        cache[self._skill_cache_key(approval.skill_name, approval.arguments_fingerprint)] = tool_payload
+        state["executed_skill_cache"] = cache
+        return tool_payload
 
     def _rejected_tool_payload(self, approval) -> dict[str, Any]:
         return {
@@ -884,23 +896,35 @@ class SentinelFlowAgentService:
             "data": {},
         }
 
-    async def resolve_skill_approval(self, approval_id: str, decision: str) -> dict[str, Any]:
+    async def resolve_skill_approval(
+        self,
+        approval_id: str,
+        decision: str,
+        *,
+        status_callback: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
         approval = self.approval_service.get_by_id(approval_id)
         if approval is None:
             return {"success": False, "route": "approval_not_found", "error": "找不到待审批记录。", "data": {}}
         if approval.status != "pending":
             return {"success": False, "route": "approval_not_pending", "error": "该审批已处理。", "data": {"approval": self.approval_service.serialize_approval(approval)}}
+        if status_callback:
+            status_callback("正在读取审批断点...")
         checkpoint = self.approval_service.load_checkpoint(approval.checkpoint_thread_id)
         if checkpoint is None:
             return {"success": False, "route": "approval_checkpoint_missing", "error": "审批断点不存在或已丢失。", "data": {}}
 
         state = deserialize_graph_state(checkpoint.get("state", {}))
         if decision == "approve":
+            if status_callback:
+                status_callback(f"已批准 Skill「{approval.skill_name}」，正在执行...")
             tool_payload = self._approved_tool_payload(approval, state)
             approved = set(state.get("approved_fingerprints", []) or [])
             approved.add(approval.arguments_fingerprint)
             state["approved_fingerprints"] = list(approved)
         elif decision == "reject":
+            if status_callback:
+                status_callback(f"已拒绝 Skill「{approval.skill_name}」，正在恢复推理...")
             tool_payload = self._rejected_tool_payload(approval)
             rejected = set(state.get("rejected_fingerprints", []) or [])
             rejected.add(approval.arguments_fingerprint)
@@ -909,6 +933,8 @@ class SentinelFlowAgentService:
             return {"success": False, "route": "approval_invalid_decision", "error": f"不支持的审批动作：{decision}", "data": {}}
 
         state = self._replace_tool_message_content(state, approval.tool_call_id, tool_payload)
+        if status_callback:
+            status_callback("正在写入审批结果并恢复执行...")
         self.approval_service.save_checkpoint(
             checkpoint_thread_id=approval.checkpoint_thread_id,
             checkpoint_ns=checkpoint.get("checkpoint_ns", ""),
@@ -923,6 +949,8 @@ class SentinelFlowAgentService:
         )
         updated = self.approval_service.set_decision(approval_id, "approved" if decision == "approve" else "rejected")
         current_checkpoint = self.approval_service.load_checkpoint(approval.checkpoint_thread_id) or checkpoint
+        if status_callback:
+            status_callback("正在恢复 Agent 图状态...")
         result = await self._resume_saved_checkpoint(current_checkpoint)
 
         parent_checkpoint_id = approval.parent_checkpoint_thread_id.strip()
@@ -996,6 +1024,8 @@ class SentinelFlowAgentService:
                 )
                 result = await self._resume_saved_checkpoint(self.approval_service.load_checkpoint(parent_checkpoint_id) or parent_checkpoint)
 
+        if status_callback:
+            status_callback("正在整理审批恢复结果...")
         approval_payload = self.approval_service.serialize_approval(updated or approval)
         return {
             "success": not result.get("approval_pending") and bool(result.get("success", True)),
@@ -1149,12 +1179,13 @@ class SentinelFlowAgentService:
             "scope_type": str((execution_context or {}).get("scope_type", "")).strip(),
             "scope_ref": str((execution_context or {}).get("scope_ref", "")).strip(),
             "checkpoint_thread_id": str((execution_context or {}).get("checkpoint_thread_id", "")).strip(),
-            "graph_checkpoint_ns": str((execution_context or {}).get("checkpoint_ns", "orchestrator_graph")).strip(),
+            "graph_checkpoint_ns": "orchestrator_graph",
             "parent_checkpoint_thread_id": str((execution_context or {}).get("parent_checkpoint_thread_id", "")).strip(),
             "parent_checkpoint_ns": str((execution_context or {}).get("parent_checkpoint_ns", "")).strip(),
             "parent_tool_call_id": str((execution_context or {}).get("parent_tool_call_id", "")).strip(),
             "approved_fingerprints": list((execution_context or {}).get("approved_fingerprints", []) or []),
             "rejected_fingerprints": list((execution_context or {}).get("rejected_fingerprints", []) or []),
+            "executed_skill_cache": dict((execution_context or {}).get("executed_skill_cache", {}) or {}),
         }
         if status_callback:
             status_callback("主 Agent 正在分析任务并调度子 Agent...")
@@ -1231,12 +1262,13 @@ class SentinelFlowAgentService:
             "scope_type": str((execution_context or {}).get("scope_type", "")).strip(),
             "scope_ref": str((execution_context or {}).get("scope_ref", "")).strip(),
             "checkpoint_thread_id": str((execution_context or {}).get("checkpoint_thread_id", "")).strip(),
-            "graph_checkpoint_ns": str((execution_context or {}).get("checkpoint_ns", "orchestrator_graph")).strip(),
+            "graph_checkpoint_ns": "orchestrator_graph",
             "parent_checkpoint_thread_id": str((execution_context or {}).get("parent_checkpoint_thread_id", "")).strip(),
             "parent_checkpoint_ns": str((execution_context or {}).get("parent_checkpoint_ns", "")).strip(),
             "parent_tool_call_id": str((execution_context or {}).get("parent_tool_call_id", "")).strip(),
             "approved_fingerprints": list((execution_context or {}).get("approved_fingerprints", []) or []),
             "rejected_fingerprints": list((execution_context or {}).get("rejected_fingerprints", []) or []),
+            "executed_skill_cache": dict((execution_context or {}).get("executed_skill_cache", {}) or {}),
         }
         if status_callback:
             status_callback("主 Agent 正在分析告警并调度子 Agent...")

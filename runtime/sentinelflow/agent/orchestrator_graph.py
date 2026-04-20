@@ -149,6 +149,7 @@ def _build_worker_subgraph_tool(
             "parent_tool_call_id": str(state.get("parent_tool_call_id", "")).strip(),
             "approved_fingerprints": list(state.get("approved_fingerprints") or []),
             "rejected_fingerprints": list(state.get("rejected_fingerprints") or []),
+            "executed_skill_cache": dict(state.get("executed_skill_cache", {}) or {}),
         }
         worker_config = worker_agent_def.resolve_runtime_config(runtime_config)
         subgraph = build_agent_graph(
@@ -393,6 +394,7 @@ def build_orchestrator_graph(
             "parent_tool_call_id": parent_tool_call_id,
             "approved_fingerprints": list(state.get("approved_fingerprints") or []),
             "rejected_fingerprints": list(state.get("rejected_fingerprints") or []),
+            "executed_skill_cache": dict(state.get("executed_skill_cache", {}) or {}),
         }
         try:
             result = await workflow_runner.execute_workflow(

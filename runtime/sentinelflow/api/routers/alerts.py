@@ -457,7 +457,12 @@ def _build_approval_resolution_response(
     }
 
 
-async def _resolve_approval_json(approval_id: str, decision: str) -> dict[str, Any]:
+async def _resolve_approval_json(
+    approval_id: str,
+    decision: str,
+    *,
+    status_callback=None,
+) -> dict[str, Any]:
     approval = skill_approval_service.get_by_id(approval_id)
     if approval is None:
         return _build_approval_resolution_response(
@@ -468,7 +473,11 @@ async def _resolve_approval_json(approval_id: str, decision: str) -> dict[str, A
             task=None,
             error="找不到待审批记录。",
         )
-    result = await agent_service.resolve_skill_approval(approval_id, decision)
+    result = await agent_service.resolve_skill_approval(
+        approval_id,
+        decision,
+        status_callback=status_callback,
+    )
     payload = result.get("data", {})
     payload = payload if isinstance(payload, dict) else {}
     serialized_approval = skill_approval_service.serialize_approval(skill_approval_service.get_by_id(approval_id) or approval)
@@ -497,7 +506,13 @@ def _stream_approval_resolution(approval_id: str, decision: str):
 
     def run_resolution() -> None:
         try:
-            response = _run_coroutine_in_new_loop(_resolve_approval_json(approval_id, decision))
+            response = _run_coroutine_in_new_loop(
+                _resolve_approval_json(
+                    approval_id,
+                    decision,
+                    status_callback=lambda text: result_queue.put(("status", text)),
+                )
+            )
             result_queue.put(("response", response))
         except Exception as error:
             result_queue.put(("error", error))
@@ -527,6 +542,10 @@ def _stream_approval_resolution(approval_id: str, decision: str):
     while True:
         try:
             event_type, payload_data = result_queue.get(timeout=0.2)
+            if event_type == "status":
+                yield f"data: {json.dumps({'type': 'status', 'payload': {'text': str(payload_data)}}, ensure_ascii=False)}\n\n"
+                last_status_at = time.monotonic()
+                continue
             if event_type == "error":
                 raise payload_data
             response = payload_data

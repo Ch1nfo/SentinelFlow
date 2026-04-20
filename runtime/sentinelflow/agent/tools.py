@@ -27,6 +27,9 @@ def build_agent_tools(
 
     tools: list = []
 
+    def _skill_cache_key(skill_name: str, fingerprint: str) -> str:
+        return f"{skill_name}:{fingerprint}"
+
     def _approval_payload(
         *,
         skill_name: str,
@@ -119,6 +122,12 @@ def build_agent_tools(
                     ensure_ascii=False,
                 )
             fingerprint = approval_service.fingerprint_arguments(arguments or {})
+            cache_key = _skill_cache_key(skill_name, fingerprint)
+            cached_results = state.get("executed_skill_cache", {})
+            if isinstance(cached_results, dict):
+                cached_payload = cached_results.get(cache_key)
+                if isinstance(cached_payload, dict):
+                    return json.dumps(cached_payload, ensure_ascii=False)
             approved_fingerprints = set(state.get("approved_fingerprints") or [])
             rejected_fingerprints = set(state.get("rejected_fingerprints") or [])
             execution_entry = str(state.get("execution_entry", "")).strip()
@@ -175,6 +184,12 @@ def build_agent_tools(
                     ensure_ascii=False,
                 )
             fingerprint = approval_service.fingerprint_arguments({})
+            cache_key = _skill_cache_key(skill_name, fingerprint)
+            cached_results = state.get("executed_skill_cache", {})
+            if isinstance(cached_results, dict):
+                cached_payload = cached_results.get(cache_key)
+                if isinstance(cached_payload, dict):
+                    return json.dumps(cached_payload, ensure_ascii=False)
             approved_fingerprints = set(state.get("approved_fingerprints") or [])
             rejected_fingerprints = set(state.get("rejected_fingerprints") or [])
             execution_entry = str(state.get("execution_entry", "")).strip()
