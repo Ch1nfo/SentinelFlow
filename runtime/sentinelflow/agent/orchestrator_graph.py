@@ -249,6 +249,7 @@ def _build_worker_subgraph_tool(
         task_prompt: str,
         state: Annotated[OrchestratorState, InjectedState()],  # type: ignore[misc]
     ) -> str:
+        """委托当前子 Agent 执行一个具体任务，并返回 JSON 结果。"""
         step_counter[0] += 1
         step_idx = step_counter[0]
         worker_state = dict(state)
