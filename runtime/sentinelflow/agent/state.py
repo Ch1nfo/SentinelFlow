@@ -28,7 +28,7 @@ class SentinelFlowAgentState(TypedDict):
     scope_type: NotRequired[str]
     scope_ref: NotRequired[str]
     checkpoint_thread_id: NotRequired[str]
-    checkpoint_ns: NotRequired[str]
+    graph_checkpoint_ns: NotRequired[str]
     parent_checkpoint_thread_id: NotRequired[str]
     parent_checkpoint_ns: NotRequired[str]
     parent_tool_call_id: NotRequired[str]

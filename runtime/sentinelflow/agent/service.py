@@ -159,7 +159,7 @@ class SentinelFlowAgentService:
                 "scope_type": str((execution_context or {}).get("scope_type", "")).strip(),
                 "scope_ref": str((execution_context or {}).get("scope_ref", "")).strip(),
                 "checkpoint_thread_id": str((execution_context or {}).get("checkpoint_thread_id", "")).strip(),
-                "checkpoint_ns": str((execution_context or {}).get("checkpoint_ns", "agent_graph")).strip(),
+                "graph_checkpoint_ns": str((execution_context or {}).get("checkpoint_ns", "agent_graph")).strip(),
                 "parent_checkpoint_thread_id": str((execution_context or {}).get("parent_checkpoint_thread_id", "")).strip(),
                 "parent_checkpoint_ns": str((execution_context or {}).get("parent_checkpoint_ns", "")).strip(),
                 "parent_tool_call_id": str((execution_context or {}).get("parent_tool_call_id", "")).strip(),
@@ -529,6 +529,11 @@ class SentinelFlowAgentService:
             "rejected_fingerprints": list(rejected_fingerprints or []),
         }
 
+    def _normalize_graph_state_keys(self, state: dict[str, Any]) -> dict[str, Any]:
+        if "graph_checkpoint_ns" not in state and "checkpoint_ns" in state:
+            state["graph_checkpoint_ns"] = state.get("checkpoint_ns")
+        return state
+
     def _extract_pending_tool_message(self, state: dict[str, Any]) -> tuple[dict[str, Any], str] | tuple[None, str]:
         messages = list(state.get("messages", []))
         for msg in reversed(messages):
@@ -674,7 +679,7 @@ class SentinelFlowAgentService:
         scope_type = str(state.get("scope_type", request.get("scope_type", ""))).strip()
         scope_ref = str(state.get("scope_ref", request.get("scope_ref", ""))).strip()
         checkpoint_thread_id = str(state.get("checkpoint_thread_id", request.get("checkpoint_thread_id", ""))).strip() or uuid4().hex
-        checkpoint_ns = str(state.get("checkpoint_ns", request.get("checkpoint_ns", checkpoint_kind))).strip() or checkpoint_kind
+        checkpoint_ns = str(state.get("graph_checkpoint_ns", state.get("checkpoint_ns", request.get("checkpoint_ns", checkpoint_kind)))).strip() or checkpoint_kind
 
         self.approval_service.save_checkpoint(
             checkpoint_thread_id=checkpoint_thread_id,
@@ -696,7 +701,7 @@ class SentinelFlowAgentService:
                     updated = self.approval_service.update_parent_context(
                         approval_id,
                         parent_checkpoint_thread_id=str(state.get("checkpoint_thread_id", "")).strip(),
-                        parent_checkpoint_ns=str(state.get("checkpoint_ns", checkpoint_kind)).strip(),
+                        parent_checkpoint_ns=str(state.get("graph_checkpoint_ns", state.get("checkpoint_ns", checkpoint_kind))).strip(),
                         parent_tool_call_id=tool_call_id,
                     )
                     if updated is not None:
@@ -795,7 +800,7 @@ class SentinelFlowAgentService:
         return await self.workflow_runner.resume_checkpoint(checkpoint, step_result, approval)
 
     async def _resume_saved_checkpoint(self, checkpoint: dict[str, Any]) -> dict[str, Any]:
-        state = deserialize_graph_state(checkpoint.get("state", {}))
+        state = self._normalize_graph_state_keys(deserialize_graph_state(checkpoint.get("state", {})))
         checkpoint_kind = str(checkpoint.get("checkpoint_kind", "")).strip()
         agent_name = str(checkpoint.get("agent_name", "")).strip() or None
         agent_definition = resolve_default_agent(self.agent_root, agent_name)
@@ -1144,7 +1149,7 @@ class SentinelFlowAgentService:
             "scope_type": str((execution_context or {}).get("scope_type", "")).strip(),
             "scope_ref": str((execution_context or {}).get("scope_ref", "")).strip(),
             "checkpoint_thread_id": str((execution_context or {}).get("checkpoint_thread_id", "")).strip(),
-            "checkpoint_ns": str((execution_context or {}).get("checkpoint_ns", "orchestrator_graph")).strip(),
+            "graph_checkpoint_ns": str((execution_context or {}).get("checkpoint_ns", "orchestrator_graph")).strip(),
             "parent_checkpoint_thread_id": str((execution_context or {}).get("parent_checkpoint_thread_id", "")).strip(),
             "parent_checkpoint_ns": str((execution_context or {}).get("parent_checkpoint_ns", "")).strip(),
             "parent_tool_call_id": str((execution_context or {}).get("parent_tool_call_id", "")).strip(),
@@ -1226,7 +1231,7 @@ class SentinelFlowAgentService:
             "scope_type": str((execution_context or {}).get("scope_type", "")).strip(),
             "scope_ref": str((execution_context or {}).get("scope_ref", "")).strip(),
             "checkpoint_thread_id": str((execution_context or {}).get("checkpoint_thread_id", "")).strip(),
-            "checkpoint_ns": str((execution_context or {}).get("checkpoint_ns", "orchestrator_graph")).strip(),
+            "graph_checkpoint_ns": str((execution_context or {}).get("checkpoint_ns", "orchestrator_graph")).strip(),
             "parent_checkpoint_thread_id": str((execution_context or {}).get("parent_checkpoint_thread_id", "")).strip(),
             "parent_checkpoint_ns": str((execution_context or {}).get("parent_checkpoint_ns", "")).strip(),
             "parent_tool_call_id": str((execution_context or {}).get("parent_tool_call_id", "")).strip(),

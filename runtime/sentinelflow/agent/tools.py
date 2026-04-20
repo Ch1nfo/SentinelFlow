@@ -48,7 +48,7 @@ def build_agent_tools(
                     "scope_type": str(state.get("scope_type", "")).strip(),
                     "scope_ref": str(state.get("scope_ref", "")).strip(),
                     "checkpoint_thread_id": str(state.get("checkpoint_thread_id", "")).strip(),
-                    "checkpoint_ns": str(state.get("checkpoint_ns", "")).strip(),
+                    "checkpoint_ns": str(state.get("graph_checkpoint_ns", state.get("checkpoint_ns", ""))).strip(),
                     "message": f"Skill「{skill_name}」需要人工审批后才能执行。",
                 },
             },
