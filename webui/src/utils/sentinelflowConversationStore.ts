@@ -100,6 +100,20 @@ export function summarizeAssistantReply(response: CommandDispatchResponse): stri
   return response.success ? '命令已执行完成，可以展开查看详细结果。' : '命令执行失败，请展开查看详细错误。'
 }
 
+function summarizeAssistantHistory(response: CommandDispatchResponse): string {
+  const approvalStatus = String(response.approval?.status || '').trim().toLowerCase()
+  if (approvalStatus === 'pending') {
+    return '上一轮请求命中了需要审批的 Skill，尚未处理。'
+  }
+  if (approvalStatus === 'approved') {
+    return '上一轮请求包含需要审批的 Skill，已获批准并完成处理。'
+  }
+  if (approvalStatus === 'rejected') {
+    return '上一轮请求包含需要审批的 Skill，用户拒绝执行。'
+  }
+  return summarizeAssistantReply(response)
+}
+
 let state: ConversationRuntimeState = {
   sessions: buildInitialSessions(),
   activeSessionId: readLocalValue<string>(CONVERSATION_ACTIVE_SESSION_KEY, buildInitialSessions()[0]?.id || ''),
@@ -219,7 +233,7 @@ export async function startConversationRun() {
   const historyMessages: ConversationHistoryMessage[] = [...activeSession.history]
     .reverse()
     .flatMap((item) => {
-      const assistant = summarizeAssistantReply(item.response)
+      const assistant = summarizeAssistantHistory(item.response)
       const entries: ConversationHistoryMessage[] = [{ role: 'user', content: item.command }]
       if (assistant) {
         entries.push({ role: 'assistant', content: assistant })
