@@ -195,10 +195,6 @@ export default function SentinelFlowConversationPage() {
                 {orderedHistory.map((item) => {
                 const assistantReply = summarizeAssistantReply(item.response)
                 const isExpanded = expandedId === item.id
-                const isApprovalPending = item.response.route === 'approval_required'
-                const resultTone = isApprovalPending ? 'warn' : (item.response.success ? 'success' : 'warn')
-                const resultLabel = isApprovalPending ? '待审批' : (item.response.success ? '已完成' : '失败')
-                const resultCode = isApprovalPending ? 'pending_approval' : (item.response.success ? 'success' : 'error')
                 const commandData = extractCommandData(item.response.data)
                 const storedApproval = item.response.approval as ApprovalRequest | undefined
                 const toolCalls = Array.isArray(commandData.tool_calls) ? commandData.tool_calls as ToolCallLike[] : []
@@ -224,6 +220,11 @@ export default function SentinelFlowConversationPage() {
                   arguments_summary: approvalRequest.arguments_summary || '无参数',
                   message: approvalRequest.message || '',
                 } satisfies ApprovalRequest : undefined)
+                const approvalStatus = String(approvalCard?.status || '')
+                const isApprovalPending = approvalStatus ? approvalStatus === 'pending' : item.response.route === 'approval_required'
+                const resultTone = isApprovalPending ? 'warn' : (item.response.success ? 'success' : 'warn')
+                const resultLabel = isApprovalPending ? '待审批' : (item.response.success ? '已完成' : '失败')
+                const resultCode = isApprovalPending ? 'pending_approval' : (item.response.success ? 'success' : 'error')
                 const showApprovalCard = Boolean(approvalCard?.skill_name)
                 const hideExecutionSummary = isApprovalPending
 
@@ -256,9 +257,9 @@ export default function SentinelFlowConversationPage() {
                       {showApprovalCard ? (
                         <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                           <div className="sentinelflow-response-row">
-                            <div className="font-semibold">{approvalStatusLabel(String(approvalCard?.status || 'pending'))}</div>
-                            <StatusBadge tone={approvalStatusTone(String(approvalCard?.status || 'pending'))}>
-                              {String(approvalCard?.status || 'pending')}
+                            <div className="font-semibold">{approvalStatusLabel(approvalStatus || 'pending')}</div>
+                            <StatusBadge tone={approvalStatusTone(approvalStatus || 'pending')}>
+                              {approvalStatus || 'pending'}
                             </StatusBadge>
                           </div>
                           <div className="mt-1">{approvalCard?.message || `Skill「${approvalCard?.skill_name || '未命名 Skill'}」需要审批。`}</div>
