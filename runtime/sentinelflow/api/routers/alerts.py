@@ -343,8 +343,13 @@ async def _dispatch_command_internal(
             execution_context=execution_context,
         )
         route = "approval_required" if agent_data.get("approval_pending") else "agent_dispatch"
-        success = False if agent_data.get("approval_pending") else True
-        return {"command_text": payload.command_text, "route": route, "success": success, "data": agent_data, "error": None if route != "approval_required" else "当前命中了需要审批的 Skill。"}
+        return {
+            "command_text": payload.command_text,
+            "route": route,
+            "success": True,
+            "data": agent_data,
+            "error": None,
+        }
     except Exception as exc:
         if cancel_event is not None and cancel_event.is_set():
             return {"command_text": payload.command_text, "route": "stopped", "success": False, "error": "已停止当前任务"}
@@ -501,7 +506,23 @@ def _stream_approval_resolution(approval_id: str, decision: str):
     worker.start()
 
     yield f"data: {json.dumps({'type': 'request', 'payload': {'request_id': approval_id}}, ensure_ascii=False)}\n\n"
-    yield f"data: {json.dumps({'type': 'status', 'payload': {'text': '正在处理审批决定...'}}, ensure_ascii=False)}\n\n"
+    initial_status = "正在批准并继续执行..." if decision == "approve" else "正在拒绝并继续推理..."
+    yield f"data: {json.dumps({'type': 'status', 'payload': {'text': initial_status}}, ensure_ascii=False)}\n\n"
+    status_messages = (
+        [
+            "正在执行已批准的 Skill...",
+            "正在恢复 Agent 推理...",
+            "正在整理执行结果...",
+        ]
+        if decision == "approve"
+        else [
+            "正在写入拒绝决定...",
+            "正在恢复 Agent 推理...",
+            "正在整理执行结果...",
+        ]
+    )
+    status_index = 0
+    last_status_at = time.monotonic()
 
     while True:
         try:
@@ -511,6 +532,11 @@ def _stream_approval_resolution(approval_id: str, decision: str):
             response = payload_data
             break
         except queue.Empty:
+            now = time.monotonic()
+            if now - last_status_at >= 1.0:
+                yield f"data: {json.dumps({'type': 'status', 'payload': {'text': status_messages[status_index]}}, ensure_ascii=False)}\n\n"
+                last_status_at = now
+                status_index = (status_index + 1) % len(status_messages)
             continue
 
     stream_text = _build_stream_text({"data": response.get("data", {}), "error": response.get("error")})

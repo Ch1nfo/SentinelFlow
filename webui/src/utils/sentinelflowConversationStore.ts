@@ -68,6 +68,9 @@ export function summarizeAssistantReply(response: CommandDispatchResponse): stri
   const data = response.data ?? {}
   const finalResponse = typeof data.final_response === 'string' ? sanitizeDisplayText(data.final_response) : ''
   if (finalResponse) return finalResponse
+  if (response.route === 'approval_required') {
+    return '当前命中了需要审批的 Skill，请在下方确认后继续。'
+  }
   if (response.error) return sanitizeDisplayText(response.error)
 
   if (response.route === 'find_alerts') {
@@ -93,9 +96,6 @@ export function summarizeAssistantReply(response: CommandDispatchResponse): stri
   }
   if (response.route === 'help') {
     return '我已经整理了几条可直接使用的示例命令。'
-  }
-  if (response.route === 'approval_required') {
-    return '当前命中了需要审批的 Skill，请在下方确认后继续。'
   }
   return response.success ? '命令已执行完成，可以展开查看详细结果。' : '命令执行失败，请展开查看详细错误。'
 }

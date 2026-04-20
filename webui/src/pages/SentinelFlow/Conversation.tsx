@@ -180,6 +180,10 @@ export default function SentinelFlowConversationPage() {
                 {orderedHistory.map((item) => {
                 const assistantReply = summarizeAssistantReply(item.response)
                 const isExpanded = expandedId === item.id
+                const isApprovalPending = item.response.route === 'approval_required'
+                const resultTone = isApprovalPending ? 'warn' : (item.response.success ? 'success' : 'warn')
+                const resultLabel = isApprovalPending ? '待审批' : (item.response.success ? '已完成' : '失败')
+                const resultCode = isApprovalPending ? 'pending_approval' : (item.response.success ? 'success' : 'error')
                 const commandData = extractCommandData(item.response.data)
                 const toolCalls = Array.isArray(commandData.tool_calls) ? commandData.tool_calls as ToolCallLike[] : []
                 const workerToolCalls = Array.isArray(commandData.worker_result?.tool_calls) ? commandData.worker_result.tool_calls as ToolCallLike[] : []
@@ -290,9 +294,9 @@ export default function SentinelFlowConversationPage() {
                           </div>
                         </div>
                       ) : null}
-                      {item.response.error ? <div className="sentinelflow-message-block sentinelflow-message-error">{item.response.error}</div> : null}
+                      {item.response.error && !isApprovalPending ? <div className="sentinelflow-message-block sentinelflow-message-error">{item.response.error}</div> : null}
                       <div className="sentinelflow-chat-actions">
-                        <StatusBadge tone={item.response.success ? 'success' : 'warn'}>{item.response.success ? '已完成' : '失败'}</StatusBadge>
+                        <StatusBadge tone={resultTone}>{resultLabel}</StatusBadge>
                         <button type="button" className="sentinelflow-ghost-button" onClick={() => setExpandedId((current) => current === item.id ? null : item.id)}>
                           {isExpanded ? '收起详情' : '查看详情'}
                         </button>
@@ -300,7 +304,7 @@ export default function SentinelFlowConversationPage() {
                       {isExpanded ? (
                         <div className="sentinelflow-chat-details">
                           <div className="sentinelflow-response-row">
-                            <StatusBadge tone={item.response.success ? 'success' : 'warn'}>{item.response.success ? 'success' : 'error'}</StatusBadge>
+                            <StatusBadge tone={resultTone}>{resultCode}</StatusBadge>
                             <span>route: {item.response.route}</span>
                           </div>
                           <JsonPreview value={item.response.data} />

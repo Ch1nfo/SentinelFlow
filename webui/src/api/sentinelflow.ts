@@ -637,6 +637,8 @@ export async function streamCommand(
     }
   }
 
+  buffer += decoder.decode()
+
   if (buffer.trim()) {
     const dataLine = buffer
       .trim()
@@ -708,6 +710,22 @@ export async function streamApprovalDecision(
         .split('\n')
         .find((line) => line.startsWith('data:'))
       if (!dataLine) continue
+      const event = JSON.parse(dataLine.slice(5).trim()) as CommandStreamEvent
+      onEvent?.(event)
+      if (event.type === 'done') {
+        finalPayload = event.payload
+      }
+    }
+  }
+
+  buffer += decoder.decode()
+
+  if (buffer.trim()) {
+    const dataLine = buffer
+      .trim()
+      .split('\n')
+      .find((line) => line.startsWith('data:'))
+    if (dataLine) {
       const event = JSON.parse(dataLine.slice(5).trim()) as CommandStreamEvent
       onEvent?.(event)
       if (event.type === 'done') {
