@@ -83,6 +83,7 @@ export default function SentinelFlowConversationPage() {
   const [runtimeState, setRuntimeState] = useState(() => getConversationRuntimeState())
   const [pendingCommand, setPendingCommand] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedToolSummaryIds, setExpandedToolSummaryIds] = useState<string[]>([])
   const { sessions, activeSessionId, running, runningSessionId, streamingReply, streamingStatus } = runtimeState
 
   const activeSession = useMemo(
@@ -117,6 +118,12 @@ export default function SentinelFlowConversationPage() {
   function handleDeleteCurrentSession() {
     deleteActiveConversation()
     setExpandedId(null)
+  }
+
+  function toggleToolSummary(itemId: string) {
+    setExpandedToolSummaryIds((current) => (
+      current.includes(itemId) ? current.filter((id) => id !== itemId) : [...current, itemId]
+    ))
   }
 
   async function handleStopCurrentRun() {
@@ -227,6 +234,8 @@ export default function SentinelFlowConversationPage() {
                 const resultCode = isApprovalPending ? 'pending_approval' : (item.response.success ? 'success' : 'error')
                 const showApprovalCard = Boolean(approvalCard?.skill_name)
                 const hideExecutionSummary = isApprovalPending
+                const toolSummaryExpanded = expandedToolSummaryIds.includes(item.id)
+                const hasAnyToolSummary = toolCalls.length > 0 || workerToolCalls.length > 0
 
                 return (
                   <div key={item.id} className="sentinelflow-chat-turn">
@@ -287,10 +296,16 @@ export default function SentinelFlowConversationPage() {
                         </div>
                       ) : null}
                       {!hideExecutionSummary ? <MarkdownContent content={assistantReply} /> : null}
-                      {!hideExecutionSummary && toolCalls.length ? (
-                        <div className="sentinelflow-tool-call-summary">调用技能 {toolCalls.length} 次</div>
+                      {!hideExecutionSummary && hasAnyToolSummary ? (
+                        <button
+                          type="button"
+                          className="sentinelflow-tool-call-summary text-left text-gray-500 transition-colors hover:text-gray-700"
+                          onClick={() => toggleToolSummary(item.id)}
+                        >
+                          {toolSummaryExpanded ? '收起技能调用详情' : `调用技能 ${toolCalls.length + workerToolCalls.length} 次`}
+                        </button>
                       ) : null}
-                      {!hideExecutionSummary && toolCalls.length ? (
+                      {!hideExecutionSummary && toolSummaryExpanded && toolCalls.length ? (
                         <div className="sentinelflow-tool-call-list">
                           {toolCalls.map((toolCall, index) => (
                             <div key={`${item.id}-tool-${index}`} className="sentinelflow-tool-call-card">
@@ -303,7 +318,7 @@ export default function SentinelFlowConversationPage() {
                           ))}
                         </div>
                       ) : null}
-                      {!hideExecutionSummary && workerToolCalls.length ? (
+                      {!hideExecutionSummary && toolSummaryExpanded && workerToolCalls.length ? (
                         <>
                           <div className="sentinelflow-tool-call-summary">
                             {workerAgent ? `${workerAgent} 调用了 ${workerToolCalls.length} 次技能` : `子 Agent 调用了 ${workerToolCalls.length} 次技能`}
