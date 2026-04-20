@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from sentinelflow.agent.nodes import agent_node, should_continue
 from sentinelflow.agent.state import SentinelFlowAgentState
 from sentinelflow.agent.tools import build_agent_tools
 from sentinelflow.config.runtime import SentinelFlowRuntimeConfig
+from sentinelflow.services.skill_approval_service import SkillApprovalService
 from sentinelflow.skills.adapters import SentinelFlowSkillRuntime
 
 
 def build_agent_graph(
     project_root: Path,
     skill_runtime: SentinelFlowSkillRuntime,
+    approval_service: SkillApprovalService,
     runtime_config: SentinelFlowRuntimeConfig,
     *,
     enable_read_skill_document: bool = True,
@@ -28,6 +31,7 @@ def build_agent_graph(
 
     tools = build_agent_tools(
         skill_runtime,
+        approval_service,
         enable_read_skill_document=enable_read_skill_document,
         enable_execute_skill=enable_execute_skill,
     )
@@ -52,10 +56,41 @@ def build_agent_graph(
             output["event_id_ref"] = current_event_id
         return output
 
+    def _extract_approval_request(state: SentinelFlowAgentState) -> dict | None:
+        for msg in reversed(list(state.get("messages", []))):
+            if getattr(msg, "type", "") != "tool":
+                continue
+            content = getattr(msg, "content", "")
+            if not isinstance(content, str):
+                continue
+            try:
+                payload = json.loads(content)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict) or not payload.get("approval_pending"):
+                continue
+            request = payload.get("approval_request", {})
+            return request if isinstance(request, dict) else None
+        return None
+
+    def _approval_gate(state: SentinelFlowAgentState) -> dict:
+        request = _extract_approval_request(state)
+        if not request:
+            return {"approval_pending": False, "approval_request": {}}
+        return {
+            "approval_pending": True,
+            "approval_request": request,
+        }
+
+    def _route_after_tools(state: SentinelFlowAgentState) -> str:
+        return "__end__" if state.get("approval_pending") else "agent_node"
+
     builder = StateGraph(SentinelFlowAgentState)
     builder.add_node("agent_node", _agent)
     builder.add_node("tools_node", ToolNode(tools))
+    builder.add_node("approval_gate", _approval_gate)
     builder.add_edge(START, "agent_node")
     builder.add_conditional_edges("agent_node", should_continue, {"tools": "tools_node", "__end__": END})
-    builder.add_edge("tools_node", "agent_node")
+    builder.add_edge("tools_node", "approval_gate")
+    builder.add_conditional_edges("approval_gate", _route_after_tools, {"agent_node": "agent_node", "__end__": END})
     return builder.compile()

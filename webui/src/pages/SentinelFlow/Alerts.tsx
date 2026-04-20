@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { RefreshCw, Siren } from 'lucide-react'
 import {
+  decideApproval,
   fetchDashboardSummary,
   fetchPollAlerts,
   handleAlertAction,
@@ -28,6 +29,7 @@ function getTaskTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger'
   if (status === 'running') return 'info'
   if (status === 'queued') return 'warn'
   if (status === 'pending_closure') return 'warn'
+  if (status === 'awaiting_approval') return 'warn'
   if (status === 'failed') return 'danger'
   if (status === 'succeeded' || status === 'completed') return 'success'
   return 'neutral'
@@ -98,6 +100,7 @@ function getTaskStatusClass(task: AlertTask): string {
   if (status === 'running') return 'running'
   if (status === 'queued') return 'queued'
   if (status === 'pending_closure') return 'queued'
+  if (status === 'awaiting_approval') return 'queued'
   if (status === 'failed') return 'danger'
   if (status === 'succeeded' || status === 'completed') return 'success'
   return 'neutral'
@@ -108,6 +111,7 @@ function getTaskStatusLabel(task: AlertTask): string {
   if (status === 'queued') return '排队中'
   if (status === 'running') return '执行中'
   if (status === 'pending_closure') return '未执行'
+  if (status === 'awaiting_approval') return '待审批'
   if (status === 'completed') return '已被人工处置'
   if (status === 'succeeded') return '已完成'
   if (status === 'failed') return '失败'
@@ -260,6 +264,7 @@ export default function SentinelFlowAlertsPage() {
     ? selectedFinalConsistency.issues.map((item) => String(item).trim()).filter(Boolean)
     : []
   const selectedWorkflowRuns = normalizeWorkflowRuns(selectedResult.workflow_runs)
+  const selectedApprovalRequest = (selectedResult.approval_request as Record<string, unknown> | undefined) ?? {}
   const selectedWorkflowRun = selectedWorkflowRuns[0] ?? null
   const selectedClosureStep = (
     (selectedResult.effective_closure_step as Record<string, unknown> | undefined)
@@ -340,6 +345,27 @@ export default function SentinelFlowAlertsPage() {
         data: {},
         error: runError instanceof Error ? runError.message : 'Unknown error',
       })
+    } finally {
+      setActionState({ action: '', running: false })
+    }
+  }
+
+  async function resolveApproval(decision: 'approve' | 'reject') {
+    const approvalId = String(selectedApprovalRequest.approval_id ?? '').trim()
+    if (!approvalId) return
+    setActionState({ action: decision, running: true })
+    try {
+      const result = await decideApproval(approvalId, decision)
+      setActionResult({
+        action: decision,
+        success: result.success,
+        task_id: selectedTask?.task_id ?? '',
+        event_ids: selectedTask?.event_ids ?? '',
+        data: result.data,
+        task: result.task ?? null,
+        error: result.error,
+      })
+      await loadTasks()
     } finally {
       setActionState({ action: '', running: false })
     }
@@ -493,6 +519,18 @@ export default function SentinelFlowAlertsPage() {
                     </button>
                   ) : null}
                 </div>
+                {String(selectedApprovalRequest.approval_id ?? '').trim() ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">待审批 Skill</div>
+                    <div className="mt-2 text-sm font-semibold text-amber-950">{String(selectedApprovalRequest.skill_name ?? '').trim() || '未命名 Skill'}</div>
+                    <div className="mt-2 text-sm text-amber-900">{String(selectedApprovalRequest.message ?? '该 Skill 需要审批后才能继续执行。').trim()}</div>
+                    <div className="mt-2 text-xs text-amber-800">参数：{String(selectedApprovalRequest.arguments_summary ?? '无参数').trim() || '无参数'}</div>
+                    <div className="mt-3 flex gap-2">
+                      <button type="button" className="sentinelflow-primary-button" onClick={() => void resolveApproval('approve')} disabled={actionState.running}>批准并继续</button>
+                      <button type="button" className="sentinelflow-ghost-button" onClick={() => void resolveApproval('reject')} disabled={actionState.running}>拒绝并继续</button>
+                    </div>
+                  </div>
+                ) : null}
                 {selectedWorkflowRun && workflowDecision ? (
                   <div className="rounded-xl border border-amber-100 bg-amber-50 p-4">
                     <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Workflow 调用</div>

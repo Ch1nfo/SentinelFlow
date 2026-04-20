@@ -61,10 +61,42 @@ class SkillReadResult:
     description: str
     markdown: str
     executable: bool
+    approval_required: bool = False
     input_schema: dict[str, Any] = field(default_factory=dict)
     output_schema: dict[str, Any] = field(default_factory=dict)
     entry: str | None = None
     mode: SkillRuntimeMode | None = None
+
+
+@dataclass(slots=True)
+class SkillApprovalRecord:
+    approval_id: str
+    run_id: str
+    scope_type: str
+    scope_ref: str
+    status: str
+    skill_name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    arguments_fingerprint: str = ""
+    approval_required: bool = False
+    checkpoint_thread_id: str = ""
+    checkpoint_ns: str = ""
+    parent_checkpoint_thread_id: str = ""
+    parent_checkpoint_ns: str = ""
+    tool_call_id: str = ""
+    parent_tool_call_id: str = ""
+    message: str = ""
+    created_at: str = ""
+    decided_at: str = ""
+
+
+@dataclass(slots=True)
+class SkillApprovalDecisionResult:
+    success: bool
+    approval: SkillApprovalRecord | None = None
+    route: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
 
 
 @dataclass(slots=True)
@@ -101,6 +133,7 @@ class PollingDispatchResult:
     completed_count: int = 0
     skipped_count: int = 0
     failed_count: int = 0
+    snapshot_complete: bool = False
     auto_execute_enabled: bool = False
     auto_execute_running: bool = False
     tasks: list[AlertHandlingTask] = field(default_factory=list)

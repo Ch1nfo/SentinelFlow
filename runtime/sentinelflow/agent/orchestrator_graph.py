@@ -25,11 +25,14 @@ import copy
 import json
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from uuid import uuid4
 
+from sentinelflow.agent.checkpoint_state import serialize_graph_state
 from sentinelflow.agent.graph import build_agent_graph
 from sentinelflow.agent.orchestrator_state import OrchestratorState
 from sentinelflow.agent.policy import can_agent_execute_skill, can_agent_read_skill
 from sentinelflow.agent.tools import build_agent_tools
+from sentinelflow.services.skill_approval_service import SkillApprovalService
 from sentinelflow.skills.adapters import SentinelFlowSkillRuntime
 from sentinelflow.workflows.agent_workflow_registry import load_agent_workflow, list_agent_workflows
 
@@ -61,12 +64,50 @@ def _resolve_worker_permissions(
     return readable, executable
 
 
+def _resolve_current_tool_call_id(
+    state: OrchestratorState,
+    tool_name: str,
+    *,
+    expected_args: dict[str, str] | None = None,
+) -> str:
+    completed_call_ids = {
+        str(getattr(msg, "tool_call_id", "")).strip()
+        for msg in list(state.get("messages", []))
+        if isinstance(msg, ToolMessage) and str(getattr(msg, "tool_call_id", "")).strip()
+    }
+    for msg in reversed(list(state.get("messages", []))):
+        if not isinstance(msg, AIMessage):
+            continue
+        for call in reversed(list(getattr(msg, "tool_calls", None) or [])):
+            if not isinstance(call, dict):
+                continue
+            if str(call.get("name", "")).strip() != tool_name:
+                continue
+            call_id = str(call.get("id", "")).strip()
+            if call_id and call_id in completed_call_ids:
+                continue
+            if expected_args:
+                args = call.get("args", {})
+                if not isinstance(args, dict):
+                    continue
+                matched = True
+                for key, value in expected_args.items():
+                    if str(args.get(key, "")).strip() != value:
+                        matched = False
+                        break
+                if not matched:
+                    continue
+            return call_id
+    return ""
+
+
 # ── Worker SubGraph Tool Builder ──────────────────────────────────────────────
 
 def _build_worker_subgraph_tool(
     worker_agent_def,
     project_root: Path,
     skill_runtime: SentinelFlowSkillRuntime,
+    approval_service: SkillApprovalService,
     runtime_config,
     *,
     alert_data: dict[str, Any],
@@ -82,30 +123,44 @@ def _build_worker_subgraph_tool(
     """
     readable_skills, executable_skills = _resolve_worker_permissions(worker_agent_def, skill_runtime)
 
-    async def _run_worker_subgraph(task_prompt: str, step_idx: int) -> dict[str, Any]:
+    async def _execute_worker_subgraph(task_prompt: str, state: OrchestratorState, step_idx: int) -> dict[str, Any]:
+        child_checkpoint_thread_id = f"{str(state.get('checkpoint_thread_id', '')).strip() or uuid4().hex}:worker:{worker_agent_def.name}:{step_idx}"
+        child_state = {
+            "alert_data": {
+                **copy.deepcopy(alert_data),
+                "delegated_task_prompt": task_prompt,
+            },
+            "messages": [],
+            "event_id_ref": str(alert_data.get("eventIds", "")).strip(),
+            "input_seeded": False,
+            "cancel_event": cancel_event,
+            "readable_skills": readable_skills,
+            "executable_skills": executable_skills,
+            "system_prompt_override": worker_agent_def.prompt or "",
+            "agent_name": worker_agent_def.name,
+            "run_id": str(state.get("run_id", "")).strip(),
+            "execution_entry": str(state.get("execution_entry", "")).strip(),
+            "scope_type": str(state.get("scope_type", "")).strip(),
+            "scope_ref": str(state.get("scope_ref", "")).strip(),
+            "checkpoint_thread_id": child_checkpoint_thread_id,
+            "checkpoint_ns": "agent_graph",
+            "parent_checkpoint_thread_id": str(state.get("checkpoint_thread_id", "")).strip(),
+            "parent_checkpoint_ns": str(state.get("checkpoint_ns", "orchestrator_graph")).strip(),
+            "parent_tool_call_id": str(state.get("parent_tool_call_id", "")).strip(),
+            "approved_fingerprints": list(state.get("approved_fingerprints") or []),
+            "rejected_fingerprints": list(state.get("rejected_fingerprints") or []),
+        }
         worker_config = worker_agent_def.resolve_runtime_config(runtime_config)
         subgraph = build_agent_graph(
             project_root,
             skill_runtime,
+            approval_service,
             worker_config,
             enable_read_skill_document=True,
             enable_execute_skill=True,
         )
-        worker_alert_data = copy.deepcopy(alert_data)
-        worker_alert_data["delegated_task_prompt"] = task_prompt
-
         try:
-            worker_state = await subgraph.ainvoke({
-                "alert_data": worker_alert_data,
-                "messages": [],
-                "event_id_ref": str(alert_data.get("eventIds", "")).strip(),
-                "input_seeded": False,
-                "cancel_event": cancel_event,
-                "readable_skills": readable_skills,
-                "executable_skills": executable_skills,
-                "system_prompt_override": worker_agent_def.prompt or "",
-                "agent_name": worker_agent_def.name,
-            })
+            worker_state = await subgraph.ainvoke(child_state)
         except Exception as exc:
             return {
                 "step": step_idx,
@@ -141,7 +196,7 @@ def _build_worker_subgraph_tool(
                 if isinstance(tc, dict) and tc.get("name"):
                     skills_used.append(tc["name"])
 
-        return {
+        result = {
             "step": step_idx,
             "worker": worker_agent_def.name,
             "task_prompt": task_prompt,
@@ -150,14 +205,60 @@ def _build_worker_subgraph_tool(
             "messages": serialized_messages,
             "tool_calls": tool_calls,
             "success": bool(final_text),
+            "approval_pending": bool(worker_state.get("approval_pending")),
+            "approval_request": worker_state.get("approval_request", {}),
             "error": None if final_text else "子 Agent 未返回有效结果。",
         }
+        if worker_state.get("approval_pending"):
+            approval_request = worker_state.get("approval_request", {})
+            if isinstance(approval_request, dict):
+                approval_service.save_checkpoint(
+                    checkpoint_thread_id=child_checkpoint_thread_id,
+                    checkpoint_ns="agent_graph",
+                    checkpoint_kind="agent_graph",
+                    run_id=str(child_state.get("run_id", "")).strip(),
+                    scope_type=str(child_state.get("scope_type", "")).strip(),
+                    scope_ref=str(child_state.get("scope_ref", "")).strip(),
+                    agent_name=worker_agent_def.name,
+                    execution_entry=str(child_state.get("execution_entry", "")).strip(),
+                    action_hint="",
+                    state_payload=serialize_graph_state(worker_state),
+                )
+                record = approval_service.create_or_reuse_pending(
+                    run_id=str(child_state.get("run_id", "")).strip(),
+                    scope_type=str(child_state.get("scope_type", "")).strip(),
+                    scope_ref=str(child_state.get("scope_ref", "")).strip(),
+                    skill_name=str(approval_request.get("skill_name", "")).strip(),
+                    arguments=approval_request.get("arguments", {}) if isinstance(approval_request.get("arguments"), dict) else {},
+                    approval_required=True,
+                    checkpoint_thread_id=child_checkpoint_thread_id,
+                    checkpoint_ns="agent_graph",
+                    tool_call_id=str(approval_request.get("tool_call_id", "")).strip(),
+                    parent_checkpoint_thread_id=str(child_state.get("parent_checkpoint_thread_id", "")).strip(),
+                    parent_checkpoint_ns=str(child_state.get("parent_checkpoint_ns", "")).strip(),
+                    parent_tool_call_id=str(child_state.get("parent_tool_call_id", "")).strip(),
+                    message=str(approval_request.get("message", "")).strip(),
+                )
+                result["approval_request"] = approval_service.serialize_approval(record)
+                result["error"] = "子 Agent 等待技能审批。"
+                result["success"] = False
+        return result
 
-    async def _invoke(task_prompt: str) -> str:
+    @tool
+    async def _invoke(
+        task_prompt: str,
+        state: Annotated[OrchestratorState, InjectedState()],  # type: ignore[misc]
+    ) -> str:
         step_counter[0] += 1
         step_idx = step_counter[0]
-        return json.dumps(await _run_worker_subgraph(task_prompt, step_idx), ensure_ascii=False)
-
+        worker_state = dict(state)
+        worker_state["parent_tool_call_id"] = _resolve_current_tool_call_id(
+            state,
+            f"call_{worker_agent_def.name.replace('-', '_').replace(' ', '_')}",
+            expected_args={"task_prompt": str(task_prompt or "").strip()},
+        )
+        result = await _execute_worker_subgraph(task_prompt, worker_state, step_idx)
+        return json.dumps(result, ensure_ascii=False)
     # Give the tool a deterministic name and helpful docstring
     safe_name = worker_agent_def.name.replace("-", "_").replace(" ", "_")
     worker_desc = (worker_agent_def.description or worker_agent_def.name).strip()
@@ -167,7 +268,7 @@ def _build_worker_subgraph_tool(
         f"该 Agent 的专项能力：{worker_desc}。"
         f"参数 task_prompt 必须是具体、可操作的中文任务描述，包含当前步骤需要完成的具体工作内容。"
     )
-    return tool(_invoke), _run_worker_subgraph
+    return _invoke, _execute_worker_subgraph
 
 
 # ── Routing ───────────────────────────────────────────────────────────────────
@@ -192,6 +293,7 @@ def build_orchestrator_graph(
     workers: list,
     project_root: Path,
     skill_runtime: SentinelFlowSkillRuntime,
+    approval_service: SkillApprovalService,
     runtime_config,
     *,
     alert_data: dict[str, Any],
@@ -221,6 +323,7 @@ def build_orchestrator_graph(
             w,
             project_root,
             skill_runtime,
+            approval_service,
             runtime_config,
             alert_data=alert_data,
             cancel_event=cancel_event,
@@ -235,6 +338,7 @@ def build_orchestrator_graph(
     parallel_limit = max(1, int(alert_data.get("_primary_worker_parallel_limit", 3) or 3))
     primary_skill_tools = build_agent_tools(
         skill_runtime,
+        approval_service,
         enable_read_skill_document=bool(readable_skills),
         enable_execute_skill=bool(executable_skills),
     )
@@ -267,11 +371,34 @@ def build_orchestrator_graph(
                 return json.dumps({"success": False, "workflow_id": workflow_id, "error": f"Workflow 不存在或无法加载：{exc}"}, ensure_ascii=False)
         if not workflow.enabled:
             return json.dumps({"success": False, "workflow_id": workflow_id, "error": "该 Workflow 当前未启用。"}, ensure_ascii=False)
+        workflow_checkpoint_thread_id = f"{str(state.get('checkpoint_thread_id', '')).strip() or uuid4().hex}:workflow:{workflow.id}"
+        parent_tool_call_id = _resolve_current_tool_call_id(
+            state,
+            "run_workflow",
+            expected_args={
+                "workflow_id": workflow_id,
+                "task_prompt": str(task_prompt or "").strip(),
+            },
+        )
+        execution_context = {
+            "run_id": str(state.get("run_id", "")).strip(),
+            "execution_entry": str(state.get("execution_entry", "")).strip(),
+            "scope_type": str(state.get("scope_type", "")).strip(),
+            "scope_ref": str(state.get("scope_ref", "")).strip(),
+            "checkpoint_thread_id": workflow_checkpoint_thread_id,
+            "checkpoint_ns": "workflow_runner",
+            "parent_checkpoint_thread_id": str(state.get("checkpoint_thread_id", "")).strip(),
+            "parent_checkpoint_ns": str(state.get("checkpoint_ns", "orchestrator_graph")).strip(),
+            "parent_tool_call_id": parent_tool_call_id,
+            "approved_fingerprints": list(state.get("approved_fingerprints") or []),
+            "rejected_fingerprints": list(state.get("rejected_fingerprints") or []),
+        }
         try:
             result = await workflow_runner.execute_workflow(
                 workflow,
                 dict(state.get("alert_data", {}) or {}),
                 task_prompt=str(task_prompt or "").strip(),
+                execution_context=execution_context,
             )
         except Exception as exc:
             return json.dumps({"success": False, "workflow_id": workflow_id, "error": f"Workflow 执行失败：{exc}"}, ensure_ascii=False)
@@ -324,7 +451,7 @@ def build_orchestrator_graph(
                 )
                 continue
             step_counter[0] += 1
-            run_coroutines.append(worker_runners[worker_name](task_prompt, step_counter[0]))
+            run_coroutines.append(worker_runners[worker_name](task_prompt, state, step_counter[0]))
 
         gathered = await asyncio.gather(*run_coroutines, return_exceptions=True) if run_coroutines else []
         results: list[dict[str, Any]] = list(invalid_results)
@@ -344,12 +471,26 @@ def build_orchestrator_graph(
             else:
                 results.append(item)
 
+        pending_result = next(
+            (
+                item
+                for item in results
+                if isinstance(item, dict)
+                and item.get("approval_pending")
+                and isinstance(item.get("approval_request"), dict)
+                and item.get("approval_request")
+            ),
+            None,
+        )
+
         return json.dumps(
             {
-                "success": any(bool(item.get("success")) for item in results),
+                "success": False if pending_result else any(bool(item.get("success")) for item in results if isinstance(item, dict)),
                 "mode": "parallel",
                 "results": results,
-                "error": None,
+                "approval_pending": bool(pending_result),
+                "approval_request": dict(pending_result.get("approval_request", {})) if isinstance(pending_result, dict) else {},
+                "error": "并行子 Agent 等待技能审批。" if pending_result else None,
             },
             ensure_ascii=False,
         )
@@ -417,15 +558,43 @@ def build_orchestrator_graph(
 
         return {"messages": new_messages + [response]}
 
+    def _extract_approval_request(state: OrchestratorState) -> dict | None:
+        for msg in reversed(list(state.get("messages", []))):
+            if not isinstance(msg, ToolMessage):
+                continue
+            content = getattr(msg, "content", "")
+            if not isinstance(content, str):
+                continue
+            try:
+                payload = json.loads(content)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict) or not payload.get("approval_pending"):
+                continue
+            request = payload.get("approval_request", {})
+            return request if isinstance(request, dict) else None
+        return None
+
+    def _approval_gate(state: OrchestratorState) -> dict:
+        request = _extract_approval_request(state)
+        if not request:
+            return {"approval_pending": False, "approval_request": {}}
+        return {"approval_pending": True, "approval_request": request}
+
+    def _route_after_tools(state: OrchestratorState) -> str:
+        return "__end__" if state.get("approval_pending") else "supervisor"
+
     # ── Assemble the graph ────────────────────────────────────────────────────
     builder: StateGraph = StateGraph(OrchestratorState)
     builder.add_node("supervisor", _supervisor_node)
     builder.add_node("tools", ToolNode(supervisor_tools))
+    builder.add_node("approval_gate", _approval_gate)
     builder.add_edge(START, "supervisor")
     builder.add_conditional_edges(
         "supervisor",
         _should_orchestrate_continue,
         {"tools": "tools", "__end__": END},
     )
-    builder.add_edge("tools", "supervisor")
+    builder.add_edge("tools", "approval_gate")
+    builder.add_conditional_edges("approval_gate", _route_after_tools, {"supervisor": "supervisor", "__end__": END})
     return builder.compile()

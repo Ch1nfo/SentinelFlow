@@ -39,6 +39,7 @@ export default function SentinelFlowSkillsPage() {
     mode: 'subprocess',
     content: '',
     code: '',
+    approvalRequired: false,
   })
 
   useEffect(() => {
@@ -90,11 +91,12 @@ export default function SentinelFlowSkillsPage() {
         description: created.description,
         type: created.type,
         executable: created.executable,
+        approval_required: created.approval_required,
         entry: created.entry,
         mode: created.mode,
       })
       setDetail(created)
-      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '' })
+      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false })
       setEditingSkillName(null)
     } catch (error) {
       setFormError(error instanceof Error ? error.message : '创建 Skill 失败。')
@@ -116,13 +118,14 @@ export default function SentinelFlowSkillsPage() {
         description: saved.description,
         type: saved.type,
         executable: saved.executable,
+        approval_required: saved.approval_required,
         entry: saved.entry,
         mode: saved.mode,
       })
       await reload()
       setEditingSkillName(null)
       setDebuggingSkillName(null)
-      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '' })
+      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false })
       setDebugInput('{\n  "ip": "198.51.100.10"\n}')
       setDebugOutput(null)
       setDebugError(null)
@@ -144,7 +147,7 @@ export default function SentinelFlowSkillsPage() {
       setSelectedSkill(null)
       setDetail(null)
       setEditingSkillName(null)
-      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '' })
+      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false })
     } finally {
       setDeleting(false)
     }
@@ -162,6 +165,7 @@ export default function SentinelFlowSkillsPage() {
       mode: detail.mode ?? 'subprocess',
       content: detail.markdown,
       code: detail.code ?? '',
+      approvalRequired: detail.approval_required,
     })
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -170,7 +174,7 @@ export default function SentinelFlowSkillsPage() {
     setEditingSkillName(null)
     setDebuggingSkillName(null)
     setFormError(null)
-    setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '' })
+    setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false })
     setDebugInput('{\n  "ip": "198.51.100.10"\n}')
     setDebugOutput(null)
     setDebugError(null)
@@ -188,6 +192,7 @@ export default function SentinelFlowSkillsPage() {
       mode: detail.mode ?? 'subprocess',
       content: detail.markdown,
       code: detail.code ?? '',
+      approvalRequired: detail.approval_required,
     })
     setDebugOutput(null)
     setDebugError(null)
@@ -303,6 +308,17 @@ export default function SentinelFlowSkillsPage() {
               <div className="space-y-3">
                 <textarea className="sentinelflow-command-input" rows={8} placeholder="Skill 文档内容（Markdown，必填）" value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} />
                 {draft.type === 'hybrid' ? (
+                  <div className="space-y-1">
+                    <label className="flex items-center gap-2 text-sm text-gray-700">
+                      <input type="checkbox" checked={draft.approvalRequired} onChange={(event) => setDraft((current) => ({ ...current, approvalRequired: event.target.checked }))} />
+                      执行需审批（仅对对话 / 手动单告警生效）
+                    </label>
+                    <div className="text-xs text-gray-500">
+                      自动执行、自动重试和 Skill 调试会直接执行，不会等待人工审批。
+                    </div>
+                  </div>
+                ) : null}
+                {draft.type === 'hybrid' ? (
                   <textarea className="sentinelflow-command-input font-mono" rows={12} placeholder="可执行代码（保存为 main.py）" value={draft.code} onChange={(event) => setDraft((current) => ({ ...current, code: event.target.value }))} />
                 ) : null}
               </div>
@@ -328,6 +344,17 @@ export default function SentinelFlowSkillsPage() {
           ) : (
             <>
               <textarea className="sentinelflow-command-input mt-3" rows={8} placeholder="Skill 文档内容（Markdown，必填）" value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} />
+              {draft.type === 'hybrid' ? (
+                <div className="mt-3 space-y-1">
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input type="checkbox" checked={draft.approvalRequired} onChange={(event) => setDraft((current) => ({ ...current, approvalRequired: event.target.checked }))} />
+                    执行需审批（仅对对话 / 手动单告警生效）
+                  </label>
+                  <div className="text-xs text-gray-500">
+                    自动执行、自动重试和 Skill 调试会直接执行，不会等待人工审批。
+                  </div>
+                </div>
+              ) : null}
               {draft.type === 'hybrid' ? (
                 <textarea className="sentinelflow-command-input mt-3 font-mono" rows={10} placeholder="可执行代码（保存为 main.py）" value={draft.code} onChange={(event) => setDraft((current) => ({ ...current, code: event.target.value }))} />
               ) : null}
@@ -381,10 +408,13 @@ export default function SentinelFlowSkillsPage() {
                 items={[
                   { label: '类型', value: getSkillTypeLabel(detail.type) },
                   { label: '可执行', value: detail.executable ? '是' : '否' },
+                  { label: '执行审批', value: detail.approval_required ? '需要审批（仅对对话 / 手动单告警）' : '直接执行' },
                 ]}
               />
             ) : null}
             {detail?.executable ? <StatusBadge tone="success">可执行</StatusBadge> : null}
+            {detail?.approval_required ? <StatusBadge tone="warn">执行需审批（对话 / 手动单告警）</StatusBadge> : null}
+            {detail?.approval_required ? <div className="mt-2 text-xs text-gray-500">自动执行、自动重试和调试当前 Skill 时会直接执行，不会停在审批状态。</div> : null}
             {detailError ? <div className="sentinelflow-message-block sentinelflow-message-error">{detailError}</div> : null}
             {detail ? (
               <div className="mt-4 space-y-3">

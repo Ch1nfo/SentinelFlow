@@ -59,7 +59,7 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 
 - **SKILL.md-based discovery** — Each skill is a directory with a `SKILL.md` (YAML frontmatter + documentation body) and an optional `main.py` entrypoint
 - **Two skill types**: `doc` (knowledge-only, read by agent) and `hybrid` (doc + executable subprocess)
-- **Per-agent permission control** — `doc_skill_allowlist`, `exec_skill_allowlist`, `approval_required` flags per skill
+- **Per-agent permission control** — `doc_skill_allowlist`, `exec_skill_allowlist`, `approval_required` flags per skill; `approval_required` only applies to Agent Chat and manual single-alert handling, while auto-execution bypasses approval
 - **Subprocess execution** — Skills run in isolated subprocesses with structured JSON I/O; audit logging built in
 - **In-WebUI Skill Management** — Create, edit, delete, and debug skills directly from the Settings panel
 
@@ -371,6 +371,8 @@ Returns a JSON object with `country`, `asn`, `reputation`, `is_malicious`.
 ```
 
 The agent will automatically discover and invoke this skill when appropriate.
+
+`approval_required` only affects two entry points: the **Agent Chat** conversation console and **manual single-alert handling / manual retry**. When **auto-execution** is enabled, SentinelFlow will execute the skill directly even if `approval_required: true` is set.
 
 ## FAQ
 

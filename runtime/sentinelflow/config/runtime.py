@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,7 @@ CONFIG_DIR = PROJECT_ROOT / ".sentinelflow"
 CONFIG_PATH = CONFIG_DIR / "runtime.json"
 ALERT_SOURCE_SCRIPT_DIR = CONFIG_DIR / "alert_sources"
 ALERT_SOURCE_SCRIPT_PATH = ALERT_SOURCE_SCRIPT_DIR / "custom_fetch.py"
+_CONFIG_LOCK = threading.Lock()
 
 
 def _read_bool_value(value: Any, default: bool = False) -> bool:
@@ -132,18 +135,30 @@ def load_runtime_config() -> SentinelFlowRuntimeConfig:
 
 
 def save_runtime_config(values: dict[str, Any]) -> SentinelFlowRuntimeConfig:
-    current = _default_values()
-    current.update(read_persisted_runtime_config())
-    current.update(values)
-    normalized = _normalize_config(current)
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(asdict(normalized), ensure_ascii=False, indent=2), encoding="utf-8")
-    return normalized
+    with _CONFIG_LOCK:
+        current = _default_values()
+        current.update(read_persisted_runtime_config())
+        current.update(values)
+        normalized = _normalize_config(current)
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(asdict(normalized), ensure_ascii=False, indent=2)
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=CONFIG_DIR, prefix="runtime-", suffix=".json", delete=False) as handle:
+                handle.write(payload)
+                handle.flush()
+                temp_path = Path(handle.name)
+            temp_path.replace(CONFIG_PATH)
+        finally:
+            if temp_path is not None and temp_path.exists() and temp_path != CONFIG_PATH:
+                temp_path.unlink(missing_ok=True)
+        return normalized
 
 
 def reset_runtime_config() -> SentinelFlowRuntimeConfig:
-    if CONFIG_PATH.exists():
-        CONFIG_PATH.unlink()
+    with _CONFIG_LOCK:
+        if CONFIG_PATH.exists():
+            CONFIG_PATH.unlink()
     return load_runtime_config()
 
 

@@ -22,6 +22,7 @@ from sentinelflow.config.runtime import load_runtime_config
 from sentinelflow.services.audit_service import AuditService
 from sentinelflow.services.auto_execution_service import AlertAutoExecutionService
 from sentinelflow.services.dispatch_service import AlertDispatchService
+from sentinelflow.services.skill_approval_service import SkillApprovalService
 from sentinelflow.services.task_runner_service import AlertTaskRunnerService
 from sentinelflow.services.triage_service import TriageService
 from sentinelflow.skills.adapters import SentinelFlowSkillRuntime
@@ -41,9 +42,11 @@ branding = load_branding_config()
 # ── Service singletons ───────────────────────────────────────────────────────
 skill_runtime = SentinelFlowSkillRuntime(SKILL_ROOT)
 audit_service = AuditService()
+skill_approval_service = SkillApprovalService()
 agent_service = SentinelFlowAgentService(
     project_root=PROJECT_ROOT,
     skill_runtime=skill_runtime,
+    approval_service=skill_approval_service,
 )
 triage_service = TriageService()
 agent_workflow_runner = SentinelFlowAgentWorkflowRunner(

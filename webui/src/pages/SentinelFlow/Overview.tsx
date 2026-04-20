@@ -40,6 +40,7 @@ export default function SentinelFlowOverviewPage() {
   const tasks = poll?.tasks ?? []
   const skillCount = skills?.skills?.length ?? 0
   const runningCount = tasks.filter((task) => getEffectiveTaskStatus(task) === 'running').length
+  const awaitingApprovalCount = tasks.filter((task) => getEffectiveTaskStatus(task) === 'awaiting_approval').length
   const failedCount = tasks.filter((task) => {
     const status = getEffectiveTaskStatus(task)
     return status === 'failed' || status === 'pending_closure'
@@ -132,6 +133,7 @@ export default function SentinelFlowOverviewPage() {
               <strong>任务生命周期</strong>
               <div className="sentinelflow-inline-status">
                 <span>running {runningCount}</span>
+                <span>awaiting_approval {awaitingApprovalCount}</span>
                 <span>failed {failedCount}</span>
               </div>
             </div>

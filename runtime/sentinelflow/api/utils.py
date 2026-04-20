@@ -182,6 +182,7 @@ def _build_skill_markdown(
     content: str,
     skill_type: str = "doc",
     mode: str | None = None,
+    approval_required: bool = False,
 ) -> str:
     """
     Build the full SKILL.md text with frontmatter containing all skill metadata.
@@ -201,7 +202,7 @@ def _build_skill_markdown(
         fm_lines.append("entry: main.py")
         fm_lines.append("execute_policy:")
         fm_lines.append("  enabled: true")
-        fm_lines.append("  approval_required: false")
+        fm_lines.append(f"  approval_required: {'true' if approval_required else 'false'}")
         fm_lines.append("  audit: true")
     fm_lines.append("---")
     frontmatter = "\n".join(fm_lines)

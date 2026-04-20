@@ -12,6 +12,7 @@ import {
   clearActiveConversation,
   deleteActiveConversation,
   getConversationRuntimeState,
+  resolveConversationApproval,
   sanitizeDisplayText,
   setConversationActiveSession,
   setConversationDraft,
@@ -186,6 +187,7 @@ export default function SentinelFlowConversationPage() {
                 const primaryAgent = typeof commandData.primary_agent === 'string' ? commandData.primary_agent : ''
                 const workerAgent = typeof commandData.worker_agent === 'string' ? commandData.worker_agent : (typeof commandData.worker_result?.agent_name === 'string' ? commandData.worker_result.agent_name : '')
                 const delegationReason = typeof commandData.delegation_reason === 'string' ? commandData.delegation_reason : ''
+                const approvalRequest = commandData.approval_request as { approval_id?: string; skill_name?: string; arguments_summary?: string; message?: string } | undefined
 
                 return (
                   <div key={item.id} className="sentinelflow-chat-turn">
@@ -211,6 +213,31 @@ export default function SentinelFlowConversationPage() {
                       {delegationReason ? (
                         <div className="sentinelflow-tool-call-summary">
                           分派原因：{delegationReason}
+                        </div>
+                      ) : null}
+                      {item.response.route === 'approval_required' && approvalRequest?.approval_id ? (
+                        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                          <div className="font-semibold">等待 Skill 审批</div>
+                          <div className="mt-1">{approvalRequest.message || `Skill「${approvalRequest.skill_name || '未命名 Skill'}」需要审批。`}</div>
+                          <div className="mt-1 text-xs text-amber-800">参数：{approvalRequest.arguments_summary || '无参数'}</div>
+                          <div className="mt-3 flex gap-2">
+                            <button
+                              type="button"
+                              className="sentinelflow-primary-button"
+                              onClick={() => void resolveConversationApproval(item.id, approvalRequest.approval_id || '', 'approve')}
+                              disabled={running}
+                            >
+                              批准并继续
+                            </button>
+                            <button
+                              type="button"
+                              className="sentinelflow-ghost-button"
+                              onClick={() => void resolveConversationApproval(item.id, approvalRequest.approval_id || '', 'reject')}
+                              disabled={running}
+                            >
+                              拒绝并继续
+                            </button>
+                          </div>
                         </div>
                       ) : null}
                       <MarkdownContent content={assistantReply} />

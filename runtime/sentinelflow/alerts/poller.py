@@ -32,6 +32,7 @@ class AlertPollingService:
             completed_count=self._latest_result.completed_count,
             skipped_count=self._latest_result.skipped_count,
             failed_count=self._latest_result.failed_count,
+            snapshot_complete=self._latest_result.snapshot_complete,
             auto_execute_enabled=self._latest_result.auto_execute_enabled,
             auto_execute_running=self._latest_result.auto_execute_running,
             tasks=self.dispatch_service.list_tasks(),
@@ -90,6 +91,7 @@ class AlertPollingService:
                 queued_count=0,
                 skipped_count=0,
                 failed_count=1,
+                snapshot_complete=False,
                 auto_execute_enabled=self._latest_result.auto_execute_enabled,
                 auto_execute_running=self._latest_result.auto_execute_running,
                 errors=[str(response.get("error", "Unknown polling error"))],
@@ -103,6 +105,7 @@ class AlertPollingService:
                 queued_count=0,
                 skipped_count=0,
                 failed_count=1,
+                snapshot_complete=False,
                 auto_execute_enabled=self._latest_result.auto_execute_enabled,
                 auto_execute_running=self._latest_result.auto_execute_running,
                 errors=["Polling response has invalid alerts structure."],
@@ -112,7 +115,11 @@ class AlertPollingService:
         if response.get("demo_mode") and not alerts and not response.get("fallback_triggered"):
             self.dispatch_service.clear_demo_tasks()
 
-        queued_tasks, skipped, updated, completed, errors = await self.dispatch_service.dispatch(alerts)
+        snapshot_complete = bool(response.get("snapshot_complete"))
+        queued_tasks, skipped, updated, completed, errors = await self.dispatch_service.dispatch(
+            alerts,
+            allow_missing_completion=snapshot_complete,
+        )
         
         fallback_errors = []
         if response.get("fallback_triggered") and response.get("fallback_reason"):
@@ -127,6 +134,7 @@ class AlertPollingService:
             completed_count=len(completed),
             skipped_count=skipped,
             failed_count=len(combined_errors),
+            snapshot_complete=snapshot_complete,
             auto_execute_enabled=self._latest_result.auto_execute_enabled,
             auto_execute_running=self._latest_result.auto_execute_running,
             tasks=self.dispatch_service.list_tasks(),

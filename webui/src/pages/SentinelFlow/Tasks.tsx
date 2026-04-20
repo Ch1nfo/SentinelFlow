@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Clock, ListTodo, RotateCcw, ShieldCheck, XCircle } from 'lucide-react'
 import {
+  decideApproval,
   fetchPollAlerts,
   fetchRuntimeSettings,
   handleAlertAction,
@@ -33,6 +34,7 @@ function getTaskStatusLabel(status: TaskFilter | AlertTask['status']) {
   if (status === 'queued') return '排队中'
   if (status === 'running') return '执行中'
   if (status === 'pending_closure') return '未执行'
+  if (status === 'awaiting_approval') return '待审批'
   if (status === 'succeeded') return '已完成'
   if (status === 'completed') return '已被人工处置'
   if (status === 'failed') return '失败'
@@ -82,7 +84,7 @@ function formatIpPreview(value: unknown, limit = 4): { text: string; fullText: s
 function getTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' {
   const status = getEffectiveTaskStatus(task)
   if (status === 'succeeded' || status === 'completed') return 'success'
-  if (status === 'pending_closure') return 'warn'
+  if (status === 'pending_closure' || status === 'awaiting_approval') return 'warn'
   if (status === 'failed') return 'danger'
   if (status === 'running') return 'warn'
   return 'neutral'
@@ -414,6 +416,27 @@ export default function SentinelFlowTasksPage() {
     }
   }
 
+  async function handleApprovalDecision(decision: 'approve' | 'reject') {
+    const approvalId = String(selectedApprovalRequest.approval_id ?? '').trim()
+    if (!approvalId) return
+    setRunningAction(decision)
+    try {
+      const result = await decideApproval(approvalId, decision)
+      const next: RuntimeActivity = {
+        type: 'alert_action',
+        title: `${selectedTask?.title ?? '任务'} / ${decision}`,
+        detail: result.success ? '审批决定已处理。' : result.error ?? '审批处理失败。',
+        success: result.success,
+        timestamp: new Date().toISOString(),
+      }
+      setActivity(next)
+      publishRuntimeActivity(next)
+      void reloadPoll()
+    } finally {
+      setRunningAction('')
+    }
+  }
+
   const selectedPayload = (selectedTask?.payload?.alert_data as Record<string, unknown> | undefined) ?? {}
   const selectedResult = selectedTask?.last_result_data ?? {}
   const selectedFinalFacts = (selectedResult.final_facts as Record<string, unknown> | undefined) ?? {}
@@ -428,6 +451,7 @@ export default function SentinelFlowTasksPage() {
     (selectedResult.workflow_selection as Record<string, unknown> | undefined) ??
     (selectedTask?.payload?.workflow_selection as Record<string, unknown> | undefined) ??
     {}
+  const selectedApprovalRequest = (selectedResult.approval_request as Record<string, unknown> | undefined) ?? {}
   const selectedClosureStep = (
     (selectedResult.effective_closure_step as Record<string, unknown> | undefined)
     ?? (selectedResult.closure_step as Record<string, unknown> | undefined)
@@ -621,6 +645,18 @@ export default function SentinelFlowTasksPage() {
                     <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
                       <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">结果收敛提示</div>
                       <div className="mt-2 text-sm text-amber-900">检测到过程结果存在冲突，当前页面已按真实执行事实优先收敛展示。</div>
+                    </div>
+                  ) : null}
+                  {String(selectedApprovalRequest.approval_id ?? '').trim() ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">待审批 Skill</div>
+                      <div className="mt-2 text-sm font-semibold text-amber-950">{String(selectedApprovalRequest.skill_name ?? '').trim() || '未命名 Skill'}</div>
+                      <div className="mt-2 text-sm text-amber-900">{String(selectedApprovalRequest.message ?? '该 Skill 需要审批后才能继续执行。').trim()}</div>
+                      <div className="mt-2 text-xs text-amber-800">参数：{String(selectedApprovalRequest.arguments_summary ?? '无参数').trim() || '无参数'}</div>
+                      <div className="mt-3 flex gap-2">
+                        <button type="button" className="sentinelflow-primary-button" onClick={() => void handleApprovalDecision('approve')} disabled={runningAction !== ''}>批准并继续</button>
+                        <button type="button" className="sentinelflow-ghost-button" onClick={() => void handleApprovalDecision('reject')} disabled={runningAction !== ''}>拒绝并继续</button>
+                      </div>
                     </div>
                   ) : null}
 

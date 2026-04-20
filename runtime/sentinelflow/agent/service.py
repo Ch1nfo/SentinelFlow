@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 import json
+import logging
 from pathlib import Path
 import re
 from typing import Any, Callable
 from uuid import uuid4
 
+from sentinelflow.agent.checkpoint_state import deserialize_graph_state, serialize_graph_state
 from sentinelflow.agent.catalog import load_skill_catalog
 from sentinelflow.agent.graph import build_agent_graph
 from sentinelflow.agent.policy import can_agent_delegate_to_worker, can_agent_execute_skill, can_agent_read_skill
@@ -19,12 +22,14 @@ from sentinelflow.agent.prompts import (
 )
 from sentinelflow.agent.registry import list_agent_definitions, resolve_default_agent
 from sentinelflow.config.runtime import load_runtime_config
+from sentinelflow.services.skill_approval_service import SkillApprovalService
 from sentinelflow.services.triage_service import TriageService
 from sentinelflow.skills.adapters import SentinelFlowSkillRuntime
 from sentinelflow.workflows.agent_workflow_registry import list_agent_workflows
 
 
 THINK_BLOCK_PATTERN = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
+LOGGER = logging.getLogger(__name__)
 
 
 def _clean_model_text(text: str) -> str:
@@ -66,9 +71,10 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
 
 
 class SentinelFlowAgentService:
-    def __init__(self, project_root: Path, skill_runtime: SentinelFlowSkillRuntime) -> None:
+    def __init__(self, project_root: Path, skill_runtime: SentinelFlowSkillRuntime, approval_service: SkillApprovalService) -> None:
         self.project_root = project_root
         self.skill_runtime = skill_runtime
+        self.approval_service = approval_service
         self.triage_service = TriageService()
         self.agent_root = project_root / ".sentinelflow" / "plugins" / "agents"
         self.workflow_root = project_root / ".sentinelflow" / "plugins" / "workflows"
@@ -117,12 +123,13 @@ class SentinelFlowAgentService:
         workers = [agent for agent in list_agent_definitions(self.agent_root) if agent.role == "worker" and agent.enabled]
         return [agent for agent in workers if can_agent_delegate_to_worker(primary_agent, agent.name, entry_type=entry_type)]
 
-    async def _run_agent_graph(
+    async def _invoke_agent_graph_state(
         self,
         agent_definition,
         alert_data: dict[str, Any],
         history: list[dict[str, str]] | None = None,
         cancel_event=None,
+        execution_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         config = load_runtime_config()
         effective_config = agent_definition.resolve_runtime_config(config) if agent_definition else config
@@ -131,6 +138,7 @@ class SentinelFlowAgentService:
         graph = build_agent_graph(
             self.project_root,
             self.skill_runtime,
+            self.approval_service,
             effective_config,
             enable_read_skill_document=bool(readable_skills),
             enable_execute_skill=bool(executable_skills),
@@ -146,13 +154,52 @@ class SentinelFlowAgentService:
                 "executable_skills": executable_skills,
                 "system_prompt_override": agent_definition.prompt_for_mode(prompt_mode) if agent_definition else "",
                 "agent_name": agent_definition.name if agent_definition else "",
+                "run_id": str((execution_context or {}).get("run_id", "")).strip(),
+                "execution_entry": str((execution_context or {}).get("execution_entry", "")).strip(),
+                "scope_type": str((execution_context or {}).get("scope_type", "")).strip(),
+                "scope_ref": str((execution_context or {}).get("scope_ref", "")).strip(),
+                "checkpoint_thread_id": str((execution_context or {}).get("checkpoint_thread_id", "")).strip(),
+                "checkpoint_ns": str((execution_context or {}).get("checkpoint_ns", "agent_graph")).strip(),
+                "parent_checkpoint_thread_id": str((execution_context or {}).get("parent_checkpoint_thread_id", "")).strip(),
+                "parent_checkpoint_ns": str((execution_context or {}).get("parent_checkpoint_ns", "")).strip(),
+                "parent_tool_call_id": str((execution_context or {}).get("parent_tool_call_id", "")).strip(),
+                "approved_fingerprints": list((execution_context or {}).get("approved_fingerprints", []) or []),
+                "rejected_fingerprints": list((execution_context or {}).get("rejected_fingerprints", []) or []),
             }
         )
-        return self._serialize_graph_result(
+        return state
+
+    async def _run_agent_graph(
+        self,
+        agent_definition,
+        alert_data: dict[str, Any],
+        history: list[dict[str, str]] | None = None,
+        cancel_event=None,
+        execution_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        state = await self._invoke_agent_graph_state(
+            agent_definition,
+            alert_data,
+            history=history,
+            cancel_event=cancel_event,
+            execution_context=execution_context,
+        )
+        serialized = self._serialize_graph_result(
             str(alert_data.get("payload") or alert_data.get("eventIds") or "").strip(),
             state,
             agent_definition.name if agent_definition else "",
         )
+        if state.get("approval_pending"):
+            serialized["approval_pending"] = True
+            approval_request = self._persist_pending_state(
+                state=state,
+                checkpoint_kind="agent_graph",
+                agent_name=agent_definition.name if agent_definition else "",
+                action_hint=str(alert_data.get("handling_intent", "")).strip(),
+            )
+            serialized["approval_request"] = approval_request or {}
+            serialized["route"] = "approval_required"
+        return serialized
 
     async def _run_planner_graph(
         self,
@@ -186,7 +233,8 @@ class SentinelFlowAgentService:
             )
             llm = llm_instance.with_structured_output(PlannerResult)
         except Exception as exc:
-            raise RuntimeError(f"模型加载失败，可能是它不支持强绑定 Function Calling({exc})。")
+            LOGGER.exception("Failed to initialize planner LLM.")
+            raise RuntimeError("Planner 模型初始化失败，请检查模型配置并确认当前模型支持结构化输出。") from exc
 
         custom_prompt = agent_definition.prompt_for_mode(
             "agent_command" if alert_data.get("alert_source") == "human_command" else "agent_alert"
@@ -210,7 +258,8 @@ class SentinelFlowAgentService:
             else:
                 final_response = json.dumps(dict(response_obj), ensure_ascii=False)
         except Exception as exc:
-            raise RuntimeError(f"结构化输出解析失败 (可能是模型智商不足或配置错误): {exc}")
+            LOGGER.exception("Planner structured output invocation failed.")
+            raise RuntimeError("Planner 结构化输出失败，请检查模型能力或输出格式配置。") from exc
 
         if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
             raise RuntimeError("用户已停止当前任务。")
@@ -451,6 +500,508 @@ class SentinelFlowAgentService:
             return 3
         return max(1, raw_value)
 
+    def _build_execution_context(
+        self,
+        *,
+        execution_entry: str,
+        scope_type: str,
+        scope_ref: str,
+        run_id: str | None = None,
+        checkpoint_thread_id: str | None = None,
+        checkpoint_ns: str = "agent_graph",
+        parent_checkpoint_thread_id: str | None = None,
+        parent_checkpoint_ns: str | None = None,
+        parent_tool_call_id: str | None = None,
+        approved_fingerprints: list[str] | None = None,
+        rejected_fingerprints: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "run_id": (run_id or uuid4().hex).strip(),
+            "execution_entry": execution_entry.strip(),
+            "scope_type": scope_type.strip(),
+            "scope_ref": scope_ref.strip(),
+            "checkpoint_thread_id": (checkpoint_thread_id or uuid4().hex).strip(),
+            "checkpoint_ns": checkpoint_ns.strip(),
+            "parent_checkpoint_thread_id": (parent_checkpoint_thread_id or "").strip(),
+            "parent_checkpoint_ns": (parent_checkpoint_ns or "").strip(),
+            "parent_tool_call_id": (parent_tool_call_id or "").strip(),
+            "approved_fingerprints": list(approved_fingerprints or []),
+            "rejected_fingerprints": list(rejected_fingerprints or []),
+        }
+
+    def _extract_pending_tool_message(self, state: dict[str, Any]) -> tuple[dict[str, Any], str] | tuple[None, str]:
+        messages = list(state.get("messages", []))
+        for msg in reversed(messages):
+            if getattr(msg, "type", "") != "tool":
+                continue
+            content = getattr(msg, "content", "")
+            if not isinstance(content, str):
+                continue
+            try:
+                payload = json.loads(content)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict) or not payload.get("approval_pending"):
+                continue
+            request = payload.get("approval_request", {})
+            if not isinstance(request, dict):
+                continue
+            return request, str(getattr(msg, "tool_call_id", "")).strip()
+        return None, ""
+
+    def _copy_tool_message_with_content(self, msg: Any, content: str) -> Any:
+        if hasattr(msg, "model_copy"):
+            try:
+                return msg.model_copy(update={"content": content})
+            except Exception:
+                pass
+        if hasattr(msg, "copy"):
+            try:
+                return msg.copy(update={"content": content})
+            except Exception:
+                pass
+        try:
+            cloned = copy.deepcopy(msg)
+            setattr(cloned, "content", content)
+            return cloned
+        except Exception:
+            pass
+        try:
+            cloned = copy.deepcopy(msg)
+            object.__setattr__(cloned, "content", content)
+            return cloned
+        except Exception:
+            pass
+        try:
+            from langchain_core.messages import ToolMessage
+            return ToolMessage(
+                content=content,
+                tool_call_id=str(getattr(msg, "tool_call_id", "")).strip() or "tool-call",
+            )
+        except ModuleNotFoundError:
+            return msg
+
+    def _replace_tool_message_content(self, state: dict[str, Any], tool_call_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        serialized = json.dumps(payload, ensure_ascii=False)
+        messages = list(state.get("messages", []))
+        for index in range(len(messages) - 1, -1, -1):
+            msg = messages[index]
+            if getattr(msg, "type", "") != "tool":
+                continue
+            if tool_call_id and str(getattr(msg, "tool_call_id", "")).strip() != tool_call_id:
+                continue
+            messages[index] = self._copy_tool_message_with_content(msg, serialized)
+            break
+        state["messages"] = messages
+        state["approval_pending"] = False
+        state["approval_request"] = {}
+        return state
+
+    def _replace_parent_tool_result(
+        self,
+        state: dict[str, Any],
+        tool_call_id: str,
+        approval_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        messages = list(state.get("messages", []))
+        for index in range(len(messages) - 1, -1, -1):
+            msg = messages[index]
+            if getattr(msg, "type", "") != "tool":
+                continue
+            if tool_call_id and str(getattr(msg, "tool_call_id", "")).strip() != tool_call_id:
+                continue
+            content = getattr(msg, "content", "")
+            if not isinstance(content, str):
+                break
+            try:
+                decoded = json.loads(content)
+            except json.JSONDecodeError:
+                break
+            if not isinstance(decoded, dict) or decoded.get("mode") != "parallel":
+                break
+            results = list(decoded.get("results", []) or [])
+            replaced = False
+            for result_index, item in enumerate(results):
+                if not isinstance(item, dict):
+                    continue
+                approval_request = item.get("approval_request", {})
+                if isinstance(approval_request, dict) and str(approval_request.get("approval_id", "")).strip() == approval_id:
+                    results[result_index] = payload
+                    replaced = True
+                    break
+            if not replaced:
+                for result_index in range(len(results) - 1, -1, -1):
+                    item = results[result_index]
+                    if isinstance(item, dict) and item.get("approval_pending"):
+                        results[result_index] = payload
+                        replaced = True
+                        break
+            if not replaced:
+                break
+            decoded["results"] = results
+            next_pending: dict[str, Any] = {}
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                approval_request = item.get("approval_request", {})
+                if item.get("approval_pending") and isinstance(approval_request, dict) and approval_request:
+                    next_pending = approval_request
+                    break
+            decoded["approval_pending"] = bool(next_pending)
+            decoded["approval_request"] = next_pending
+            decoded["success"] = False if next_pending else any(bool(item.get("success")) for item in results if isinstance(item, dict))
+            decoded["error"] = "并行子 Agent 等待技能审批。" if next_pending else None
+            messages[index] = self._copy_tool_message_with_content(msg, json.dumps(decoded, ensure_ascii=False))
+            state["messages"] = messages
+            state["approval_pending"] = bool(next_pending)
+            state["approval_request"] = next_pending
+            return state
+        return self._replace_tool_message_content(state, tool_call_id, payload)
+
+    def _persist_pending_state(
+        self,
+        *,
+        state: dict[str, Any],
+        checkpoint_kind: str,
+        agent_name: str,
+        action_hint: str,
+    ) -> dict[str, Any] | None:
+        request, tool_call_id = self._extract_pending_tool_message(state)
+        if request is None:
+            return None
+        run_id = str(state.get("run_id", request.get("run_id", ""))).strip()
+        scope_type = str(state.get("scope_type", request.get("scope_type", ""))).strip()
+        scope_ref = str(state.get("scope_ref", request.get("scope_ref", ""))).strip()
+        checkpoint_thread_id = str(state.get("checkpoint_thread_id", request.get("checkpoint_thread_id", ""))).strip() or uuid4().hex
+        checkpoint_ns = str(state.get("checkpoint_ns", request.get("checkpoint_ns", checkpoint_kind))).strip() or checkpoint_kind
+
+        self.approval_service.save_checkpoint(
+            checkpoint_thread_id=checkpoint_thread_id,
+            checkpoint_ns=checkpoint_ns,
+            checkpoint_kind=checkpoint_kind,
+            run_id=run_id,
+            scope_type=scope_type,
+            scope_ref=scope_ref,
+            agent_name=agent_name,
+            execution_entry=str(state.get("execution_entry", "")).strip(),
+            action_hint=action_hint,
+            state_payload=serialize_graph_state(state),
+        )
+        approval_id = str(request.get("approval_id", "")).strip()
+        if approval_id:
+            record = self.approval_service.get_by_id(approval_id)
+            if record is not None:
+                if not record.parent_checkpoint_thread_id and str(state.get("checkpoint_thread_id", "")).strip():
+                    updated = self.approval_service.update_parent_context(
+                        approval_id,
+                        parent_checkpoint_thread_id=str(state.get("checkpoint_thread_id", "")).strip(),
+                        parent_checkpoint_ns=str(state.get("checkpoint_ns", checkpoint_kind)).strip(),
+                        parent_tool_call_id=tool_call_id,
+                    )
+                    if updated is not None:
+                        record = updated
+                request["approval_id"] = record.approval_id
+                return self.approval_service.serialize_approval(record)
+        record = self.approval_service.create_or_reuse_pending(
+            run_id=run_id,
+            scope_type=scope_type,
+            scope_ref=scope_ref,
+            skill_name=str(request.get("skill_name", "")).strip(),
+            arguments=request.get("arguments", {}) if isinstance(request.get("arguments"), dict) else {},
+            approval_required=True,
+            checkpoint_thread_id=checkpoint_thread_id,
+            checkpoint_ns=checkpoint_ns,
+            tool_call_id=tool_call_id,
+            parent_checkpoint_thread_id=str(state.get("parent_checkpoint_thread_id", "")).strip(),
+            parent_checkpoint_ns=str(state.get("parent_checkpoint_ns", "")).strip(),
+            parent_tool_call_id=str(state.get("parent_tool_call_id", "")).strip(),
+            message=str(request.get("message", "")).strip(),
+        )
+        return self.approval_service.serialize_approval(record)
+
+    def _approved_tool_payload(self, approval, state: dict[str, Any]) -> dict[str, Any]:
+        context = {
+            "event_id_ref": state.get("event_id_ref", ""),
+            "alert_data": state.get("alert_data", {}),
+        }
+        try:
+            result = self.skill_runtime.execute_skill(approval.skill_name, approval.arguments, context)
+        except Exception as exc:
+            return {
+                "success": False,
+                "data": {},
+                "error": f"审批通过后执行 Skill 失败：{exc}",
+            }
+        payload = result.data if isinstance(result.data, dict) else {"result": result.data}
+        return {
+            "success": result.success,
+            "data": payload,
+            "error": result.error,
+        }
+
+    def _rejected_tool_payload(self, approval) -> dict[str, Any]:
+        return {
+            "success": False,
+            "data": {
+                "approval_rejected": True,
+                "skill_name": approval.skill_name,
+                "arguments": approval.arguments,
+            },
+            "error": "用户拒绝执行需要审批的 Skill。",
+        }
+
+    def _build_worker_wrapped_result(self, checkpoint: dict[str, Any], state: dict[str, Any], graph_result: dict[str, Any]) -> dict[str, Any]:
+        delegated_task_prompt = str((state.get("alert_data", {}) or {}).get("delegated_task_prompt", "")).strip()
+        tool_calls = graph_result.get("tool_calls", [])
+        skills_used = [
+            str(item.get("name", "")).strip()
+            for item in tool_calls
+            if isinstance(item, dict) and str(item.get("name", "")).strip()
+        ]
+        step_idx = 0
+        checkpoint_thread_id = str(checkpoint.get("checkpoint_thread_id", "")).strip()
+        if ":worker:" in checkpoint_thread_id:
+            try:
+                step_idx = int(checkpoint_thread_id.rsplit(":", 1)[1])
+            except (ValueError, IndexError):
+                step_idx = 0
+        final_text = str(graph_result.get("final_response", "")).strip()
+        return {
+            "step": step_idx or 1,
+            "worker": str(checkpoint.get("agent_name", "")).strip() or str(graph_result.get("agent_name", "")).strip(),
+            "task_prompt": delegated_task_prompt,
+            "final_response": final_text[:3000],
+            "skills_used": skills_used,
+            "messages": graph_result.get("messages", []),
+            "tool_calls": tool_calls,
+            "success": bool(final_text),
+            "error": None if final_text else "子 Agent 未返回有效结果。",
+        }
+
+    async def _resume_workflow_checkpoint(
+        self,
+        checkpoint: dict[str, Any],
+        step_result: dict[str, Any],
+        approval,
+    ) -> dict[str, Any]:
+        if self.workflow_runner is None:
+            return {
+                "success": False,
+                "route": "approval_resume_failed",
+                "error": "Workflow 运行时未初始化，无法恢复审批后的 Workflow。",
+                "data": {},
+            }
+        return await self.workflow_runner.resume_checkpoint(checkpoint, step_result, approval)
+
+    async def _resume_saved_checkpoint(self, checkpoint: dict[str, Any]) -> dict[str, Any]:
+        state = deserialize_graph_state(checkpoint.get("state", {}))
+        checkpoint_kind = str(checkpoint.get("checkpoint_kind", "")).strip()
+        agent_name = str(checkpoint.get("agent_name", "")).strip() or None
+        agent_definition = resolve_default_agent(self.agent_root, agent_name)
+        config = load_runtime_config()
+        effective_config = agent_definition.resolve_runtime_config(config) if agent_definition else config
+
+        if checkpoint_kind == "agent_graph":
+            readable_skills, executable_skills = self._resolve_skill_permissions(agent_definition)
+            graph = build_agent_graph(
+                self.project_root,
+                self.skill_runtime,
+                self.approval_service,
+                effective_config,
+                enable_read_skill_document=bool(readable_skills),
+                enable_execute_skill=bool(executable_skills),
+            )
+            resumed_state = await graph.ainvoke(state)
+            graph_result = self._serialize_graph_result(
+                str((state.get("alert_data", {}) or {}).get("payload") or (state.get("alert_data", {}) or {}).get("eventIds") or "").strip(),
+                resumed_state,
+                agent_definition.name if agent_definition else "",
+            )
+            if resumed_state.get("approval_pending"):
+                graph_result["approval_pending"] = True
+                graph_result["approval_request"] = self._persist_pending_state(
+                    state=resumed_state,
+                    checkpoint_kind="agent_graph",
+                    agent_name=agent_definition.name if agent_definition else "",
+                    action_hint=str(checkpoint.get("action_hint", "")).strip(),
+                ) or {}
+                graph_result["route"] = "approval_required"
+                return graph_result
+            if str(state.get("parent_checkpoint_thread_id", "")).strip():
+                return self._build_worker_wrapped_result(checkpoint, state, graph_result)
+            if str(checkpoint.get("execution_entry", "")).strip() == "manual_alert":
+                return self._serialize_alert_result(state.get("alert_data", {}) or {}, graph_result, str(checkpoint.get("action_hint", "")).strip() or None)
+            return graph_result
+
+        if checkpoint_kind == "orchestrator_graph":
+            workers = self._resolve_worker_candidates(agent_definition, entry_type="conversation" if str(checkpoint.get("execution_entry", "")).strip() == "conversation" else "alert")
+            orchestrator = build_orchestrator_graph(
+                agent_definition,
+                workers,
+                self.project_root,
+                self.skill_runtime,
+                self.approval_service,
+                effective_config,
+                alert_data=state.get("alert_data", {}) or {},
+                cancel_event=None,
+                workflow_root=self.workflow_root,
+                workflow_runner=self.workflow_runner,
+            )
+            resumed_state = await orchestrator.ainvoke(
+                state,
+                {"recursion_limit": max(10, self._resolve_worker_max_steps(agent_definition) * 4 + 4)},
+            )
+            graph_result = self._serialize_orchestrator_result(
+                resumed_state,
+                state.get("alert_data", {}) or {},
+                agent_definition,
+                str(checkpoint.get("action_hint", "")).strip() or None,
+            )
+            if resumed_state.get("approval_pending"):
+                graph_result["approval_pending"] = True
+                graph_result["approval_request"] = self._persist_pending_state(
+                    state=resumed_state,
+                    checkpoint_kind="orchestrator_graph",
+                    agent_name=agent_definition.name if agent_definition else "",
+                    action_hint=str(checkpoint.get("action_hint", "")).strip(),
+                ) or {}
+                graph_result["route"] = "approval_required"
+                return graph_result
+            if str(checkpoint.get("execution_entry", "")).strip() == "manual_alert":
+                return self._serialize_alert_result(state.get("alert_data", {}) or {}, graph_result, str(checkpoint.get("action_hint", "")).strip() or None)
+            return graph_result
+
+        return {
+            "success": False,
+            "route": "approval_resume_failed",
+            "error": f"不支持的 checkpoint 类型：{checkpoint_kind}",
+            "data": {},
+        }
+
+    async def resolve_skill_approval(self, approval_id: str, decision: str) -> dict[str, Any]:
+        approval = self.approval_service.get_by_id(approval_id)
+        if approval is None:
+            return {"success": False, "route": "approval_not_found", "error": "找不到待审批记录。", "data": {}}
+        if approval.status != "pending":
+            return {"success": False, "route": "approval_not_pending", "error": "该审批已处理。", "data": {"approval": self.approval_service.serialize_approval(approval)}}
+        checkpoint = self.approval_service.load_checkpoint(approval.checkpoint_thread_id)
+        if checkpoint is None:
+            return {"success": False, "route": "approval_checkpoint_missing", "error": "审批断点不存在或已丢失。", "data": {}}
+
+        state = deserialize_graph_state(checkpoint.get("state", {}))
+        if decision == "approve":
+            tool_payload = self._approved_tool_payload(approval, state)
+            approved = set(state.get("approved_fingerprints", []) or [])
+            approved.add(approval.arguments_fingerprint)
+            state["approved_fingerprints"] = list(approved)
+        elif decision == "reject":
+            tool_payload = self._rejected_tool_payload(approval)
+            rejected = set(state.get("rejected_fingerprints", []) or [])
+            rejected.add(approval.arguments_fingerprint)
+            state["rejected_fingerprints"] = list(rejected)
+        else:
+            return {"success": False, "route": "approval_invalid_decision", "error": f"不支持的审批动作：{decision}", "data": {}}
+
+        state = self._replace_tool_message_content(state, approval.tool_call_id, tool_payload)
+        self.approval_service.save_checkpoint(
+            checkpoint_thread_id=approval.checkpoint_thread_id,
+            checkpoint_ns=checkpoint.get("checkpoint_ns", ""),
+            checkpoint_kind=checkpoint.get("checkpoint_kind", ""),
+            run_id=checkpoint.get("run_id", ""),
+            scope_type=checkpoint.get("scope_type", ""),
+            scope_ref=checkpoint.get("scope_ref", ""),
+            agent_name=checkpoint.get("agent_name", ""),
+            execution_entry=checkpoint.get("execution_entry", ""),
+            action_hint=checkpoint.get("action_hint", ""),
+            state_payload=serialize_graph_state(state),
+        )
+        updated = self.approval_service.set_decision(approval_id, "approved" if decision == "approve" else "rejected")
+        current_checkpoint = self.approval_service.load_checkpoint(approval.checkpoint_thread_id) or checkpoint
+        result = await self._resume_saved_checkpoint(current_checkpoint)
+
+        parent_checkpoint_id = approval.parent_checkpoint_thread_id.strip()
+        if parent_checkpoint_id and not result.get("approval_pending"):
+            parent_checkpoint = self.approval_service.load_checkpoint(parent_checkpoint_id)
+            if parent_checkpoint is not None:
+                parent_kind = str(parent_checkpoint.get("checkpoint_kind", "")).strip()
+                if parent_kind == "workflow_runner":
+                    result = await self._resume_workflow_checkpoint(parent_checkpoint, result, approval)
+                    workflow_state = parent_checkpoint.get("state", {}) if isinstance(parent_checkpoint.get("state", {}), dict) else {}
+                    workflow_parent_id = str(workflow_state.get("parent_checkpoint_thread_id", "")).strip()
+                    if workflow_parent_id and not result.get("approval_pending"):
+                        workflow_parent = self.approval_service.load_checkpoint(workflow_parent_id)
+                        if workflow_parent is not None:
+                            workflow_parent_state = deserialize_graph_state(workflow_parent.get("state", {}))
+                            workflow_parent_state = self._replace_parent_tool_result(
+                                workflow_parent_state,
+                                str(workflow_state.get("parent_tool_call_id", "")).strip(),
+                                approval.approval_id,
+                                result,
+                            )
+                            self.approval_service.save_checkpoint(
+                                checkpoint_thread_id=workflow_parent_id,
+                                checkpoint_ns=workflow_parent.get("checkpoint_ns", ""),
+                                checkpoint_kind=workflow_parent.get("checkpoint_kind", ""),
+                                run_id=workflow_parent.get("run_id", ""),
+                                scope_type=workflow_parent.get("scope_type", ""),
+                                scope_ref=workflow_parent.get("scope_ref", ""),
+                                agent_name=workflow_parent.get("agent_name", ""),
+                                execution_entry=workflow_parent.get("execution_entry", ""),
+                                action_hint=workflow_parent.get("action_hint", ""),
+                                state_payload=serialize_graph_state(workflow_parent_state),
+                            )
+                            result = await self._resume_saved_checkpoint(
+                                self.approval_service.load_checkpoint(workflow_parent_id) or workflow_parent
+                            )
+                    approval_payload = self.approval_service.serialize_approval(updated or approval)
+                    return {
+                        "success": not result.get("approval_pending") and bool(result.get("success", True)),
+                        "route": str(result.get("route", "")).strip() or ("approval_required" if result.get("approval_pending") else "approval_resolved"),
+                        "data": {
+                            **(result if isinstance(result, dict) else {}),
+                            "approval": approval_payload,
+                        },
+                        "error": result.get("error") if isinstance(result, dict) else None,
+                    }
+                parent_state = deserialize_graph_state(parent_checkpoint.get("state", {}))
+                wrapped_result = result
+                if current_checkpoint.get("checkpoint_kind") == "agent_graph":
+                    wrapped_result = self._build_worker_wrapped_result(current_checkpoint, state, result)
+                approved = set(parent_state.get("approved_fingerprints", []) or [])
+                rejected = set(parent_state.get("rejected_fingerprints", []) or [])
+                if decision == "approve":
+                    approved.add(approval.arguments_fingerprint)
+                else:
+                    rejected.add(approval.arguments_fingerprint)
+                parent_state["approved_fingerprints"] = list(approved)
+                parent_state["rejected_fingerprints"] = list(rejected)
+                parent_state = self._replace_parent_tool_result(parent_state, approval.parent_tool_call_id, approval.approval_id, wrapped_result)
+                self.approval_service.save_checkpoint(
+                    checkpoint_thread_id=parent_checkpoint_id,
+                    checkpoint_ns=parent_checkpoint.get("checkpoint_ns", ""),
+                    checkpoint_kind=parent_checkpoint.get("checkpoint_kind", ""),
+                    run_id=parent_checkpoint.get("run_id", ""),
+                    scope_type=parent_checkpoint.get("scope_type", ""),
+                    scope_ref=parent_checkpoint.get("scope_ref", ""),
+                    agent_name=parent_checkpoint.get("agent_name", ""),
+                    execution_entry=parent_checkpoint.get("execution_entry", ""),
+                    action_hint=parent_checkpoint.get("action_hint", ""),
+                    state_payload=serialize_graph_state(parent_state),
+                )
+                result = await self._resume_saved_checkpoint(self.approval_service.load_checkpoint(parent_checkpoint_id) or parent_checkpoint)
+
+        approval_payload = self.approval_service.serialize_approval(updated or approval)
+        return {
+            "success": not result.get("approval_pending") and bool(result.get("success", True)),
+            "route": str(result.get("route", "")).strip() or ("approval_required" if result.get("approval_pending") else "approval_resolved"),
+            "data": {
+                **(result if isinstance(result, dict) else {}),
+                "approval": approval_payload,
+            },
+            "error": result.get("error") if isinstance(result, dict) else None,
+        }
+
     def _serialize_orchestrator_result(
         self,
         final_state: dict[str, Any],
@@ -541,6 +1092,7 @@ class SentinelFlowAgentService:
         history: list[dict[str, str]] | None,
         cancel_event=None,
         status_callback: Callable[[str], None] | None = None,
+        execution_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         from sentinelflow.agent.orchestrator_graph import build_orchestrator_graph
 
@@ -569,6 +1121,7 @@ class SentinelFlowAgentService:
             workers,
             self.project_root,
             self.skill_runtime,
+            self.approval_service,
             effective_config,
             alert_data=alert_data,
             cancel_event=cancel_event,
@@ -586,6 +1139,17 @@ class SentinelFlowAgentService:
             "cancel_event": cancel_event,
             "readable_skills": readable_skills,
             "executable_skills": executable_skills,
+            "run_id": str((execution_context or {}).get("run_id", "")).strip(),
+            "execution_entry": str((execution_context or {}).get("execution_entry", "")).strip(),
+            "scope_type": str((execution_context or {}).get("scope_type", "")).strip(),
+            "scope_ref": str((execution_context or {}).get("scope_ref", "")).strip(),
+            "checkpoint_thread_id": str((execution_context or {}).get("checkpoint_thread_id", "")).strip(),
+            "checkpoint_ns": str((execution_context or {}).get("checkpoint_ns", "orchestrator_graph")).strip(),
+            "parent_checkpoint_thread_id": str((execution_context or {}).get("parent_checkpoint_thread_id", "")).strip(),
+            "parent_checkpoint_ns": str((execution_context or {}).get("parent_checkpoint_ns", "")).strip(),
+            "parent_tool_call_id": str((execution_context or {}).get("parent_tool_call_id", "")).strip(),
+            "approved_fingerprints": list((execution_context or {}).get("approved_fingerprints", []) or []),
+            "rejected_fingerprints": list((execution_context or {}).get("rejected_fingerprints", []) or []),
         }
         if status_callback:
             status_callback("主 Agent 正在分析任务并调度子 Agent...")
@@ -593,7 +1157,18 @@ class SentinelFlowAgentService:
             initial_state,
             {"recursion_limit": max(10, max_steps * 4 + 4)},
         )
-        return self._serialize_orchestrator_result(final_state, alert_data, primary_agent, action_hint=None)
+        serialized = self._serialize_orchestrator_result(final_state, alert_data, primary_agent, action_hint=None)
+        if final_state.get("approval_pending"):
+            serialized["approval_pending"] = True
+            approval_request = self._persist_pending_state(
+                state=final_state,
+                checkpoint_kind="orchestrator_graph",
+                agent_name=primary_agent.name if primary_agent else "",
+                action_hint="",
+            )
+            serialized["approval_request"] = approval_request or {}
+            serialized["route"] = "approval_required"
+        return serialized
 
     async def _orchestrate_alert(
         self,
@@ -603,6 +1178,7 @@ class SentinelFlowAgentService:
         action_hint: str | None,
         cancel_event=None,
         status_callback: Callable[[str], None] | None = None,
+        execution_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         from sentinelflow.agent.orchestrator_graph import build_orchestrator_graph
 
@@ -627,6 +1203,7 @@ class SentinelFlowAgentService:
             workers,
             self.project_root,
             self.skill_runtime,
+            self.approval_service,
             effective_config,
             alert_data=alert_data,
             cancel_event=cancel_event,
@@ -644,6 +1221,17 @@ class SentinelFlowAgentService:
             "cancel_event": cancel_event,
             "readable_skills": readable_skills,
             "executable_skills": executable_skills,
+            "run_id": str((execution_context or {}).get("run_id", "")).strip(),
+            "execution_entry": str((execution_context or {}).get("execution_entry", "")).strip(),
+            "scope_type": str((execution_context or {}).get("scope_type", "")).strip(),
+            "scope_ref": str((execution_context or {}).get("scope_ref", "")).strip(),
+            "checkpoint_thread_id": str((execution_context or {}).get("checkpoint_thread_id", "")).strip(),
+            "checkpoint_ns": str((execution_context or {}).get("checkpoint_ns", "orchestrator_graph")).strip(),
+            "parent_checkpoint_thread_id": str((execution_context or {}).get("parent_checkpoint_thread_id", "")).strip(),
+            "parent_checkpoint_ns": str((execution_context or {}).get("parent_checkpoint_ns", "")).strip(),
+            "parent_tool_call_id": str((execution_context or {}).get("parent_tool_call_id", "")).strip(),
+            "approved_fingerprints": list((execution_context or {}).get("approved_fingerprints", []) or []),
+            "rejected_fingerprints": list((execution_context or {}).get("rejected_fingerprints", []) or []),
         }
         if status_callback:
             status_callback("主 Agent 正在分析告警并调度子 Agent...")
@@ -652,6 +1240,17 @@ class SentinelFlowAgentService:
             {"recursion_limit": max(10, max_steps * 4 + 4)},
         )
         graph_result = self._serialize_orchestrator_result(final_state, alert, primary_agent, action_hint)
+        if final_state.get("approval_pending"):
+            graph_result["approval_pending"] = True
+            approval_request = self._persist_pending_state(
+                state=final_state,
+                checkpoint_kind="orchestrator_graph",
+                agent_name=primary_agent.name if primary_agent else "",
+                action_hint=action_hint or "",
+            )
+            graph_result["approval_request"] = approval_request or {}
+            graph_result["route"] = "approval_required"
+            return graph_result
         return self._serialize_alert_result(alert, graph_result, action_hint)
 
 
@@ -662,19 +1261,20 @@ class SentinelFlowAgentService:
         cancel_event=None,
         agent_name: str | None = None,
         status_callback: Callable[[str], None] | None = None,
+        execution_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         config = load_runtime_config()
         agent_definition = resolve_default_agent(self.agent_root, agent_name)
         workers = self._resolve_worker_candidates(agent_definition, entry_type="conversation")
         if self._should_use_orchestrator(agent_definition, workers):
-            return await self._orchestrate_command(agent_definition, workers, command_text, history, cancel_event, status_callback=status_callback)
+            return await self._orchestrate_command(agent_definition, workers, command_text, history, cancel_event, status_callback=status_callback, execution_context=execution_context)
         alert = {
             "eventIds": f"CMD-{uuid4().hex[:12].upper()}",
             "alert_name": "人工指令",
             "payload": command_text,
             "alert_source": "human_command",
         }
-        return await self._run_agent_graph(agent_definition, alert, history=history, cancel_event=cancel_event)
+        return await self._run_agent_graph(agent_definition, alert, history=history, cancel_event=cancel_event, execution_context=execution_context)
 
     async def run_alert(
         self,
@@ -683,15 +1283,18 @@ class SentinelFlowAgentService:
         cancel_event=None,
         agent_name: str | None = None,
         status_callback: Callable[[str], None] | None = None,
+        execution_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         agent_definition = resolve_default_agent(self.agent_root, agent_name)
         workers = self._resolve_worker_candidates(agent_definition, entry_type="alert")
         if self._should_use_orchestrator(agent_definition, workers):
-            return await self._orchestrate_alert(agent_definition, workers, alert, action_hint, cancel_event, status_callback=status_callback)
+            return await self._orchestrate_alert(agent_definition, workers, alert, action_hint, cancel_event, status_callback=status_callback, execution_context=execution_context)
         alert_payload = dict(alert)
         if action_hint:
             alert_payload["handling_intent"] = action_hint
-        serialized = await self._run_agent_graph(agent_definition, alert_payload, history=[], cancel_event=cancel_event)
+        serialized = await self._run_agent_graph(agent_definition, alert_payload, history=[], cancel_event=cancel_event, execution_context=execution_context)
+        if serialized.get("approval_pending"):
+            return serialized
         return self._serialize_alert_result(alert, serialized, action_hint)
 
 
@@ -1779,7 +2382,9 @@ class SentinelFlowAgentService:
         return bool(combined_keys & ip_markers) and bool(combined_keys & detail_markers)
 
     def _infer_disposition(self, final_text: str, fallback: str) -> str:
-        normalized = _clean_model_text(final_text).replace(" ", "")
+        cleaned = _clean_model_text(final_text)
+        normalized = cleaned.replace(" ", "")
+        lowered = cleaned.lower()
         if any(keyword in normalized for keyword in ("非真实攻击", "不是真实攻击", "并非真实攻击", "不是攻击")):
             if "误报" in normalized:
                 return "false_positive"
@@ -1789,6 +2394,12 @@ class SentinelFlowAgentService:
         if any(keyword in normalized for keyword in ("业务触发", "测试触发", "正常业务", "测试流量", "业务流量", "业务测试")):
             return "business_trigger"
         if any(keyword in normalized for keyword in ("真实攻击", "恶意攻击", "确认攻击", "高危攻击")):
+            return "true_attack"
+        if any(keyword in lowered for keyword in ("false positive", "false-positive")):
+            return "false_positive"
+        if any(keyword in lowered for keyword in ("business activity", "benign business", "benign traffic", "business traffic", "test traffic")):
+            return "business_trigger"
+        if any(keyword in lowered for keyword in ("true attack", "confirmed attack", "real attack", "malicious attack")):
             return "true_attack"
         return fallback or "unknown"
 

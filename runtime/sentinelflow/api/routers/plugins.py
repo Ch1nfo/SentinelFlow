@@ -21,7 +21,15 @@ def list_skills() -> dict[str, Any]:
     skills = []
     for name in skill_runtime.list_skills():
         read = skill_runtime.read_skill(name)
-        skills.append({"name": read.name, "type": read.type.value, "description": read.description, "executable": read.executable, "entry": read.entry, "mode": read.mode.value if read.mode else None})
+        skills.append({
+            "name": read.name,
+            "type": read.type.value,
+            "description": read.description,
+            "executable": read.executable,
+            "approval_required": read.approval_required,
+            "entry": read.entry,
+            "mode": read.mode.value if read.mode else None,
+        })
     return {"skills": skills}
 
 
@@ -40,7 +48,7 @@ def create_skill(payload: SkillCreateRequest) -> dict[str, Any]:
 
     _mirror_project_file(
         skill_dir / "SKILL.md",
-        _build_skill_markdown(payload.name, description, payload.content, skill_type, payload.mode),
+        _build_skill_markdown(payload.name, description, payload.content, skill_type, payload.mode, payload.approval_required),
     )
     if skill_type == "hybrid":
         _mirror_project_file(skill_dir / "main.py", payload.code if payload.code.strip() else _build_skill_main(skill_name))
@@ -71,7 +79,7 @@ def save_skill(name: str, payload: SkillCreateRequest) -> dict[str, Any]:
     skill_dir = Path(".sentinelflow") / "plugins" / "skills" / new_slug
     _mirror_project_file(
         skill_dir / "SKILL.md",
-        _build_skill_markdown(payload.name, description, payload.content, skill_type, payload.mode),
+        _build_skill_markdown(payload.name, description, payload.content, skill_type, payload.mode, payload.approval_required),
     )
     if skill_type == "hybrid":
         _mirror_project_file(skill_dir / "main.py", payload.code if payload.code.strip() else _build_skill_main(new_slug))
@@ -93,6 +101,7 @@ def get_skill(name: str) -> dict[str, Any]:
     return {
         "name": read.name, "type": read.type.value, "description": read.description,
         "markdown": read.markdown, "code": _read_skill_code(read.name), "executable": read.executable,
+        "approval_required": read.approval_required,
         "entry": read.entry, "mode": read.mode.value if read.mode else None,
         "input_schema": read.input_schema, "output_schema": read.output_schema,
     }
@@ -101,7 +110,7 @@ def get_skill(name: str) -> dict[str, Any]:
 @router.post("/skills/{name}/debug")
 def debug_skill(name: str, payload: SkillDebugRequest) -> dict[str, Any]:
     result = skill_runtime.execute_skill(name, payload.arguments or {}, payload.context or {})
-    return {"success": result.success, "skill": result.skill, "error": result.error}
+    return {"success": result.success, "skill": result.skill, "data": result.data if isinstance(result.data, dict) else {"result": result.data}, "error": result.error}
 
 @router.get("/workflows")
 def list_sentinelflow_workflows() -> dict[str, Any]:

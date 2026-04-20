@@ -213,11 +213,12 @@ class AlertDispatchService:
         )
         return updated_task
 
+    def _list_missing_open_polled_tasks(self, active_event_ids: set[str]) -> list[AlertHandlingTask]:
+        return [task for task in self.list_open_polled_tasks() if task.event_ids not in active_event_ids]
+
     def _complete_missing_polled_tasks(self, active_event_ids: set[str]) -> list[AlertHandlingTask]:
         completed: list[AlertHandlingTask] = []
-        for task in self.list_open_polled_tasks():
-            if task.event_ids in active_event_ids:
-                continue
+        for task in self._list_missing_open_polled_tasks(active_event_ids):
             previous_status = task.status
             existing_result = dict(task.last_result_data) if isinstance(task.last_result_data, dict) else {}
             existing_trace = existing_result.get("execution_trace", [])
@@ -296,7 +297,12 @@ class AlertDispatchService:
             completed.append(updated_task)
         return completed
 
-    async def dispatch(self, alerts: list[dict]) -> tuple[list[AlertHandlingTask], int, int, list[AlertHandlingTask], list[str]]:
+    async def dispatch(
+        self,
+        alerts: list[dict],
+        *,
+        allow_missing_completion: bool = True,
+    ) -> tuple[list[AlertHandlingTask], int, int, list[AlertHandlingTask], list[str]]:
         queued: list[AlertHandlingTask] = []
         skipped = 0
         updated = 0
@@ -330,6 +336,14 @@ class AlertDispatchService:
                 self.audit_service.record(
                     "alert_dispatch_skipped_running",
                     f"Skipped duplicate alert {event_id} because the original task is still running.",
+                    {"eventIds": event_id, "taskId": existing.task_id},
+                )
+                continue
+            if existing and existing.status == "awaiting_approval":
+                skipped += 1
+                self.audit_service.record(
+                    "alert_dispatch_skipped_awaiting_approval",
+                    f"Skipped duplicate alert {event_id} because the original task is awaiting approval.",
                     {"eventIds": event_id, "taskId": existing.task_id},
                 )
                 continue
@@ -377,7 +391,20 @@ class AlertDispatchService:
                     {"eventIds": event_id, "error": str(exc)},
                 )
 
-        completed = self._complete_missing_polled_tasks(active_event_ids)
+        completed: list[AlertHandlingTask] = []
+        if allow_missing_completion:
+            completed = self._complete_missing_polled_tasks(active_event_ids)
+        else:
+            missing_candidates = self._list_missing_open_polled_tasks(active_event_ids)
+            if missing_candidates:
+                self.audit_service.record(
+                    "alert_missing_completion_skipped",
+                    "Skipped closing missing queued/failed alerts because the latest poll could not be confirmed as a complete snapshot.",
+                    {
+                        "count": len(missing_candidates),
+                        "eventIds": [task.event_ids for task in missing_candidates],
+                    },
+                )
         return queued, skipped, updated, completed, errors
 
     def list_queued_tasks(self) -> list[AlertHandlingTask]:
@@ -467,6 +494,52 @@ class AlertDispatchService:
         self.audit_service.record(
             "task_running",
             f"Task {task_id} entered running state.",
+            {"taskId": task_id, "eventIds": task.event_ids, "action": action},
+        )
+        return task
+
+    def mark_task_awaiting_approval(
+        self,
+        task_id: str,
+        action: str,
+        result_data: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> AlertHandlingTask | None:
+        task = self._update_task_columns(
+            task_id,
+            {
+                "status": "awaiting_approval",
+                "last_action": action,
+                "last_result_success": None,
+                "last_result_error": error,
+                "last_result_data": json.dumps(result_data or {}),
+            },
+            expected_statuses=["running"],
+        )
+        if not task:
+            return None
+        self.audit_service.record(
+            "task_awaiting_approval",
+            f"Task {task_id} is waiting for skill approval.",
+            {"taskId": task_id, "eventIds": task.event_ids, "action": action},
+        )
+        return task
+
+    def mark_task_running_from_approval(self, task_id: str, action: str) -> AlertHandlingTask | None:
+        task = self._update_task_columns(
+            task_id,
+            {
+                "status": "running",
+                "last_action": action,
+                "last_result_error": None,
+            },
+            expected_statuses=["awaiting_approval"],
+        )
+        if not task:
+            return None
+        self.audit_service.record(
+            "task_resumed_from_approval",
+            f"Task {task_id} resumed after approval decision.",
             {"taskId": task_id, "eventIds": task.event_ids, "action": action},
         )
         return task

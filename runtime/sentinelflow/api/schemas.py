@@ -87,6 +87,7 @@ class SkillCreateRequest(BaseModel):
     content: str = ""
     mode: str | None = None
     code: str = ""
+    approval_required: bool = Field(default=False, alias="approvalRequired")
 
 
 class SkillDebugRequest(BaseModel):
@@ -138,3 +139,7 @@ class AgentCreateRequest(BaseModel):
 
 class DeleteRequest(BaseModel):
     name: str | None = None
+
+
+class ApprovalDecisionRequest(BaseModel):
+    stream: bool = False

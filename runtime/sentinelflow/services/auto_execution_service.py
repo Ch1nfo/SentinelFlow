@@ -28,16 +28,19 @@ class AlertAutoExecutionService:
         self._loop_task: asyncio.Task[None] | None = None
         self._wake_event = asyncio.Event()
         self._stop_event = asyncio.Event()
+        self._run_once_requested = False
 
     async def start(self) -> None:
         if self._loop_task and not self._loop_task.done():
             return
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
+        self._run_once_requested = False
         self._loop_task = asyncio.create_task(self._run_loop(), name="sentinelflow-auto-executor")
 
     async def stop(self) -> None:
         self._enabled = False
+        self._run_once_requested = False
         self._stop_event.set()
         self._wake_event.set()
         if self._loop_task:
@@ -70,15 +73,23 @@ class AlertAutoExecutionService:
         self._enabled = bool(enabled)
         self._wake_event.set()
 
+    def request_run_once(self) -> None:
+        self._run_once_requested = True
+        self._wake_event.set()
+
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
-            if not self._enabled:
+            if not self._enabled and not self._run_once_requested:
                 await self._wait_for_wake()
                 continue
 
-            await self._run_pending_once()
+            allow_disabled = self._run_once_requested
+            self._run_once_requested = False
+            await self._run_pending_once(allow_disabled=allow_disabled)
             if self._stop_event.is_set():
                 break
+            if not self._enabled:
+                continue
             await self._wait_for_wake(timeout=self.interval_seconds)
 
     async def _wait_for_wake(self, timeout: float | None = None) -> bool:
@@ -92,7 +103,7 @@ class AlertAutoExecutionService:
         except asyncio.TimeoutError:
             return False
 
-    async def _run_pending_once(self) -> list[dict[str, Any]]:
+    async def _run_pending_once(self, *, allow_disabled: bool = False) -> list[dict[str, Any]]:
         queued_tasks = [task for task in self.dispatch_service.list_tasks() if task.status == "queued"]
         retry_interval_seconds = max(int(load_runtime_config().failed_retry_interval_seconds or 0), 0)
         retry_tasks = self.dispatch_service.list_failed_retry_candidates(retry_interval_seconds, max_retry_count=3)
@@ -103,11 +114,11 @@ class AlertAutoExecutionService:
         results: list[dict[str, Any]] = []
         try:
             for task in queued_tasks:
-                if self._stop_event.is_set() or not self._enabled:
+                if self._stop_event.is_set() or (not self._enabled and not allow_disabled):
                     break
-                results.append(await self.task_runner_service.run_task(task))
+                results.append(await self.task_runner_service.run_task(task, execution_entry="auto_alert"))
             for failed_task in retry_tasks:
-                if self._stop_event.is_set() or not self._enabled:
+                if self._stop_event.is_set() or (not self._enabled and not allow_disabled):
                     break
                 prepared = self.dispatch_service.prepare_retry(failed_task.task_id)
                 if not prepared:
@@ -122,7 +133,7 @@ class AlertAutoExecutionService:
                         "retryIntervalSeconds": retry_interval_seconds,
                     },
                 )
-                results.append(await self.task_runner_service.run_task(prepared))
+                results.append(await self.task_runner_service.run_task(prepared, execution_entry="auto_alert"))
         finally:
             self._running = False
         return results

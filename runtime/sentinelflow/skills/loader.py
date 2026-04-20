@@ -51,14 +51,29 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
     # Fallback: minimal line-by-line key:value parser (no nesting)
     data: dict[str, Any] = {}
+    current_parent: str | None = None
     for line in frontmatter_text.splitlines():
-        stripped = line.strip()
+        raw = line.rstrip()
+        stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
+            continue
+        if raw.startswith("  ") and current_parent and ":" in stripped:
+            key, _, value = stripped.partition(":")
+            nested = data.get(current_parent)
+            if not isinstance(nested, dict):
+                nested = {}
+                data[current_parent] = nested
+            nested[key.strip()] = value.strip()
             continue
         if ":" not in stripped:
             continue
         key, _, value = stripped.partition(":")
-        data[key.strip()] = value.strip()
+        current_parent = key.strip()
+        if value.strip():
+            data[current_parent] = value.strip()
+            current_parent = None
+        else:
+            data[current_parent] = {}
 
     return data, body
 

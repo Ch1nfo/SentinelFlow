@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import queue
@@ -8,8 +9,8 @@ from uuid import uuid4
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from sentinelflow.agent.registry import list_agent_definitions
-from sentinelflow.api.schemas import CommandDispatchRequest, AlertActionRequest
-from sentinelflow.api.deps import agent_service, dispatch_service, audit_service, polling_service, skill_runtime, _serialize, auto_execution_service, task_runner_service, WORKFLOW_ROOT, AGENT_ROOT
+from sentinelflow.api.schemas import CommandDispatchRequest, AlertActionRequest, ApprovalDecisionRequest
+from sentinelflow.api.deps import agent_service, dispatch_service, audit_service, polling_service, skill_runtime, _serialize, auto_execution_service, task_runner_service, skill_approval_service, WORKFLOW_ROOT, AGENT_ROOT
 from sentinelflow.api.utils import _extract_alert_payload, _resolve_task
 from sentinelflow.config.runtime import load_runtime_config, save_runtime_config
 
@@ -17,6 +18,20 @@ router = APIRouter(prefix="/api/sentinelflow")
 
 active_command_cancellations: dict[str, threading.Event] = {}
 active_command_lock = threading.Lock()
+
+
+def _run_coroutine_in_new_loop(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        asyncio.set_event_loop(None)
+        loop.close()
 
 
 def _is_successful_ban_action(action_name: str, payload: dict[str, Any]) -> bool:
@@ -164,6 +179,7 @@ def _dashboard_summary() -> dict[str, Any]:
             "tasks": len(tasks),
             "queued": len([task for task in tasks if task.status == "queued"]),
             "running": len([task for task in tasks if task.status == "running"]),
+            "awaiting_approval": len([task for task in tasks if task.status == "awaiting_approval"]),
             "succeeded": len([task for task in tasks if task.status == "succeeded"]),
             "failed": len([task for task in tasks if task.status == "failed"]),
             "audit_events": len(audit_service.list_events()),
@@ -228,17 +244,23 @@ async def handle_alert(payload: AlertActionRequest) -> dict[str, Any]:
         }
 
     if payload.action == "auto_run_pending":
-        results = []
-        for queued_task in dispatch_service.list_tasks():
-            if queued_task.status != "queued":
-                continue
-            results.append(_serialize(await task_runner_service.run_task(queued_task)))
+        retry_interval_seconds = max(int(load_runtime_config().failed_retry_interval_seconds or 0), 0)
+        queued_count = len([task for task in dispatch_service.list_tasks() if task.status == "queued"])
+        retry_candidate_count = len(dispatch_service.list_failed_retry_candidates(retry_interval_seconds, max_retry_count=3))
+        auto_execution_service.request_run_once()
+        executor_state = auto_execution_service.state()
         return {
             "action": payload.action,
-            "success": all(item.get("success", False) for item in results) if results else True,
+            "success": True,
             "task_id": "",
             "event_ids": "",
-            "data": {"results": results, "count": len(results)},
+            "data": {
+                "background_started": True,
+                "queued_count": queued_count,
+                "retry_candidate_count": retry_candidate_count,
+                "executor_enabled": executor_state.get("enabled", False),
+                "executor_running": executor_state.get("running", False),
+            },
             "task": None,
             "error": None,
         }
@@ -276,14 +298,20 @@ async def handle_alert(payload: AlertActionRequest) -> dict[str, Any]:
                 "success": False,
                 "error": "未找到待重试任务。",
             }
-        dispatch_service.prepare_retry(task.task_id)
-        return _serialize(await task_runner_service.run_task(task))
+        prepared = dispatch_service.prepare_retry(task.task_id)
+        if not prepared:
+            return {
+                "action": payload.action,
+                "success": False,
+                "error": "任务重试准备失败。",
+            }
+        return _serialize(await task_runner_service.run_task(prepared, execution_entry="manual_alert"))
 
     if not alert:
         return {"action": payload.action, "success": False, "error": "未提供可处理的告警上下文。"}
 
     if task:
-        return _serialize(await task_runner_service.run_task(task, payload.action))
+        return _serialize(await task_runner_service.run_task(task, payload.action, execution_entry="manual_alert"))
 
     return {"action": payload.action, "success": False, "error": "当前动作需要绑定任务上下文。"}
 
@@ -301,8 +329,22 @@ async def _dispatch_command_internal(
         return {"command_text": payload.command_text, "route": "agent_runtime_unavailable", "success": False, "error": f"当前 Agent Runtime 不可用：{reason}"}
 
     try:
-        agent_data = await agent_service.run_command(payload.command_text, payload.history or [], cancel_event=cancel_event, agent_name=payload.agent_name, status_callback=status_callback)
-        return {"command_text": payload.command_text, "route": "agent_dispatch", "success": True, "data": agent_data, "error": None}
+        execution_context = agent_service._build_execution_context(
+            execution_entry="conversation",
+            scope_type="conversation",
+            scope_ref=uuid4().hex,
+        )
+        agent_data = await agent_service.run_command(
+            payload.command_text,
+            payload.history or [],
+            cancel_event=cancel_event,
+            agent_name=payload.agent_name,
+            status_callback=status_callback,
+            execution_context=execution_context,
+        )
+        route = "approval_required" if agent_data.get("approval_pending") else "agent_dispatch"
+        success = False if agent_data.get("approval_pending") else True
+        return {"command_text": payload.command_text, "route": route, "success": success, "data": agent_data, "error": None if route != "approval_required" else "当前命中了需要审批的 Skill。"}
     except Exception as exc:
         if cancel_event is not None and cancel_event.is_set():
             return {"command_text": payload.command_text, "route": "stopped", "success": False, "error": "已停止当前任务"}
@@ -328,8 +370,13 @@ def _stream_command_response(payload: CommandDispatchRequest):
 
     def run_dispatch() -> None:
         try:
-            import asyncio
-            response = asyncio.run(_dispatch_command_internal(payload, cancel_event=cancel_event, status_callback=lambda text: result_queue.put(("status", text))))
+            response = _run_coroutine_in_new_loop(
+                _dispatch_command_internal(
+                    payload,
+                    cancel_event=cancel_event,
+                    status_callback=lambda text: result_queue.put(("status", text)),
+                )
+            )
             result_queue.put(("response", response))
         except Exception as error:
             result_queue.put(("error", error))
@@ -385,6 +432,104 @@ def _stream_command_response(payload: CommandDispatchRequest):
         time.sleep(0.03)
     yield f"data: {json.dumps({'type': 'done', 'payload': response}, ensure_ascii=False)}\n\n"
 
+
+def _build_approval_resolution_response(
+    *,
+    success: bool,
+    route: str,
+    approval: dict[str, Any] | None,
+    data: dict[str, Any] | None = None,
+    task: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "success": success,
+        "route": route,
+        "approval": approval,
+        "data": data if isinstance(data, dict) else {},
+        "task": task,
+        "error": error,
+    }
+
+
+async def _resolve_approval_json(approval_id: str, decision: str) -> dict[str, Any]:
+    approval = skill_approval_service.get_by_id(approval_id)
+    if approval is None:
+        return _build_approval_resolution_response(
+            success=False,
+            route="approval_not_found",
+            approval=None,
+            data={},
+            task=None,
+            error="找不到待审批记录。",
+        )
+    result = await agent_service.resolve_skill_approval(approval_id, decision)
+    payload = result.get("data", {})
+    payload = payload if isinstance(payload, dict) else {}
+    serialized_approval = skill_approval_service.serialize_approval(skill_approval_service.get_by_id(approval_id) or approval)
+    if approval.scope_type == "alert_task":
+        finalized = task_runner_service.finalize_after_approval(approval.scope_ref, payload)
+        return _build_approval_resolution_response(
+            success=bool(finalized.get("success", False)),
+            route=str(result.get("route", "")).strip(),
+            approval=serialized_approval,
+            data=finalized.get("data", {}),
+            task=_serialize(finalized.get("task")),
+            error=finalized.get("error"),
+        )
+    return _build_approval_resolution_response(
+        success=bool(result.get("success", False)),
+        route=str(result.get("route", "")).strip(),
+        approval=serialized_approval,
+        data=payload,
+        task=None,
+        error=result.get("error"),
+    )
+
+
+def _stream_approval_resolution(approval_id: str, decision: str):
+    result_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+
+    def run_resolution() -> None:
+        try:
+            response = _run_coroutine_in_new_loop(_resolve_approval_json(approval_id, decision))
+            result_queue.put(("response", response))
+        except Exception as error:
+            result_queue.put(("error", error))
+
+    worker = threading.Thread(target=run_resolution, daemon=True)
+    worker.start()
+
+    yield f"data: {json.dumps({'type': 'request', 'payload': {'request_id': approval_id}}, ensure_ascii=False)}\n\n"
+    yield f"data: {json.dumps({'type': 'status', 'payload': {'text': '正在处理审批决定...'}}, ensure_ascii=False)}\n\n"
+
+    while True:
+        try:
+            event_type, payload_data = result_queue.get(timeout=0.2)
+            if event_type == "error":
+                raise payload_data
+            response = payload_data
+            break
+        except queue.Empty:
+            continue
+
+    stream_text = _build_stream_text({"data": response.get("data", {}), "error": response.get("error")})
+    yield f"data: {json.dumps({'type': 'meta', 'payload': {'route': response.get('route', ''), 'success': response.get('success', False)}}, ensure_ascii=False)}\n\n"
+    chunk_size = 18
+    for index in range(0, len(stream_text), chunk_size):
+        yield f"data: {json.dumps({'type': 'delta', 'payload': {'text': stream_text[index:index + chunk_size]}}, ensure_ascii=False)}\n\n"
+        time.sleep(0.03)
+    done_payload = {
+        "command_text": "",
+        "route": response.get("route", ""),
+        "success": response.get("success", False),
+        "data": response.get("data", {}),
+        "approval": response.get("approval"),
+        "task": response.get("task"),
+        "error": response.get("error"),
+    }
+    yield f"data: {json.dumps({'type': 'done', 'payload': done_payload}, ensure_ascii=False)}\n\n"
+
 @router.post("/commands/stop")
 def stop_command(payload: dict[str, Any]) -> dict[str, Any]:
     request_id = str(payload.get("request_id", "")).strip()
@@ -404,3 +549,23 @@ async def dispatch_command(payload: CommandDispatchRequest) -> dict[str, Any]:
 @router.post("/commands/stream")
 def stream_command(payload: CommandDispatchRequest):
     return StreamingResponse(_stream_command_response(payload), media_type="text/event-stream")
+
+
+@router.get("/approvals/pending")
+def list_pending_approvals() -> dict[str, Any]:
+    approvals = [skill_approval_service.serialize_approval(item) for item in skill_approval_service.list_pending()]
+    return {"approvals": approvals}
+
+
+@router.post("/approvals/{approval_id}/approve")
+async def approve_skill_approval(approval_id: str, payload: ApprovalDecisionRequest) -> Any:
+    if payload.stream:
+        return StreamingResponse(_stream_approval_resolution(approval_id, "approve"), media_type="text/event-stream")
+    return await _resolve_approval_json(approval_id, "approve")
+
+
+@router.post("/approvals/{approval_id}/reject")
+async def reject_skill_approval(approval_id: str, payload: ApprovalDecisionRequest) -> Any:
+    if payload.stream:
+        return StreamingResponse(_stream_approval_resolution(approval_id, "reject"), media_type="text/event-stream")
+    return await _resolve_approval_json(approval_id, "reject")

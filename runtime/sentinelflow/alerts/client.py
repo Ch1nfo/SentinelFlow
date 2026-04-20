@@ -95,6 +95,76 @@ def _normalize_script_result(payload: Any, *, batch_id: str) -> dict[str, Any]:
     return {"count": len(normalized_alerts), "alerts": normalized_alerts}
 
 
+def _read_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _read_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _iter_snapshot_candidates(payload: Any) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    if not isinstance(payload, dict):
+        return candidates
+    candidates.append(payload)
+    for key in ("meta", "pagination", "page", "page_info", "pageInfo", "result", "data"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    return candidates
+
+
+def _has_pending_pagination(candidate: dict[str, Any]) -> bool:
+    for key in ("has_more", "hasMore"):
+        value = _read_bool(candidate.get(key))
+        if value is True:
+            return True
+    for key in ("next", "next_page", "nextPage", "next_cursor", "nextCursor"):
+        value = candidate.get(key)
+        if value not in (None, "", False):
+            return True
+    return False
+
+
+def _infer_snapshot_complete(raw_payload: Any, parsed_count: int) -> bool:
+    if isinstance(raw_payload, list):
+        return len(raw_payload) == parsed_count
+
+    for candidate in _iter_snapshot_candidates(raw_payload):
+        for key in ("snapshot_complete", "is_complete_snapshot"):
+            value = _read_bool(candidate.get(key))
+            if value is True and not _has_pending_pagination(candidate):
+                return True
+        for key in ("total_count", "total", "totalCount", "count_total"):
+            total = _read_int(candidate.get(key))
+            if total is not None and total == parsed_count and not _has_pending_pagination(candidate):
+                return True
+    return False
+
+
 class SOCAlertApiClient:
     """Fetches alerts from a single configured alert source and normalizes them."""
 
@@ -132,10 +202,12 @@ class SOCAlertApiClient:
                 "error": parsed["error"],
                 "raw_payload": fetched.get("raw_payload"),
             }
+        parsed_count = int(parsed.get("count", 0) or 0)
         return {
-            "count": parsed.get("count", 0),
+            "count": parsed_count,
             "alerts": parsed.get("alerts", []),
             "raw_payload": fetched.get("raw_payload"),
+            "snapshot_complete": _infer_snapshot_complete(fetched.get("raw_payload"), parsed_count),
         }
 
     def fetch_raw_alert_payload(self, config: SentinelFlowRuntimeConfig | None = None) -> dict[str, Any]:
@@ -220,10 +292,11 @@ class SOCAlertApiClient:
             **normalized,
             "batch_id": batch_id,
             "raw_payload": decoded,
+            "snapshot_complete": True,
         }
 
     def _demo_alerts(self, error: str | None = None) -> dict[str, Any]:
-        result: dict[str, Any] = {"count": 0, "alerts": [], "demo_mode": True}
+        result: dict[str, Any] = {"count": 0, "alerts": [], "demo_mode": True, "snapshot_complete": True}
         if error:
             result["demo_mode"] = False
             result["fallback_triggered"] = True

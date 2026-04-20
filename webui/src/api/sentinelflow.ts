@@ -1,4 +1,26 @@
-export type AlertTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'completed' | 'pending_closure'
+export type AlertTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'completed' | 'pending_closure' | 'awaiting_approval'
+
+export type ApprovalRequest = {
+  approval_id: string
+  run_id: string
+  scope_type: string
+  scope_ref: string
+  status: string
+  skill_name: string
+  arguments: Record<string, unknown>
+  arguments_fingerprint: string
+  approval_required: boolean
+  checkpoint_thread_id: string
+  checkpoint_ns: string
+  parent_checkpoint_thread_id?: string
+  parent_checkpoint_ns?: string
+  tool_call_id?: string
+  parent_tool_call_id?: string
+  message?: string
+  created_at: string
+  decided_at?: string
+  arguments_summary?: string
+}
 
 export type ExecutionTraceItem = {
   phase: string
@@ -108,6 +130,7 @@ export type SkillSummary = {
   type: string
   description: string
   executable: boolean
+  approval_required: boolean
   entry?: string | null
   mode?: string | null
 }
@@ -130,7 +153,11 @@ export type CommandDispatchResponse = {
   command_text: string
   route: string
   success: boolean
-  data: Record<string, unknown>
+  data: Record<string, unknown> & {
+    approval_request?: ApprovalRequest
+  }
+  approval?: ApprovalRequest
+  task?: AlertTask | null
   error?: string | null
 }
 
@@ -172,6 +199,7 @@ export type RuntimeSettingsResponse = {
     failed_retry_interval_seconds: string
     workflow_engine: string
     agent_enabled: boolean
+    auto_execute_enabled: boolean
   }
   llm: {
     api_base_url: string
@@ -234,6 +262,7 @@ export type DashboardSummaryResponse = {
     tasks: number
     queued: number
     running: number
+    awaiting_approval: number
     succeeded: number
     failed: number
     audit_events: number
@@ -310,6 +339,15 @@ export type WorkflowRunResponse = {
   worker_results?: Array<Record<string, unknown>>
   summary?: string
   reason?: string
+}
+
+export type ApprovalDecisionResponse = {
+  success: boolean
+  route: string
+  approval?: ApprovalRequest
+  data: Record<string, unknown>
+  task?: AlertTask | null
+  error?: string | null
 }
 
 export type AgentSummary = {
@@ -414,6 +452,7 @@ export async function createSkill(payload: {
   content: string
   code: string
   mode?: string | null
+  approvalRequired?: boolean
 }) {
   return postJson<SkillDetail>('/api/sentinelflow/skills', payload)
 }
@@ -425,6 +464,7 @@ export async function saveSkill(name: string, payload: {
   content: string
   code: string
   mode?: string | null
+  approvalRequired?: boolean
 }) {
   return postJson<SkillDetail>(`/api/sentinelflow/skills/${encodeURIComponent(name)}/save`, payload)
 }
@@ -621,6 +661,65 @@ export async function stopStreamingCommand(requestId: string) {
   return postJson<{ stopped: boolean; request_id?: string; error?: string }>('/api/sentinelflow/commands/stop', {
     request_id: requestId,
   })
+}
+
+export async function fetchPendingApprovals(): Promise<{ approvals: ApprovalRequest[] }> {
+  return getJson('/api/sentinelflow/approvals/pending')
+}
+
+export async function decideApproval(approvalId: string, decision: 'approve' | 'reject') {
+  return postJson<ApprovalDecisionResponse>(`/api/sentinelflow/approvals/${encodeURIComponent(approvalId)}/${decision}`, {
+    stream: false,
+  })
+}
+
+export async function streamApprovalDecision(
+  approvalId: string,
+  decision: 'approve' | 'reject',
+  onEvent?: (event: CommandStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<CommandDispatchResponse> {
+  const response = await fetch(`/api/sentinelflow/approvals/${encodeURIComponent(approvalId)}/${decision}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stream: true }),
+    signal,
+  })
+  if (!response.ok || !response.body) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let finalPayload: CommandDispatchResponse | null = null
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const chunks = buffer.split('\n\n')
+    buffer = chunks.pop() ?? ''
+
+    for (const chunk of chunks) {
+      const trimmed = chunk.trim()
+      if (!trimmed) continue
+      const dataLine = trimmed
+        .split('\n')
+        .find((line) => line.startsWith('data:'))
+      if (!dataLine) continue
+      const event = JSON.parse(dataLine.slice(5).trim()) as CommandStreamEvent
+      onEvent?.(event)
+      if (event.type === 'done') {
+        finalPayload = event.payload
+      }
+    }
+  }
+
+  if (!finalPayload) {
+    throw new Error('流式响应未返回最终结果')
+  }
+  return finalPayload
 }
 
 export async function fetchAuditEvents(): Promise<{ events: AuditEvent[] }> {

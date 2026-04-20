@@ -27,6 +27,7 @@ class SentinelFlowSkillRuntime:
             description=skill.spec.description,
             markdown=skill.markdown,
             executable=skill.executable,
+            approval_required=skill.spec.approval_required,
             input_schema=skill.spec.input_schema,
             output_schema=skill.spec.output_schema,
             entry=skill.spec.entry,

@@ -1,4 +1,4 @@
-import { stopStreamingCommand, streamCommand, type CommandDispatchResponse, type CommandStreamEvent, type ConversationHistoryMessage } from '@/api/sentinelflow'
+import { stopStreamingCommand, streamApprovalDecision, streamCommand, type CommandDispatchResponse, type CommandStreamEvent, type ConversationHistoryMessage } from '@/api/sentinelflow'
 import { readLocalValue, removeLocalValue, writeLocalValue } from '@/utils/sentinelflowLocalState'
 import { publishRuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
 
@@ -93,6 +93,9 @@ export function summarizeAssistantReply(response: CommandDispatchResponse): stri
   }
   if (response.route === 'help') {
     return '我已经整理了几条可直接使用的示例命令。'
+  }
+  if (response.route === 'approval_required') {
+    return '当前命中了需要审批的 Skill，请在下方确认后继续。'
   }
   return response.success ? '命令已执行完成，可以展开查看详细结果。' : '命令执行失败，请展开查看详细错误。'
 }
@@ -324,6 +327,104 @@ export async function startConversationRun() {
     setState((current) => ({
       ...current,
       pendingCommand: '',
+      running: false,
+      runningSessionId: '',
+      streamingReply: '',
+      streamingRoute: '',
+      streamingSuccess: true,
+      streamingStatus: '正在分析并调用所需能力，请稍候...',
+      activeRequestId: '',
+    }))
+  }
+}
+
+export async function resolveConversationApproval(historyItemId: string, approvalId: string, decision: 'approve' | 'reject') {
+  const activeSession = getActiveSession(state)
+  if (state.running || !activeSession) return
+
+  abortController = new AbortController()
+  const targetSessionId = activeSession.id
+
+  setState((current) => ({
+    ...current,
+    running: true,
+    runningSessionId: targetSessionId,
+    streamingReply: '',
+    streamingRoute: '',
+    streamingSuccess: true,
+    streamingStatus: decision === 'approve' ? '正在批准并继续执行...' : '正在拒绝并继续推理...',
+    activeRequestId: approvalId,
+  }))
+
+  try {
+    const result = await streamApprovalDecision(approvalId, decision, (event: CommandStreamEvent) => {
+      if (event.type === 'request') {
+        setState((current) => ({ ...current, activeRequestId: event.payload.request_id }))
+        return
+      }
+      if (event.type === 'meta') {
+        setState((current) => ({
+          ...current,
+          streamingRoute: event.payload.route,
+          streamingSuccess: event.payload.success,
+        }))
+        return
+      }
+      if (event.type === 'status') {
+        setState((current) => ({ ...current, streamingStatus: event.payload.text }))
+        return
+      }
+      if (event.type === 'delta') {
+        setState((current) => ({
+          ...current,
+          streamingReply: sanitizeDisplayText(current.streamingReply + event.payload.text),
+        }))
+      }
+    }, abortController.signal)
+
+    setState((current) => ({
+      ...current,
+      sessions: current.sessions.map((session) => {
+        if (session.id !== targetSessionId) return session
+        return {
+          ...session,
+          history: session.history.map((item) => {
+            if (item.id !== historyItemId) return item
+            return {
+              ...item,
+              response: result,
+            }
+          }),
+          updatedAt: new Date().toISOString(),
+        }
+      }),
+    }))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    setState((current) => ({
+      ...current,
+      sessions: current.sessions.map((session) => {
+        if (session.id !== targetSessionId) return session
+        return {
+          ...session,
+          history: session.history.map((item) => {
+            if (item.id !== historyItemId) return item
+            return {
+              ...item,
+              response: {
+                ...item.response,
+                success: false,
+                error: message,
+              },
+            }
+          }),
+        }
+      }),
+    }))
+  } finally {
+    abortController = null
+    setState((current) => ({
+      ...current,
       running: false,
       runningSessionId: '',
       streamingReply: '',
