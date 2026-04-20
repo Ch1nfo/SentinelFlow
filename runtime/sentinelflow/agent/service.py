@@ -859,6 +859,8 @@ class SentinelFlowAgentService:
             return graph_result
 
         if checkpoint_kind == "orchestrator_graph":
+            from sentinelflow.agent.orchestrator_graph import build_orchestrator_graph
+
             workers = self._resolve_worker_candidates(agent_definition, entry_type="conversation" if str(checkpoint.get("execution_entry", "")).strip() == "conversation" else "alert")
             orchestrator = build_orchestrator_graph(
                 agent_definition,
