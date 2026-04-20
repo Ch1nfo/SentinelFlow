@@ -59,7 +59,7 @@
 
 - **基于 SKILL.md 的自动发现** — 每个 Skill 是一个目录，包含带 YAML 头部的 `SKILL.md`（供 Agent 阅读）和可选的 `main.py` 执行入口
 - **两种 Skill 类型**：`doc`（纯知识型，供 Agent 阅读）和 `hybrid`（文档 + 可执行子进程）
-- **按 Agent 权限控制** — `doc_skill_allowlist`、`exec_skill_allowlist`、每个 Skill 的 `approval_required` 标志
+- **按 Agent 权限控制** — `doc_skill_allowlist`、`exec_skill_allowlist`、每个 Skill 的 `approval_required` 标志；`approval_required` 仅对对话与手动单告警生效，且每次执行都需要单独审批，自动执行会绕过审批
 - **子进程隔离执行** — Skill 在隔离子进程中运行，结构化 JSON 输入/输出，内置审计日志
 - **WebUI 内 Skill 管理** — 直接在配置中心创建、编辑、删除 Skill，并支持在线调试执行
 

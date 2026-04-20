@@ -27,9 +27,6 @@ def build_agent_tools(
 
     tools: list = []
 
-    def _skill_cache_key(skill_name: str, fingerprint: str) -> str:
-        return f"{skill_name}:{fingerprint}"
-
     def _approval_payload(
         *,
         skill_name: str,
@@ -54,20 +51,6 @@ def build_agent_tools(
                     "checkpoint_ns": str(state.get("graph_checkpoint_ns", state.get("checkpoint_ns", ""))).strip(),
                     "message": f"Skill「{skill_name}」需要人工审批后才能执行。",
                 },
-            },
-            ensure_ascii=False,
-        )
-
-    def _rejected_payload(skill_name: str, arguments: dict[str, Any]) -> str:
-        return json.dumps(
-            {
-                "success": False,
-                "data": {
-                    "approval_rejected": True,
-                    "skill_name": skill_name,
-                    "arguments": approval_service.normalize_arguments(arguments),
-                },
-                "error": "用户拒绝执行需要审批的 Skill。",
             },
             ensure_ascii=False,
         )
@@ -121,22 +104,10 @@ def build_agent_tools(
                     {"success": False, "data": {}, "error": f"当前 Agent 未被授权执行技能 {skill_name}。"},
                     ensure_ascii=False,
                 )
-            fingerprint = approval_service.fingerprint_arguments(arguments or {})
-            cache_key = _skill_cache_key(skill_name, fingerprint)
-            cached_results = state.get("executed_skill_cache", {})
-            if isinstance(cached_results, dict):
-                cached_payload = cached_results.get(cache_key)
-                if isinstance(cached_payload, dict):
-                    return json.dumps(cached_payload, ensure_ascii=False)
-            approved_fingerprints = set(state.get("approved_fingerprints") or [])
-            rejected_fingerprints = set(state.get("rejected_fingerprints") or [])
             execution_entry = str(state.get("execution_entry", "")).strip()
             skill = skill_runtime.resolver.resolve(skill_name)
             if skill.spec.approval_required and execution_entry not in {"auto_alert", "debug"}:
-                if fingerprint in rejected_fingerprints:
-                    return _rejected_payload(skill_name, arguments or {})
-                if fingerprint not in approved_fingerprints:
-                    return _approval_payload(skill_name=skill_name, arguments=arguments or {}, state=state)
+                return _approval_payload(skill_name=skill_name, arguments=arguments or {}, state=state)
             context = {
                 "event_id_ref": state.get("event_id_ref", ""),
                 "alert_data": state.get("alert_data", {}),
@@ -183,22 +154,10 @@ def build_agent_tools(
                     {"success": False, "data": {}, "error": f"当前 Agent 未被授权执行技能 {skill_name}。"},
                     ensure_ascii=False,
                 )
-            fingerprint = approval_service.fingerprint_arguments({})
-            cache_key = _skill_cache_key(skill_name, fingerprint)
-            cached_results = state.get("executed_skill_cache", {})
-            if isinstance(cached_results, dict):
-                cached_payload = cached_results.get(cache_key)
-                if isinstance(cached_payload, dict):
-                    return json.dumps(cached_payload, ensure_ascii=False)
-            approved_fingerprints = set(state.get("approved_fingerprints") or [])
-            rejected_fingerprints = set(state.get("rejected_fingerprints") or [])
             execution_entry = str(state.get("execution_entry", "")).strip()
             skill = skill_runtime.resolver.resolve(skill_name)
             if skill.spec.approval_required and execution_entry not in {"auto_alert", "debug"}:
-                if fingerprint in rejected_fingerprints:
-                    return _rejected_payload(skill_name, {})
-                if fingerprint not in approved_fingerprints:
-                    return _approval_payload(skill_name=skill_name, arguments={}, state=state)
+                return _approval_payload(skill_name=skill_name, arguments={}, state=state)
             context = {
                 "event_id_ref": state.get("event_id_ref", ""),
                 "alert_data": state.get("alert_data", {}),

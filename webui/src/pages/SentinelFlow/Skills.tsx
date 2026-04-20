@@ -311,7 +311,7 @@ export default function SentinelFlowSkillsPage() {
                   <div className="space-y-1">
                     <label className="flex items-center gap-2 text-sm text-gray-700">
                       <input type="checkbox" checked={draft.approvalRequired} onChange={(event) => setDraft((current) => ({ ...current, approvalRequired: event.target.checked }))} />
-                      执行需审批（仅对对话 / 手动单告警生效）
+                      执行需审批（仅对对话 / 手动单告警生效，每次执行都需单独审批）
                     </label>
                     <div className="text-xs text-gray-500">
                       自动执行、自动重试和 Skill 调试会直接执行，不会等待人工审批。
@@ -348,7 +348,7 @@ export default function SentinelFlowSkillsPage() {
                 <div className="mt-3 space-y-1">
                   <label className="flex items-center gap-2 text-sm text-gray-700">
                     <input type="checkbox" checked={draft.approvalRequired} onChange={(event) => setDraft((current) => ({ ...current, approvalRequired: event.target.checked }))} />
-                    执行需审批（仅对对话 / 手动单告警生效）
+                    执行需审批（仅对对话 / 手动单告警生效，每次执行都需单独审批）
                   </label>
                   <div className="text-xs text-gray-500">
                     自动执行、自动重试和 Skill 调试会直接执行，不会等待人工审批。
@@ -408,13 +408,13 @@ export default function SentinelFlowSkillsPage() {
                 items={[
                   { label: '类型', value: getSkillTypeLabel(detail.type) },
                   { label: '可执行', value: detail.executable ? '是' : '否' },
-                  { label: '执行审批', value: detail.approval_required ? '需要审批（仅对对话 / 手动单告警）' : '直接执行' },
+                  { label: '执行审批', value: detail.approval_required ? '需要审批（仅对对话 / 手动单告警；每次执行都需单独审批）' : '直接执行' },
                 ]}
               />
             ) : null}
             {detail?.executable ? <StatusBadge tone="success">可执行</StatusBadge> : null}
-            {detail?.approval_required ? <StatusBadge tone="warn">执行需审批（对话 / 手动单告警）</StatusBadge> : null}
-            {detail?.approval_required ? <div className="mt-2 text-xs text-gray-500">自动执行、自动重试和调试当前 Skill 时会直接执行，不会停在审批状态。</div> : null}
+            {detail?.approval_required ? <StatusBadge tone="warn">执行需审批（对话 / 手动单告警；每次执行都需单独审批）</StatusBadge> : null}
+            {detail?.approval_required ? <div className="mt-2 text-xs text-gray-500">自动执行、自动重试和调试当前 Skill 时会直接执行，不会停在审批状态；对话和手动单告警场景下，每次实际执行都会重新发起审批。</div> : null}
             {detailError ? <div className="sentinelflow-message-block sentinelflow-message-error">{detailError}</div> : null}
             {detail ? (
               <div className="mt-4 space-y-3">

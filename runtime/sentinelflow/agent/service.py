@@ -541,9 +541,6 @@ class SentinelFlowAgentService:
             state["graph_checkpoint_ns"] = state.get("checkpoint_ns")
         return state
 
-    def _skill_cache_key(self, skill_name: str, arguments_fingerprint: str) -> str:
-        return f"{skill_name}:{arguments_fingerprint}"
-
     def _extract_pending_tool_message(self, state: dict[str, Any]) -> tuple[dict[str, Any], str] | tuple[None, str]:
         messages = list(state.get("messages", []))
         for msg in reversed(messages):
@@ -749,17 +746,11 @@ class SentinelFlowAgentService:
                 "error": f"审批通过后执行 Skill 失败：{exc}",
             }
         payload = result.data if isinstance(result.data, dict) else {"result": result.data}
-        tool_payload = {
+        return {
             "success": result.success,
             "data": payload,
             "error": result.error,
         }
-        cache = state.get("executed_skill_cache", {})
-        if not isinstance(cache, dict):
-            cache = {}
-        cache[self._skill_cache_key(approval.skill_name, approval.arguments_fingerprint)] = tool_payload
-        state["executed_skill_cache"] = cache
-        return tool_payload
 
     def _rejected_tool_payload(self, approval) -> dict[str, Any]:
         return {
@@ -1020,13 +1011,6 @@ class SentinelFlowAgentService:
                     rejected.add(approval.arguments_fingerprint)
                 parent_state["approved_fingerprints"] = list(approved)
                 parent_state["rejected_fingerprints"] = list(rejected)
-                child_cache = state.get("executed_skill_cache", {})
-                parent_cache = parent_state.get("executed_skill_cache", {})
-                if isinstance(child_cache, dict):
-                    if not isinstance(parent_cache, dict):
-                        parent_cache = {}
-                    parent_cache.update(child_cache)
-                    parent_state["executed_skill_cache"] = parent_cache
                 parent_state = self._replace_parent_tool_result(parent_state, approval.parent_tool_call_id, approval.approval_id, wrapped_result)
                 self.approval_service.save_checkpoint(
                     checkpoint_thread_id=parent_checkpoint_id,

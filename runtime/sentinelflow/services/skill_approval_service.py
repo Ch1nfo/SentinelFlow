@@ -225,31 +225,19 @@ class SkillApprovalService:
             decided_at="",
         )
         with self.lock, sqlite_transaction(DB_PATH, begin_mode="IMMEDIATE") as conn:
-            existing_row = conn.execute(
-                """
-                SELECT * FROM skill_approvals
-                WHERE run_id = ? AND skill_name = ? AND arguments_fingerprint = ?
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (run_id, skill_name, fingerprint),
-            ).fetchone()
-            existing = self._row_to_approval(existing_row) if existing_row else None
-            if existing and existing.status in {"pending", "approved", "rejected"}:
-                return existing
-
-            active_row = conn.execute(
-                """
-                SELECT * FROM skill_approvals
-                WHERE run_id = ? AND status = 'pending'
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (run_id,),
-            ).fetchone()
-            active = self._row_to_approval(active_row) if active_row else None
-            if active is not None:
-                return active
+            if tool_call_id:
+                existing_row = conn.execute(
+                    """
+                    SELECT * FROM skill_approvals
+                    WHERE checkpoint_thread_id = ? AND tool_call_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (checkpoint_thread_id, tool_call_id),
+                ).fetchone()
+                existing = self._row_to_approval(existing_row) if existing_row else None
+                if existing and existing.status in {"pending", "approved", "rejected", "cancelled", "consumed"}:
+                    return existing
 
             conn.execute(
                 """
