@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { MessageSquareText, Plus, RotateCcw, Send, Square, Trash2 } from 'lucide-react'
-import type { CommandDispatchResponse } from '@/api/sentinelflow'
+import type { ApprovalRequest, CommandDispatchResponse } from '@/api/sentinelflow'
 import JsonPreview from '@/components/sentinelflow/JsonPreview'
 import MarkdownContent from '@/components/sentinelflow/MarkdownContent'
 import StatusBadge from '@/components/sentinelflow/StatusBadge'
@@ -61,6 +61,21 @@ function formatToolArguments(args: unknown): string {
 function extractCommandData(data: unknown): CommandDataLike {
   if (!data || typeof data !== 'object') return {}
   return data as CommandDataLike
+}
+
+function approvalStatusLabel(status: string): string {
+  if (status === 'approved') return '已批准并继续'
+  if (status === 'rejected') return '已拒绝并继续'
+  if (status === 'cancelled') return '已取消'
+  if (status === 'consumed') return '已处理'
+  return '等待 Skill 审批'
+}
+
+function approvalStatusTone(status: string): 'warn' | 'success' | 'danger' | 'neutral' {
+  if (status === 'approved') return 'success'
+  if (status === 'rejected') return 'danger'
+  if (status === 'cancelled' || status === 'consumed') return 'neutral'
+  return 'warn'
 }
 
 export default function SentinelFlowConversationPage() {
@@ -185,6 +200,7 @@ export default function SentinelFlowConversationPage() {
                 const resultLabel = isApprovalPending ? '待审批' : (item.response.success ? '已完成' : '失败')
                 const resultCode = isApprovalPending ? 'pending_approval' : (item.response.success ? 'success' : 'error')
                 const commandData = extractCommandData(item.response.data)
+                const storedApproval = item.response.approval as ApprovalRequest | undefined
                 const toolCalls = Array.isArray(commandData.tool_calls) ? commandData.tool_calls as ToolCallLike[] : []
                 const workerToolCalls = Array.isArray(commandData.worker_result?.tool_calls) ? commandData.worker_result.tool_calls as ToolCallLike[] : []
                 const workerResults = Array.isArray(commandData.worker_results) ? commandData.worker_results as WorkerStepLike[] : []
@@ -192,6 +208,24 @@ export default function SentinelFlowConversationPage() {
                 const workerAgent = typeof commandData.worker_agent === 'string' ? commandData.worker_agent : (typeof commandData.worker_result?.agent_name === 'string' ? commandData.worker_result.agent_name : '')
                 const delegationReason = typeof commandData.delegation_reason === 'string' ? commandData.delegation_reason : ''
                 const approvalRequest = commandData.approval_request as { approval_id?: string; skill_name?: string; arguments_summary?: string; message?: string } | undefined
+                const approvalCard = storedApproval ?? (approvalRequest ? {
+                  approval_id: approvalRequest.approval_id || '',
+                  run_id: '',
+                  scope_type: 'conversation',
+                  scope_ref: '',
+                  status: 'pending',
+                  skill_name: approvalRequest.skill_name || '',
+                  arguments: {},
+                  arguments_fingerprint: '',
+                  approval_required: true,
+                  checkpoint_thread_id: '',
+                  checkpoint_ns: '',
+                  created_at: '',
+                  arguments_summary: approvalRequest.arguments_summary || '无参数',
+                  message: approvalRequest.message || '',
+                } satisfies ApprovalRequest : undefined)
+                const showApprovalCard = Boolean(approvalCard?.skill_name)
+                const hideExecutionSummary = isApprovalPending
 
                 return (
                   <div key={item.id} className="sentinelflow-chat-turn">
@@ -219,36 +253,43 @@ export default function SentinelFlowConversationPage() {
                           分派原因：{delegationReason}
                         </div>
                       ) : null}
-                      {item.response.route === 'approval_required' && approvalRequest?.approval_id ? (
+                      {showApprovalCard ? (
                         <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                          <div className="font-semibold">等待 Skill 审批</div>
-                          <div className="mt-1">{approvalRequest.message || `Skill「${approvalRequest.skill_name || '未命名 Skill'}」需要审批。`}</div>
-                          <div className="mt-1 text-xs text-amber-800">参数：{approvalRequest.arguments_summary || '无参数'}</div>
-                          <div className="mt-3 flex gap-2">
-                            <button
-                              type="button"
-                              className="sentinelflow-primary-button"
-                              onClick={() => void resolveConversationApproval(item.id, approvalRequest.approval_id || '', 'approve')}
-                              disabled={running}
-                            >
-                              批准并继续
-                            </button>
-                            <button
-                              type="button"
-                              className="sentinelflow-ghost-button"
-                              onClick={() => void resolveConversationApproval(item.id, approvalRequest.approval_id || '', 'reject')}
-                              disabled={running}
-                            >
-                              拒绝并继续
-                            </button>
+                          <div className="sentinelflow-response-row">
+                            <div className="font-semibold">{approvalStatusLabel(String(approvalCard?.status || 'pending'))}</div>
+                            <StatusBadge tone={approvalStatusTone(String(approvalCard?.status || 'pending'))}>
+                              {String(approvalCard?.status || 'pending')}
+                            </StatusBadge>
                           </div>
+                          <div className="mt-1">{approvalCard?.message || `Skill「${approvalCard?.skill_name || '未命名 Skill'}」需要审批。`}</div>
+                          <div className="mt-1 text-xs text-amber-800">参数：{approvalCard?.arguments_summary || '无参数'}</div>
+                          {approvalCard?.status === 'pending' && approvalCard.approval_id ? (
+                            <div className="mt-3 flex gap-2">
+                              <button
+                                type="button"
+                                className="sentinelflow-primary-button"
+                                onClick={() => void resolveConversationApproval(item.id, approvalCard.approval_id || '', 'approve')}
+                                disabled={running}
+                              >
+                                批准并继续
+                              </button>
+                              <button
+                                type="button"
+                                className="sentinelflow-ghost-button"
+                                onClick={() => void resolveConversationApproval(item.id, approvalCard.approval_id || '', 'reject')}
+                                disabled={running}
+                              >
+                                拒绝并继续
+                              </button>
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
-                      <MarkdownContent content={assistantReply} />
-                      {toolCalls.length ? (
+                      {!hideExecutionSummary ? <MarkdownContent content={assistantReply} /> : null}
+                      {!hideExecutionSummary && toolCalls.length ? (
                         <div className="sentinelflow-tool-call-summary">调用技能 {toolCalls.length} 次</div>
                       ) : null}
-                      {toolCalls.length ? (
+                      {!hideExecutionSummary && toolCalls.length ? (
                         <div className="sentinelflow-tool-call-list">
                           {toolCalls.map((toolCall, index) => (
                             <div key={`${item.id}-tool-${index}`} className="sentinelflow-tool-call-card">
@@ -261,7 +302,7 @@ export default function SentinelFlowConversationPage() {
                           ))}
                         </div>
                       ) : null}
-                      {workerToolCalls.length ? (
+                      {!hideExecutionSummary && workerToolCalls.length ? (
                         <>
                           <div className="sentinelflow-tool-call-summary">
                             {workerAgent ? `${workerAgent} 调用了 ${workerToolCalls.length} 次技能` : `子 Agent 调用了 ${workerToolCalls.length} 次技能`}
@@ -279,7 +320,7 @@ export default function SentinelFlowConversationPage() {
                           </div>
                         </>
                       ) : null}
-                      {workerResults.length > 1 ? (
+                      {!hideExecutionSummary && workerResults.length > 1 ? (
                         <div className="sentinelflow-chat-details">
                           <div className="sentinelflow-tool-call-summary">子 Agent 串联步骤</div>
                           <div className="sentinelflow-tool-call-list">
@@ -317,9 +358,11 @@ export default function SentinelFlowConversationPage() {
 
                 {isActiveSessionRunning ? (
                   <div className="sentinelflow-chat-turn">
-                  <div className="sentinelflow-chat-bubble sentinelflow-chat-bubble-user">
-                    <MarkdownContent content={runtimeState.pendingCommand} inverted />
-                  </div>
+                  {runtimeState.pendingCommand.trim() ? (
+                    <div className="sentinelflow-chat-bubble sentinelflow-chat-bubble-user">
+                      <MarkdownContent content={runtimeState.pendingCommand} inverted />
+                    </div>
+                  ) : null}
                   <div className="sentinelflow-chat-bubble sentinelflow-chat-bubble-assistant">
                     <div className="sentinelflow-response-row">
                       <strong>SentinelFlow</strong>
