@@ -50,6 +50,11 @@ except ModuleNotFoundError as _exc:  # pragma: no cover
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _worker_tool_name(worker_name: str) -> str:
+    safe_name = str(worker_name or "").replace("-", "_").replace(" ", "_").strip("_")
+    return f"call_{safe_name or 'worker'}"
+
+
 def _resolve_worker_permissions(
     worker_agent_def,
     skill_runtime: SentinelFlowSkillRuntime,
@@ -245,7 +250,14 @@ def _build_worker_subgraph_tool(
                 result["success"] = False
         return result
 
-    @tool
+    tool_name = _worker_tool_name(worker_agent_def.name)
+    worker_desc = (worker_agent_def.description or worker_agent_def.name).strip()
+    tool_description = (
+        f"委托子 Agent【{worker_agent_def.name}】执行指定任务。"
+        f"该 Agent 的专项能力：{worker_desc}。"
+        f"参数 task_prompt 必须是具体、可操作的中文任务描述，包含当前步骤需要完成的具体工作内容。"
+    )
+
     async def _invoke(
         task_prompt: str,
         state: Annotated[OrchestratorState, InjectedState()],  # type: ignore[misc]
@@ -256,21 +268,13 @@ def _build_worker_subgraph_tool(
         worker_state = dict(state)
         worker_state["parent_tool_call_id"] = _resolve_current_tool_call_id(
             state,
-            f"call_{worker_agent_def.name.replace('-', '_').replace(' ', '_')}",
+            tool_name,
             expected_args={"task_prompt": str(task_prompt or "").strip()},
         )
         result = await _execute_worker_subgraph(task_prompt, worker_state, step_idx)
         return json.dumps(result, ensure_ascii=False)
-    # Give the tool a deterministic name and helpful docstring
-    safe_name = worker_agent_def.name.replace("-", "_").replace(" ", "_")
-    worker_desc = (worker_agent_def.description or worker_agent_def.name).strip()
-    _invoke.__name__ = f"call_{safe_name}"
-    _invoke.__doc__ = (
-        f"委托子 Agent【{worker_agent_def.name}】执行指定任务。"
-        f"该 Agent 的专项能力：{worker_desc}。"
-        f"参数 task_prompt 必须是具体、可操作的中文任务描述，包含当前步骤需要完成的具体工作内容。"
-    )
-    return _invoke, _execute_worker_subgraph
+    worker_tool = tool(tool_name, description=tool_description)(_invoke)
+    return worker_tool, _execute_worker_subgraph
 
 
 # ── Routing ───────────────────────────────────────────────────────────────────
