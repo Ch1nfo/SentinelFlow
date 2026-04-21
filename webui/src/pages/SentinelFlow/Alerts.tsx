@@ -387,10 +387,10 @@ export default function SentinelFlowAlertsPage() {
 
       <Surface title="告警工作台" subtitle={withProductName('这里直接承载 SentinelFlow 的轮询结果、单条动作和人工复核操作。')}>
         <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">
-            <div className="mb-2 text-sm font-semibold text-amber-900">业务触发</div>
-            <div className="text-3xl font-bold text-amber-950">{summary?.judgment.business_trigger ?? 0}</div>
-            <div className="mt-2 text-xs text-amber-800">已判定为业务原因触发的告警数量</div>
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
+            <div className="mb-2 text-sm font-semibold text-emerald-900">业务触发</div>
+            <div className="text-3xl font-bold text-emerald-950">{summary?.judgment.business_trigger ?? 0}</div>
+            <div className="mt-2 text-xs text-emerald-800">已判定为业务原因触发的告警数量</div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
             <div className="mb-2 text-sm font-semibold text-slate-900">误报</div>
@@ -402,10 +402,10 @@ export default function SentinelFlowAlertsPage() {
             <div className="text-3xl font-bold text-red-950">{summary?.judgment.true_attack ?? 0}</div>
             <div className="mt-2 text-xs text-red-800">已识别为真实攻击的告警数量</div>
           </div>
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
-            <div className="mb-2 text-sm font-semibold text-emerald-900">封禁 IP</div>
-            <div className="text-3xl font-bold text-emerald-950">{summary?.operations.banned_ip_count ?? 0}</div>
-            <div className="mt-2 text-xs text-emerald-800">已执行封禁动作并记录的 IP 数量</div>
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">
+            <div className="mb-2 text-sm font-semibold text-amber-900">封禁 IP</div>
+            <div className="text-3xl font-bold text-amber-950">{summary?.operations.banned_ip_count ?? 0}</div>
+            <div className="mt-2 text-xs text-amber-800">已执行封禁动作并记录的 IP 数量</div>
           </div>
         </div>
 
@@ -588,9 +588,9 @@ export default function SentinelFlowAlertsPage() {
           <div className="rounded-xl border border-gray-200 bg-white p-5">
             <div className="mb-3 text-sm font-semibold text-gray-900">研判结果概览</div>
             <div className="grid gap-3 md:grid-cols-2">
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                <div className="text-xs text-amber-800">业务触发</div>
-                <div className="mt-1 text-2xl font-bold text-amber-950">{summary?.judgment.business_trigger ?? 0}</div>
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                <div className="text-xs text-emerald-800">业务触发</div>
+                <div className="mt-1 text-2xl font-bold text-emerald-950">{summary?.judgment.business_trigger ?? 0}</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                 <div className="text-xs text-slate-700">误报</div>
@@ -610,9 +610,9 @@ export default function SentinelFlowAlertsPage() {
           <div className="rounded-xl border border-gray-200 bg-white p-5">
             <div className="mb-3 text-sm font-semibold text-gray-900">封禁与处置</div>
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-                <div className="text-xs text-emerald-800">封禁 IP 数</div>
-                <div className="mt-1 text-2xl font-bold text-emerald-950">{summary?.operations.banned_ip_count ?? 0}</div>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <div className="text-xs text-amber-800">封禁 IP 数</div>
+                <div className="mt-1 text-2xl font-bold text-amber-950">{summary?.operations.banned_ip_count ?? 0}</div>
               </div>
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
                 <div className="text-xs text-amber-800">人工处置</div>
