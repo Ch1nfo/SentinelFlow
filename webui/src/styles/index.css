@@ -641,7 +641,15 @@
   }
 
   .sentinelflow-chat-bubble-user {
-    @apply self-end rounded-[1.75rem] bg-slate-100 px-5 py-3 text-slate-900;
+    @apply self-end rounded-[1.5rem] bg-slate-100 px-4 py-2 text-slate-900;
+  }
+
+  .sentinelflow-chat-bubble-user .prose {
+    line-height: 1.45;
+  }
+
+  .sentinelflow-chat-bubble-user .prose p {
+    @apply my-0;
   }
 
   .sentinelflow-chat-bubble-assistant {
