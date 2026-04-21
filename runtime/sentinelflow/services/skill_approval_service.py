@@ -30,6 +30,10 @@ def _json_safe(value: Any) -> Any:
 
 
 class SkillApprovalService:
+    @staticmethod
+    def build_skill_arguments_key(skill_name: str, arguments_fingerprint: str) -> str:
+        return f"{str(skill_name or '').strip()}::{str(arguments_fingerprint or '').strip()}"
+
     def __init__(self) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()

@@ -27,13 +27,49 @@ def build_agent_tools(
 
     tools: list = []
 
+    def _arguments_fingerprint(arguments: dict[str, Any] | None) -> str:
+        return approval_service.fingerprint_arguments(arguments)
+
+    def _rejection_key(skill_name: str, arguments: dict[str, Any] | None) -> str:
+        return SkillApprovalService.build_skill_arguments_key(skill_name, _arguments_fingerprint(arguments))
+
+    def _is_rejected_in_current_run(
+        *,
+        skill_name: str,
+        arguments: dict[str, Any] | None,
+        state: SentinelFlowAgentState,
+    ) -> bool:
+        rejected = set(state.get("rejected_fingerprints", []) or [])
+        return _rejection_key(skill_name, arguments) in rejected
+
+    def _rejected_payload(
+        *,
+        skill_name: str,
+        arguments: dict[str, Any],
+    ) -> str:
+        normalized_arguments = approval_service.normalize_arguments(arguments)
+        return json.dumps(
+            {
+                "success": False,
+                "data": {
+                    "approval_rejected": True,
+                    "skill_name": skill_name,
+                    "arguments": normalized_arguments,
+                    "arguments_fingerprint": _arguments_fingerprint(normalized_arguments),
+                },
+                "error": f"Skill「{skill_name}」已被用户拒绝，本轮相同参数不会再次发起审批。",
+            },
+            ensure_ascii=False,
+        )
+
     def _approval_payload(
         *,
         skill_name: str,
         arguments: dict[str, Any],
         state: SentinelFlowAgentState,
     ) -> str:
-        fingerprint = approval_service.fingerprint_arguments(arguments)
+        normalized_arguments = approval_service.normalize_arguments(arguments)
+        fingerprint = _arguments_fingerprint(normalized_arguments)
         return json.dumps(
             {
                 "success": False,
@@ -42,7 +78,7 @@ def build_agent_tools(
                 "approval_pending": True,
                 "approval_request": {
                     "skill_name": skill_name,
-                    "arguments": approval_service.normalize_arguments(arguments),
+                    "arguments": normalized_arguments,
                     "arguments_fingerprint": fingerprint,
                     "run_id": str(state.get("run_id", "")).strip(),
                     "scope_type": str(state.get("scope_type", "")).strip(),
@@ -107,6 +143,8 @@ def build_agent_tools(
             execution_entry = str(state.get("execution_entry", "")).strip()
             skill = skill_runtime.resolver.resolve(skill_name)
             if skill.spec.approval_required and execution_entry not in {"auto_alert", "debug"}:
+                if _is_rejected_in_current_run(skill_name=skill_name, arguments=arguments or {}, state=state):
+                    return _rejected_payload(skill_name=skill_name, arguments=arguments or {})
                 return _approval_payload(skill_name=skill_name, arguments=arguments or {}, state=state)
             context = {
                 "event_id_ref": state.get("event_id_ref", ""),
@@ -157,6 +195,8 @@ def build_agent_tools(
             execution_entry = str(state.get("execution_entry", "")).strip()
             skill = skill_runtime.resolver.resolve(skill_name)
             if skill.spec.approval_required and execution_entry not in {"auto_alert", "debug"}:
+                if _is_rejected_in_current_run(skill_name=skill_name, arguments={}, state=state):
+                    return _rejected_payload(skill_name=skill_name, arguments={})
                 return _approval_payload(skill_name=skill_name, arguments={}, state=state)
             context = {
                 "event_id_ref": state.get("event_id_ref", ""),

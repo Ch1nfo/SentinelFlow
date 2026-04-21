@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+from sentinelflow.services.skill_approval_service import SkillApprovalService
 from sentinelflow.workflows.agent_workflow_registry import AgentWorkflowDefinition
 
 
@@ -363,7 +364,12 @@ class SentinelFlowAgentWorkflowRunner:
         if approval.status == "approved":
             approved_fingerprints.add(approval.arguments_fingerprint)
         elif approval.status == "rejected":
-            rejected_fingerprints.add(approval.arguments_fingerprint)
+            rejected_fingerprints.add(
+                SkillApprovalService.build_skill_arguments_key(
+                    approval.skill_name,
+                    approval.arguments_fingerprint,
+                )
+            )
         execution_context["approved_fingerprints"] = list(approved_fingerprints)
         execution_context["rejected_fingerprints"] = list(rejected_fingerprints)
         if pending_step_index < 1 or pending_step_index > len(workflow.steps):

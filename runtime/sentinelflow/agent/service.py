@@ -927,7 +927,12 @@ class SentinelFlowAgentService:
                 status_callback(f"已拒绝 Skill「{approval.skill_name}」，正在恢复推理...")
             tool_payload = self._rejected_tool_payload(approval)
             rejected = set(state.get("rejected_fingerprints", []) or [])
-            rejected.add(approval.arguments_fingerprint)
+            rejected.add(
+                SkillApprovalService.build_skill_arguments_key(
+                    approval.skill_name,
+                    approval.arguments_fingerprint,
+                )
+            )
             state["rejected_fingerprints"] = list(rejected)
         else:
             return {"success": False, "route": "approval_invalid_decision", "error": f"不支持的审批动作：{decision}", "data": {}}
@@ -1008,7 +1013,12 @@ class SentinelFlowAgentService:
                 if decision == "approve":
                     approved.add(approval.arguments_fingerprint)
                 else:
-                    rejected.add(approval.arguments_fingerprint)
+                    rejected.add(
+                        SkillApprovalService.build_skill_arguments_key(
+                            approval.skill_name,
+                            approval.arguments_fingerprint,
+                        )
+                    )
                 parent_state["approved_fingerprints"] = list(approved)
                 parent_state["rejected_fingerprints"] = list(rejected)
                 parent_state = self._replace_parent_tool_result(parent_state, approval.parent_tool_call_id, approval.approval_id, wrapped_result)
