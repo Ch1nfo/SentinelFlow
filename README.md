@@ -20,7 +20,7 @@ English | [中文](README_ZH.md)
 
 Modern Security Operations Centers face an overwhelming volume of alerts — most teams spend hours triaging events that could be handled in seconds with proper automation. Existing SIEM platforms offer rules-based correlation, but lack the contextual reasoning needed to handle novel threats or complex multi-step investigations.
 
-**SentinelFlow** is a full-stack SOC automation platform that combines a **LangGraph-powered multi-agent orchestration runtime** with a **React WebUI** for alert management. Instead of rigid playbooks, you get a flexible, extensible agent system where a Primary Supervisor Agent coordinates specialized Worker Sub-Agents — each equipped with pluggable Skills that can call external APIs, run enrichment scripts, close tickets, and more.
+**SentinelFlow** is a full-stack SOC automation platform that combines a **LangGraph-powered multi-agent orchestration runtime** with a **React WebUI** for alert management and operator collaboration. Instead of rigid playbooks, you get a flexible, extensible agent system where a Primary Supervisor Agent coordinates specialized Worker Sub-Agents — each equipped with pluggable Skills that can call external APIs, run enrichment scripts, close tickets, and more.
 
 - **Multi-Agent Orchestration** — Supervisor + Worker SubGraph pattern via LangGraph; each worker is an isolated ReAct agent wrapped as a tool
 - **Pluggable Skill System** — Drop a `SKILL.md` + `main.py` into the skills directory; agents discover and invoke them automatically, with granular per-agent permission control
@@ -29,20 +29,21 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 - **Dual Alert Source Types** — Connect to upstream APIs (REST/HTTP) or drive any custom data source via a Python script entrypoint
 - **AI-Assisted Parser Generation** — Paste a sample alert payload and let the LLM auto-generate the field-mapping parser rule, with live preview
 - **Continuous Auto-Execution** — Enable the auto-execute loop to process queued alerts automatically without human intervention
+- **Approval & Resume Flow** — `approval_required` skills pause the graph in Agent Chat and manual single-alert handling, surface an approval card in the UI, then resume from checkpoint after approve/reject
 - **Fine-Grained Policy** — Per-agent skill allowlists/denylists, execution approval gates, audit logging, and cancellation support
 - **Full-Stack** — FastAPI backend + React/Vite frontend, unified dev entrypoint, production-ready project layout
 
 ## Screenshots
 
-|                        Security Overview Dashboard                        |                        Agent Chat Panel                        |
+|                        Security Overview Dashboard                        |                        Agent Chat Console                        |
 | :----------------------------------------------------------: | :----------------------------------------------------------: |
 | ![image-20260405225720016](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405225720053.png) | ![image-20260405231100920](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260406140803364.png) |
 
-|                        Alert Triage                        |                        Skill Creation Panel                        |
+|                        Alert Workbench                        |                        Skill Management                        |
 | :----------------------------------------------------------: | :----------------------------------------------------------: |
 | ![image-20260405225903594](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405225903635.png)| ![image-20260405230107750](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405230107788.png) |
 
-|                        Sub-Agent Creation Panel                         |                        Agentsflow                        |
+|                        Agent Management                         |                        Workflow Management                        |
 | :----------------------------------------------------------: | :----------------------------------------------------------: |
 | ![image-20260405230145352](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405230145399.png) | ![image-20260405230315299](https://raw.githubusercontent.com/Ch1nfo/picbed/main/img/20260405230315341.png) |
 
@@ -59,7 +60,7 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 
 - **SKILL.md-based discovery** — Each skill is a directory with a `SKILL.md` (YAML frontmatter + documentation body) and an optional `main.py` entrypoint
 - **Two skill types**: `doc` (knowledge-only, read by agent) and `hybrid` (doc + executable subprocess)
-- **Per-agent permission control** — `doc_skill_allowlist`, `exec_skill_allowlist`, `approval_required` flags per skill; `approval_required` only applies to Agent Chat and manual single-alert handling, each execution is approved separately, while auto-execution bypasses approval
+- **Per-agent permission control** — `doc_skill_allowlist`, `exec_skill_allowlist`, `approval_required` flags per skill; `approval_required` only applies to Agent Chat and manual single-alert handling, each execution is approved separately, while auto-execution / auto-retry / debug bypass approval
 - **Subprocess execution** — Skills run in isolated subprocesses with structured JSON I/O; audit logging built in
 - **In-WebUI Skill Management** — Create, edit, delete, and debug skills directly from the Settings panel
 
@@ -74,10 +75,10 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 
 ### Task Queue & Execution
 
-- **SQLite-backed task queue** — All alert handling tasks are persisted to `.sentinelflow/sys_queue.db`; survives process restarts
+- **SQLite-backed task queue** — Alert handling tasks and approval records are persisted to `runtime/.sentinelflow/sys_queue.db` by default; survives process restarts
 - **Continuous auto-execution** — Enable the auto-executor loop to process all queued tasks sequentially without human action
 - **Manual handling** — Trigger single-task execution from the alert workbench at any time
-- **Task lifecycle** — `queued → running → succeeded / failed`; tasks disappeared from the source are automatically closed as "handled manually"
+- **Task lifecycle** — `queued → running → awaiting_approval / pending_closure / succeeded / failed / completed`; manual approval can pause a task without losing checkpoint state
 - **Full execution trace** — Every task stores a structured `execution_trace` covering alert receipt, agent analysis, skill calls, closure result, and final status
 
 ### Security Operations WebUI
@@ -94,7 +95,7 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 - **FastAPI backend** — Async Python runtime with structured JSON API; uvicorn server
 - **React + Vite frontend** — TypeScript, TailwindCSS, component-based architecture
 - **Unified dev entrypoint** — `python scripts/dev.py dev` starts the full stack in one command
-- **Clean project layout** — Strict separation of `runtime/`, `webui/`, `examples/`, `scripts/`; no `PYTHONPATH`-based startup hacks
+- **Source-first local layout** — Runtime code lives under `runtime/`, WebUI under `webui/`, helper scripts under `scripts/`, and local plugin/runtime state is stored under `runtime/.sentinelflow/` by default
 
 ## Architecture Overview
 
@@ -162,11 +163,12 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 
 ```
 .
-├── pyproject.toml                      # Python package & CLI metadata
+├── pyproject.toml                      # Python package metadata & CLI entrypoint
 ├── scripts/
 │   ├── dev.py                          # Unified local dev entrypoint
 │   └── serve_webui.py                  # Production WebUI static file server
 ├── runtime/
+│   ├── .sentinelflow/                  # Local plugins, runtime.json, SQLite queue (generated at runtime)
 │   └── sentinelflow/
 │       ├── agent/
 │       │   ├── service.py              # Top-level agent service (orchestration logic)
@@ -193,12 +195,14 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 │       │   ├── dispatch_service.py     # SQLite-backed task queue & lifecycle
 │       │   ├── task_runner_service.py  # Task execution orchestration
 │       │   ├── auto_execution_service.py # Continuous auto-executor loop
+│       │   ├── skill_approval_service.py # Skill approval records + checkpoint persistence
 │       │   ├── triage_service.py       # Rule-based alert disposition fallback
 │       │   └── audit_service.py        # Audit event log
 │       ├── workflows/                  # Agent workflow registry & runner
 │       ├── api/                        # FastAPI route handlers
 │       ├── config/                     # Runtime config loader (.env + persisted JSON)
 │       └── domain/                     # Shared enums, models, errors
+│   └── tests/                          # Runtime regression tests
 ├── webui/
 │   └── src/
 │       ├── components/                 # React UI components
@@ -206,11 +210,6 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 │       ├── api/                        # API client (fetch wrappers)
 │       ├── hooks/                      # Custom React hooks
 │       └── styles/                     # Global styles & Tailwind config
-└── examples/
-    ├── skills/                         # Example skill plugins
-    ├── agents/                         # Example agent definitions
-    ├── tasks/                          # Example alert payloads
-    └── workflows/                      # Example agent workflows
 ```
 
 </details>
@@ -246,6 +245,9 @@ python scripts/dev.py webui-dev
 
 # Build WebUI for production
 python scripts/dev.py webui-build
+
+# Serve a built WebUI bundle
+python scripts/dev.py webui-serve
 ```
 
 After editable install, you can also use the CLI directly:
@@ -257,7 +259,7 @@ sentinelflow backend
 
 ### Environment Configuration
 
-The preferred way to configure SentinelFlow is through the **WebUI Settings panel** — all settings are persisted to `.sentinelflow/runtime.json` without requiring a server restart.
+The preferred way to configure SentinelFlow is through the **WebUI Settings panel** — all settings are persisted to `runtime/.sentinelflow/runtime.json` by default without requiring a server restart.
 
 Alternatively, copy `.env.example` to `.env` for environment-level defaults:
 
@@ -329,6 +331,13 @@ This starts:
 - **Backend API** on `http://127.0.0.1:8001`
 - **WebUI** on `http://127.0.0.1:5173`
 
+For a production-like local preview, build the frontend and serve the static bundle:
+
+```bash
+python scripts/dev.py webui-build
+python scripts/dev.py webui-serve
+```
+
 ### 4. Configure via WebUI
 
 Open the WebUI and navigate to **Settings**. Configure your LLM endpoint and connect your alert source — all settings are persisted immediately without a restart.
@@ -342,7 +351,7 @@ cp .env.example .env
 
 ### 5. Add Your First Skill (Optional)
 
-Create a new directory under `.sentinelflow/plugins/skills/` with a `SKILL.md`, or use the **Skill Management** panel in the WebUI to create one directly:
+Create a new directory under `runtime/.sentinelflow/plugins/skills/` (default source-tree workspace) with a `SKILL.md`, or use the **Skill Management** panel in the WebUI to create one directly:
 
 ```markdown
 ---
@@ -410,7 +419,7 @@ Paste a sample alert JSON payload in the Settings panel and click **Generate Par
 <details>
 <summary><strong>How do I define a Worker Sub-Agent?</strong></summary>
 
-Create a directory under `.sentinelflow/plugins/agents/` with an `agent.yaml` and optional prompt files, or use the **Agent Management** panel in the WebUI:
+Create a directory under `runtime/.sentinelflow/plugins/agents/` (default source-tree workspace) with an `agent.yaml` and optional prompt files, or use the **Agent Management** panel in the WebUI:
 
 ```yaml
 # agent.yaml
@@ -452,19 +461,21 @@ The WebUI and alert ingestion pipeline work without an LLM key. However, the AI 
 <details>
 <summary><strong>Where is project state stored?</strong></summary>
 
-- **Agent definitions**: `.sentinelflow/plugins/agents/`
-- **Skills**: `.sentinelflow/plugins/skills/`
-- **Workflows**: `.sentinelflow/plugins/workflows/`
-- **Runtime config** (persisted from WebUI): `.sentinelflow/runtime.json`
-- **Task queue**: `.sentinelflow/sys_queue.db` (SQLite)
+- **Agent definitions**: `runtime/.sentinelflow/plugins/agents/` by default
+- **Skills**: `runtime/.sentinelflow/plugins/skills/` by default
+- **Workflows**: `runtime/.sentinelflow/plugins/workflows/` by default
+- **Runtime config** (persisted from WebUI): `runtime/.sentinelflow/runtime.json` by default
+- **Task queue / approvals**: `runtime/.sentinelflow/sys_queue.db` (SQLite)
 - **Environment defaults**: `.env` at project root (optional)
+
+If you run SentinelFlow inside another platform workspace that already provides a project-root `.sentinelflow/`, the runtime will prefer that external plugin root when applicable. In a normal source checkout, `runtime/.sentinelflow/` is the effective local workspace.
 
 </details>
 
 <details>
 <summary><strong>How do I define a fixed multi-step Agent Workflow?</strong></summary>
 
-Create a `workflow.json` file under `.sentinelflow/plugins/workflows/<workflow-id>/`, or use the **Workflow Management** panel in the WebUI. The Primary Agent uses structured LLM reasoning to select the best workflow for incoming alerts, or falls back to free ReAct if no workflow matches.
+Create a `workflow.json` file under `runtime/.sentinelflow/plugins/workflows/<workflow-id>/` (default source-tree workspace), or use the **Workflow Management** panel in the WebUI. The Primary Agent uses structured LLM reasoning to select the best workflow for incoming alerts, or falls back to free ReAct if no workflow matches.
 
 ```json
 {
@@ -496,10 +507,9 @@ Issues and suggestions are welcome!
 
 Before submitting PRs, please ensure:
 
-- Python: `pytest runtime/tests/` passes
-- No `PYTHONPATH`-based hacks; use proper package imports
-- New skills belong in `examples/skills/`, not mixed into `runtime/`
-- New agent examples belong in `examples/agents/`
+- Python: `python -m pytest runtime/tests/` passes
+- Keep runtime imports package-based under `sentinelflow.*`
+- User-created skills, agents, and workflows belong under the local `.sentinelflow/plugins/` workspace, not inside package source modules
 
 For new features, please open an Issue for discussion before submitting a PR.
 

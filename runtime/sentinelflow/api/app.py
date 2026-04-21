@@ -91,7 +91,7 @@ async def lifespan(_app: FastAPI):
         await polling_service.stop()
 
 
-app = FastAPI(title=branding.api_title, version="0.1.0", lifespan=lifespan)
+app = FastAPI(title=branding.api_title, version="0.3.0", lifespan=lifespan)
 
 # ── Router registration ──────────────────────────────────────────────────────
 from sentinelflow.api.routers import system, plugins, alerts  # noqa: E402

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sentinelflow"
-version = "0.1.0"
+version = "0.3.0"
 description = "SentinelFlow platform runtime and local development tooling."
 readme = "README.md"
 requires-python = ">=3.11"
