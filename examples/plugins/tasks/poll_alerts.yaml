@@ -1,4 +1,0 @@
-title: SentinelFlow Poll Alerts
-description: Periodically fetch open alerts and dispatch SentinelFlow handling tasks.
-cron: "*/1 * * * *"
-workflow: "alert_polling_dispatch"
