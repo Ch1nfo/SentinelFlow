@@ -71,10 +71,17 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
 
 
 class SentinelFlowAgentService:
-    def __init__(self, project_root: Path, skill_runtime: SentinelFlowSkillRuntime, approval_service: SkillApprovalService) -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        skill_runtime: SentinelFlowSkillRuntime,
+        approval_service: SkillApprovalService,
+        audit_service: Any | None = None,
+    ) -> None:
         self.project_root = project_root
         self.skill_runtime = skill_runtime
         self.approval_service = approval_service
+        self.audit_service = audit_service
         self.triage_service = TriageService()
         self.agent_root = project_root / ".sentinelflow" / "plugins" / "agents"
         self.workflow_root = project_root / ".sentinelflow" / "plugins" / "workflows"
@@ -103,6 +110,14 @@ class SentinelFlowAgentService:
         except ModuleNotFoundError as exc:
             return False, str(exc)
         return True, None
+
+    def _record_audit(self, event_type: str, message: str, payload: dict[str, Any] | None = None) -> None:
+        if self.audit_service is None:
+            return
+        try:
+            self.audit_service.record(event_type, message, payload or {})
+        except Exception:
+            LOGGER.exception("Failed to record SentinelFlow agent audit event.")
 
     def _resolve_skill_permissions(self, agent_definition) -> tuple[list[str], list[str]]:
         if agent_definition is None:
@@ -536,6 +551,35 @@ class SentinelFlowAgentService:
             "executed_skill_cache": dict(executed_skill_cache or {}),
         }
 
+    def evaluate_worker_result(self, worker_result: dict[str, Any]) -> tuple[bool, str | None]:
+        if bool(worker_result.get("approval_pending")):
+            return False, "子 Agent 等待技能审批。"
+
+        final_response = str(worker_result.get("final_response", "")).strip()
+        tool_calls = worker_result.get("tool_calls", [])
+        messages = worker_result.get("messages", [])
+        has_tool_error = False
+        if isinstance(messages, list):
+            for message in messages:
+                if not isinstance(message, dict) or str(message.get("type", "")).strip() != "tool":
+                    continue
+                content = str(message.get("content", "")).strip()
+                try:
+                    parsed = json.loads(content)
+                except Exception:
+                    has_tool_error = True
+                    break
+                if isinstance(parsed, dict) and (not parsed.get("success", True) or parsed.get("error")):
+                    has_tool_error = True
+                    break
+
+        has_action = bool(final_response or tool_calls)
+        if not has_action:
+            return False, "子 Agent 未返回有效结果。"
+        if has_tool_error:
+            return False, "子 Agent 执行过程中存在失败的工具调用。"
+        return True, None
+
     def _normalize_graph_state_keys(self, state: dict[str, Any]) -> dict[str, Any]:
         if "graph_checkpoint_ns" not in state and "checkpoint_ns" in state:
             state["graph_checkpoint_ns"] = state.get("checkpoint_ns")
@@ -779,6 +823,7 @@ class SentinelFlowAgentService:
             except (ValueError, IndexError):
                 step_idx = 0
         final_text = str(graph_result.get("final_response", "")).strip()
+        success, error = self.evaluate_worker_result(graph_result)
         return {
             "step": step_idx or 1,
             "worker": str(checkpoint.get("agent_name", "")).strip() or str(graph_result.get("agent_name", "")).strip(),
@@ -787,9 +832,43 @@ class SentinelFlowAgentService:
             "skills_used": skills_used,
             "messages": graph_result.get("messages", []),
             "tool_calls": tool_calls,
-            "success": bool(final_text),
-            "error": None if final_text else "子 Agent 未返回有效结果。",
+            "success": success,
+            "error": error,
         }
+
+    def _approval_resume_failed_result(self, error: str, approval) -> dict[str, Any]:
+        return {
+            "success": False,
+            "route": "approval_resume_failed",
+            "error": error,
+            "data": {
+                "approval": self.approval_service.serialize_approval(approval),
+            },
+        }
+
+    def _reload_checkpoint_for_resume(
+        self,
+        checkpoint_thread_id: str,
+        *,
+        approval,
+        decision: str,
+        stage: str,
+        error_message: str,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        checkpoint = self.approval_service.load_checkpoint(checkpoint_thread_id)
+        if checkpoint is not None:
+            return checkpoint, None
+        self._record_audit(
+            "approval_resume_failed",
+            error_message,
+            {
+                "approval_id": str(getattr(approval, "approval_id", "")).strip(),
+                "checkpoint_thread_id": checkpoint_thread_id,
+                "decision": decision,
+                "stage": stage,
+            },
+        )
+        return None, self._approval_resume_failed_result(error_message, approval)
 
     async def _resume_workflow_checkpoint(
         self,
@@ -953,92 +1032,131 @@ class SentinelFlowAgentService:
             state_payload=serialize_graph_state(state),
         )
         updated = self.approval_service.set_decision(approval_id, "approved" if decision == "approve" else "rejected")
-        current_checkpoint = self.approval_service.load_checkpoint(approval.checkpoint_thread_id) or checkpoint
+        approval_record = updated or approval
+        current_checkpoint, resume_error = self._reload_checkpoint_for_resume(
+            approval.checkpoint_thread_id,
+            approval=approval_record,
+            decision=decision,
+            stage="child_checkpoint_reload",
+            error_message="审批结果已写入，但重新加载 Agent 断点失败，无法继续恢复执行。",
+        )
+        if resume_error is not None:
+            return resume_error
         if status_callback:
             status_callback("正在恢复 Agent 图状态...")
         result = await self._resume_saved_checkpoint(current_checkpoint)
 
         parent_checkpoint_id = approval.parent_checkpoint_thread_id.strip()
         if parent_checkpoint_id and not result.get("approval_pending"):
-            parent_checkpoint = self.approval_service.load_checkpoint(parent_checkpoint_id)
-            if parent_checkpoint is not None:
-                if status_callback:
-                    status_callback("正在恢复上层编排状态...")
-                parent_kind = str(parent_checkpoint.get("checkpoint_kind", "")).strip()
-                if parent_kind == "workflow_runner":
-                    result = await self._resume_workflow_checkpoint(parent_checkpoint, result, approval)
-                    workflow_state = parent_checkpoint.get("state", {}) if isinstance(parent_checkpoint.get("state", {}), dict) else {}
-                    workflow_parent_id = str(workflow_state.get("parent_checkpoint_thread_id", "")).strip()
-                    if workflow_parent_id and not result.get("approval_pending"):
-                        workflow_parent = self.approval_service.load_checkpoint(workflow_parent_id)
-                        if workflow_parent is not None:
-                            workflow_parent_state = deserialize_graph_state(workflow_parent.get("state", {}))
-                            workflow_parent_state = self._replace_parent_tool_result(
-                                workflow_parent_state,
-                                str(workflow_state.get("parent_tool_call_id", "")).strip(),
-                                approval.approval_id,
-                                result,
-                            )
-                            self.approval_service.save_checkpoint(
-                                checkpoint_thread_id=workflow_parent_id,
-                                checkpoint_ns=workflow_parent.get("checkpoint_ns", ""),
-                                checkpoint_kind=workflow_parent.get("checkpoint_kind", ""),
-                                run_id=workflow_parent.get("run_id", ""),
-                                scope_type=workflow_parent.get("scope_type", ""),
-                                scope_ref=workflow_parent.get("scope_ref", ""),
-                                agent_name=workflow_parent.get("agent_name", ""),
-                                execution_entry=workflow_parent.get("execution_entry", ""),
-                                action_hint=workflow_parent.get("action_hint", ""),
-                                state_payload=serialize_graph_state(workflow_parent_state),
-                            )
-                            result = await self._resume_saved_checkpoint(
-                                self.approval_service.load_checkpoint(workflow_parent_id) or workflow_parent
-                            )
-                    approval_payload = self.approval_service.serialize_approval(updated or approval)
-                    return {
-                        "success": not result.get("approval_pending") and bool(result.get("success", True)),
-                        "route": str(result.get("route", "")).strip() or ("approval_required" if result.get("approval_pending") else "approval_resolved"),
-                        "data": {
-                            **(result if isinstance(result, dict) else {}),
-                            "approval": approval_payload,
-                        },
-                        "error": result.get("error") if isinstance(result, dict) else None,
-                    }
-                parent_state = deserialize_graph_state(parent_checkpoint.get("state", {}))
-                wrapped_result = result
-                if current_checkpoint.get("checkpoint_kind") == "agent_graph":
-                    wrapped_result = self._build_worker_wrapped_result(current_checkpoint, state, result)
-                approved = set(parent_state.get("approved_fingerprints", []) or [])
-                rejected = set(parent_state.get("rejected_fingerprints", []) or [])
-                if decision == "approve":
-                    approved.add(approval.arguments_fingerprint)
-                else:
-                    rejected.add(
-                        SkillApprovalService.build_skill_arguments_key(
-                            approval.skill_name,
-                            approval.arguments_fingerprint,
-                        )
+            parent_checkpoint, resume_error = self._reload_checkpoint_for_resume(
+                parent_checkpoint_id,
+                approval=approval_record,
+                decision=decision,
+                stage="parent_checkpoint_load",
+                error_message="子 Agent 已恢复，但重新加载上层断点失败，无法继续恢复编排。",
+            )
+            if resume_error is not None:
+                return resume_error
+            if status_callback:
+                status_callback("正在恢复上层编排状态...")
+            parent_kind = str(parent_checkpoint.get("checkpoint_kind", "")).strip()
+            if parent_kind == "workflow_runner":
+                result = await self._resume_workflow_checkpoint(parent_checkpoint, result, approval)
+                workflow_state = parent_checkpoint.get("state", {}) if isinstance(parent_checkpoint.get("state", {}), dict) else {}
+                workflow_parent_id = str(workflow_state.get("parent_checkpoint_thread_id", "")).strip()
+                if workflow_parent_id and not result.get("approval_pending"):
+                    workflow_parent, resume_error = self._reload_checkpoint_for_resume(
+                        workflow_parent_id,
+                        approval=approval_record,
+                        decision=decision,
+                        stage="workflow_parent_checkpoint_load",
+                        error_message="Workflow 已恢复，但重新加载 Workflow 上层断点失败，无法继续恢复编排。",
                     )
-                parent_state["approved_fingerprints"] = list(approved)
-                parent_state["rejected_fingerprints"] = list(rejected)
-                parent_state = self._replace_parent_tool_result(parent_state, approval.parent_tool_call_id, approval.approval_id, wrapped_result)
-                self.approval_service.save_checkpoint(
-                    checkpoint_thread_id=parent_checkpoint_id,
-                    checkpoint_ns=parent_checkpoint.get("checkpoint_ns", ""),
-                    checkpoint_kind=parent_checkpoint.get("checkpoint_kind", ""),
-                    run_id=parent_checkpoint.get("run_id", ""),
-                    scope_type=parent_checkpoint.get("scope_type", ""),
-                    scope_ref=parent_checkpoint.get("scope_ref", ""),
-                    agent_name=parent_checkpoint.get("agent_name", ""),
-                    execution_entry=parent_checkpoint.get("execution_entry", ""),
-                    action_hint=parent_checkpoint.get("action_hint", ""),
-                    state_payload=serialize_graph_state(parent_state),
+                    if resume_error is not None:
+                        return resume_error
+                    workflow_parent_state = deserialize_graph_state(workflow_parent.get("state", {}))
+                    workflow_parent_state = self._replace_parent_tool_result(
+                        workflow_parent_state,
+                        str(workflow_state.get("parent_tool_call_id", "")).strip(),
+                        approval.approval_id,
+                        result,
+                    )
+                    self.approval_service.save_checkpoint(
+                        checkpoint_thread_id=workflow_parent_id,
+                        checkpoint_ns=workflow_parent.get("checkpoint_ns", ""),
+                        checkpoint_kind=workflow_parent.get("checkpoint_kind", ""),
+                        run_id=workflow_parent.get("run_id", ""),
+                        scope_type=workflow_parent.get("scope_type", ""),
+                        scope_ref=workflow_parent.get("scope_ref", ""),
+                        agent_name=workflow_parent.get("agent_name", ""),
+                        execution_entry=workflow_parent.get("execution_entry", ""),
+                        action_hint=workflow_parent.get("action_hint", ""),
+                        state_payload=serialize_graph_state(workflow_parent_state),
+                    )
+                    workflow_parent_checkpoint, resume_error = self._reload_checkpoint_for_resume(
+                        workflow_parent_id,
+                        approval=approval_record,
+                        decision=decision,
+                        stage="workflow_parent_checkpoint_reload",
+                        error_message="Workflow 上层断点已更新，但重新加载失败，无法继续恢复编排。",
+                    )
+                    if resume_error is not None:
+                        return resume_error
+                    result = await self._resume_saved_checkpoint(workflow_parent_checkpoint)
+                approval_payload = self.approval_service.serialize_approval(approval_record)
+                return {
+                    "success": not result.get("approval_pending") and bool(result.get("success", True)),
+                    "route": str(result.get("route", "")).strip() or ("approval_required" if result.get("approval_pending") else "approval_resolved"),
+                    "data": {
+                        **(result if isinstance(result, dict) else {}),
+                        "approval": approval_payload,
+                    },
+                    "error": result.get("error") if isinstance(result, dict) else None,
+                }
+            parent_state = deserialize_graph_state(parent_checkpoint.get("state", {}))
+            wrapped_result = result
+            if current_checkpoint.get("checkpoint_kind") == "agent_graph":
+                wrapped_result = self._build_worker_wrapped_result(current_checkpoint, state, result)
+            approved = set(parent_state.get("approved_fingerprints", []) or [])
+            rejected = set(parent_state.get("rejected_fingerprints", []) or [])
+            if decision == "approve":
+                approved.add(approval.arguments_fingerprint)
+            else:
+                rejected.add(
+                    SkillApprovalService.build_skill_arguments_key(
+                        approval.skill_name,
+                        approval.arguments_fingerprint,
+                    )
                 )
-                result = await self._resume_saved_checkpoint(self.approval_service.load_checkpoint(parent_checkpoint_id) or parent_checkpoint)
+            parent_state["approved_fingerprints"] = list(approved)
+            parent_state["rejected_fingerprints"] = list(rejected)
+            parent_state = self._replace_parent_tool_result(parent_state, approval.parent_tool_call_id, approval.approval_id, wrapped_result)
+            self.approval_service.save_checkpoint(
+                checkpoint_thread_id=parent_checkpoint_id,
+                checkpoint_ns=parent_checkpoint.get("checkpoint_ns", ""),
+                checkpoint_kind=parent_checkpoint.get("checkpoint_kind", ""),
+                run_id=parent_checkpoint.get("run_id", ""),
+                scope_type=parent_checkpoint.get("scope_type", ""),
+                scope_ref=parent_checkpoint.get("scope_ref", ""),
+                agent_name=parent_checkpoint.get("agent_name", ""),
+                execution_entry=parent_checkpoint.get("execution_entry", ""),
+                action_hint=parent_checkpoint.get("action_hint", ""),
+                state_payload=serialize_graph_state(parent_state),
+            )
+            parent_resume_checkpoint, resume_error = self._reload_checkpoint_for_resume(
+                parent_checkpoint_id,
+                approval=approval_record,
+                decision=decision,
+                stage="parent_checkpoint_reload",
+                error_message="上层断点已更新，但重新加载失败，无法继续恢复编排。",
+            )
+            if resume_error is not None:
+                return resume_error
+            result = await self._resume_saved_checkpoint(parent_resume_checkpoint)
 
         if status_callback:
             status_callback("正在整理审批恢复结果...")
-        approval_payload = self.approval_service.serialize_approval(updated or approval)
+        approval_payload = self.approval_service.serialize_approval(approval_record)
         return {
             "success": not result.get("approval_pending") and bool(result.get("success", True)),
             "route": str(result.get("route", "")).strip() or ("approval_required" if result.get("approval_pending") else "approval_resolved"),

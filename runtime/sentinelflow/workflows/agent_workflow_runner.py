@@ -94,20 +94,25 @@ class SentinelFlowAgentWorkflowRunner:
     ) -> dict[str, Any]:
         messages = worker_result.get("messages", [])
         final_response = str(worker_result.get("final_response", "")).strip()
-        has_error = False
-        for message in messages:
-            if not isinstance(message, dict) or str(message.get("type", "")).strip() != "tool":
-                continue
-            content = str(message.get("content", "")).strip()
-            try:
-                parsed = json.loads(content)
-            except Exception:
-                has_error = True
-                break
-            if isinstance(parsed, dict) and (not parsed.get("success", True) or parsed.get("error")):
-                has_error = True
-                break
-        has_action = bool(final_response or worker_result.get("tool_calls"))
+        success_evaluator = getattr(self.agent_service, "evaluate_worker_result", None)
+        if callable(success_evaluator):
+            success, _error = success_evaluator(worker_result)
+        else:
+            has_error = False
+            for message in messages:
+                if not isinstance(message, dict) or str(message.get("type", "")).strip() != "tool":
+                    continue
+                content = str(message.get("content", "")).strip()
+                try:
+                    parsed = json.loads(content)
+                except Exception:
+                    has_error = True
+                    break
+                if isinstance(parsed, dict) and (not parsed.get("success", True) or parsed.get("error")):
+                    has_error = True
+                    break
+            has_action = bool(final_response or worker_result.get("tool_calls"))
+            success = has_action and not has_error
         return {
             "step": step_index,
             "step_id": step.id,
@@ -118,7 +123,7 @@ class SentinelFlowAgentWorkflowRunner:
             "final_response": final_response,
             "messages": messages,
             "tool_calls": worker_result.get("tool_calls", []),
-            "success": has_action and not has_error,
+            "success": success,
         }
 
     def _save_workflow_checkpoint(

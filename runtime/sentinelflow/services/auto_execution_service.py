@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import TYPE_CHECKING, Any
 
 from sentinelflow.config.runtime import load_runtime_config
@@ -26,42 +27,48 @@ class AlertAutoExecutionService:
         self._enabled = False
         self._running = False
         self._loop_task: asyncio.Task[None] | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._wake_event = asyncio.Event()
         self._stop_event = asyncio.Event()
+        self._wake_lock = threading.Lock()
+        self._wake_requested = False
         self._run_once_requested = False
 
     async def start(self) -> None:
         if self._loop_task and not self._loop_task.done():
             return
+        self._loop = asyncio.get_running_loop()
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
+        self._wake_requested = False
         self._run_once_requested = False
         self._loop_task = asyncio.create_task(self._run_loop(), name="sentinelflow-auto-executor")
 
     async def stop(self) -> None:
         self._enabled = False
         self._run_once_requested = False
-        self._stop_event.set()
-        self._wake_event.set()
+        self._signal_event(self._stop_event)
+        self._signal_event(self._wake_event)
         if self._loop_task:
             try:
                 await self._loop_task
             finally:
                 self._loop_task = None
+                self._loop = None
 
     def enable(self) -> None:
         if self._enabled:
             return
         self._enabled = True
         self.audit_service.record("auto_execution_enabled", "Enabled continuous automatic alert execution.", {})
-        self._wake_event.set()
+        self._request_wake()
 
     def disable(self) -> None:
         if not self._enabled:
             return
         self._enabled = False
         self.audit_service.record("auto_execution_disabled", "Disabled continuous automatic alert execution.", {})
-        self._wake_event.set()
+        self._request_wake()
 
     def state(self) -> dict[str, bool]:
         return {
@@ -71,11 +78,37 @@ class AlertAutoExecutionService:
 
     def apply_persisted_state(self, enabled: bool) -> None:
         self._enabled = bool(enabled)
-        self._wake_event.set()
+        self._request_wake()
 
     def request_run_once(self) -> None:
         self._run_once_requested = True
-        self._wake_event.set()
+        self._request_wake()
+
+    def _signal_event(self, event: asyncio.Event) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            event.set()
+            return
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is loop:
+            event.set()
+            return
+        loop.call_soon_threadsafe(event.set)
+
+    def _request_wake(self) -> None:
+        with self._wake_lock:
+            self._wake_requested = True
+        self._signal_event(self._wake_event)
+
+    def _consume_wake_request(self) -> bool:
+        with self._wake_lock:
+            if not self._wake_requested:
+                return False
+            self._wake_requested = False
+            return True
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -93,15 +126,19 @@ class AlertAutoExecutionService:
             await self._wait_for_wake(timeout=self.interval_seconds)
 
     async def _wait_for_wake(self, timeout: float | None = None) -> bool:
+        if self._consume_wake_request():
+            return True
         self._wake_event.clear()
+        if self._consume_wake_request():
+            return True
         if timeout is None:
             await self._wake_event.wait()
-            return True
+            return self._consume_wake_request() or True
         try:
             await asyncio.wait_for(self._wake_event.wait(), timeout=timeout)
-            return True
+            return self._consume_wake_request() or True
         except asyncio.TimeoutError:
-            return False
+            return self._consume_wake_request()
 
     async def _run_pending_once(self, *, allow_disabled: bool = False) -> list[dict[str, Any]]:
         queued_tasks = [task for task in self.dispatch_service.list_tasks() if task.status == "queued"]

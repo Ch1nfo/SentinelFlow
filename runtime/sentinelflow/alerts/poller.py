@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 from sentinelflow.alerts.client import SOCAlertApiClient
 from sentinelflow.alerts.dedup import AlertDedupStore
@@ -21,8 +22,11 @@ class AlertPollingService:
         self.dispatch_service = dispatch_service
         self._latest_result = PollingDispatchResult(tasks=self.dispatch_service.list_tasks())
         self._loop_task: asyncio.Task[None] | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._wake_event = asyncio.Event()
         self._stop_event = asyncio.Event()
+        self._wake_lock = threading.Lock()
+        self._wake_requested = False
 
     def get_latest_result(self) -> PollingDispatchResult:
         return PollingDispatchResult(
@@ -42,21 +46,50 @@ class AlertPollingService:
     async def start(self) -> None:
         if self._loop_task and not self._loop_task.done():
             return
+        self._loop = asyncio.get_running_loop()
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
+        self._wake_requested = False
         self._loop_task = asyncio.create_task(self._run_scheduler(), name="sentinelflow-alert-poller")
 
     async def stop(self) -> None:
-        self._stop_event.set()
-        self._wake_event.set()
+        self._signal_event(self._stop_event)
+        self._signal_event(self._wake_event)
         if self._loop_task:
             try:
                 await self._loop_task
             finally:
                 self._loop_task = None
+                self._loop = None
 
     def refresh_schedule(self) -> None:
-        self._wake_event.set()
+        self._request_wake()
+
+    def _signal_event(self, event: asyncio.Event) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            event.set()
+            return
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is loop:
+            event.set()
+            return
+        loop.call_soon_threadsafe(event.set)
+
+    def _request_wake(self) -> None:
+        with self._wake_lock:
+            self._wake_requested = True
+        self._signal_event(self._wake_event)
+
+    def _consume_wake_request(self) -> bool:
+        with self._wake_lock:
+            if not self._wake_requested:
+                return False
+            self._wake_requested = False
+            return True
 
     async def _run_scheduler(self) -> None:
         while not self._stop_event.is_set():
@@ -73,15 +106,19 @@ class AlertPollingService:
             await self.poll_once()
 
     async def _wait_for_reconfigure(self, timeout: int | None = None) -> bool:
+        if self._consume_wake_request():
+            return True
         self._wake_event.clear()
+        if self._consume_wake_request():
+            return True
         if timeout is None:
             await self._wake_event.wait()
-            return True
+            return self._consume_wake_request() or True
         try:
             await asyncio.wait_for(self._wake_event.wait(), timeout=timeout)
-            return True
+            return self._consume_wake_request() or True
         except asyncio.TimeoutError:
-            return False
+            return self._consume_wake_request()
 
     async def poll_once(self) -> PollingDispatchResult:
         response = self.client.fetch_open_alerts()

@@ -421,7 +421,7 @@ def build_orchestrator_graph(
         if cancel is not None and getattr(cancel, "is_set", lambda: False)():
             return json.dumps({"success": False, "mode": "parallel", "results": [], "error": "用户已停止当前任务。"}, ensure_ascii=False)
 
-        normalized_tasks: list[tuple[str, str]] = []
+        normalized_tasks: list[dict[str, str]] = []
         for item in tasks or []:
             if not isinstance(item, dict):
                 continue
@@ -430,9 +430,15 @@ def build_orchestrator_graph(
             if not worker_name or not task_prompt:
                 continue
             if worker_name not in worker_runners:
-                normalized_tasks.append((worker_name, ""))
+                normalized_tasks.append(
+                    {
+                        "worker": worker_name,
+                        "task_prompt": task_prompt,
+                        "error": f"子 Agent {worker_name} 未注册或未配置给当前主 Agent。",
+                    }
+                )
                 continue
-            normalized_tasks.append((worker_name, task_prompt))
+            normalized_tasks.append({"worker": worker_name, "task_prompt": task_prompt})
 
         if not normalized_tasks:
             return json.dumps(
@@ -441,38 +447,50 @@ def build_orchestrator_graph(
             )
 
         run_coroutines: list[Any] = []
+        coroutine_meta: list[dict[str, Any]] = []
         invalid_results: list[dict[str, Any]] = []
-        for worker_name, task_prompt in normalized_tasks[:parallel_limit]:
-            if not task_prompt:
+        for task_spec in normalized_tasks[:parallel_limit]:
+            worker_name = str(task_spec.get("worker", "")).strip()
+            task_prompt = str(task_spec.get("task_prompt", "")).strip()
+            invalid_reason = str(task_spec.get("error", "")).strip()
+            if invalid_reason:
                 step_counter[0] += 1
                 invalid_results.append(
                     {
                         "step": step_counter[0],
                         "worker": worker_name,
-                        "task_prompt": "",
+                        "task_prompt": task_prompt,
                         "final_response": "",
                         "skills_used": [],
                         "success": False,
-                        "error": f"子 Agent {worker_name} 不在当前主 Agent 的授权列表中。",
+                        "error": invalid_reason,
                     }
                 )
                 continue
             step_counter[0] += 1
-            run_coroutines.append(worker_runners[worker_name](task_prompt, state, step_counter[0]))
+            step_idx = step_counter[0]
+            coroutine_meta.append(
+                {
+                    "step": step_idx,
+                    "worker": worker_name,
+                    "task_prompt": task_prompt,
+                }
+            )
+            run_coroutines.append(worker_runners[worker_name](task_prompt, state, step_idx))
 
         gathered = await asyncio.gather(*run_coroutines, return_exceptions=True) if run_coroutines else []
         results: list[dict[str, Any]] = list(invalid_results)
-        for item in gathered:
+        for meta, item in zip(coroutine_meta, gathered):
             if isinstance(item, Exception):
                 results.append(
                     {
-                        "step": step_counter[0],
-                        "worker": "",
-                        "task_prompt": "",
+                        "step": meta["step"],
+                        "worker": meta["worker"],
+                        "task_prompt": meta["task_prompt"],
                         "final_response": "",
                         "skills_used": [],
                         "success": False,
-                        "error": str(item),
+                        "error": f"子 Agent 执行异常：{item}",
                     }
                 )
             else:

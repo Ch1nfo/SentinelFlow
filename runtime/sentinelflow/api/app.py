@@ -47,6 +47,7 @@ agent_service = SentinelFlowAgentService(
     project_root=PROJECT_ROOT,
     skill_runtime=skill_runtime,
     approval_service=skill_approval_service,
+    audit_service=audit_service,
 )
 triage_service = TriageService()
 agent_workflow_runner = SentinelFlowAgentWorkflowRunner(

@@ -342,13 +342,15 @@ async def _dispatch_command_internal(
             status_callback=status_callback,
             execution_context=execution_context,
         )
-        route = "approval_required" if agent_data.get("approval_pending") else "agent_dispatch"
+        approval_pending = bool(agent_data.get("approval_pending"))
+        route = "approval_required" if approval_pending else "agent_dispatch"
+        error = str(agent_data.get("error", "")).strip() or None
         return {
             "command_text": payload.command_text,
             "route": route,
-            "success": True,
+            "success": False if approval_pending else bool(agent_data.get("success", True)),
             "data": agent_data,
-            "error": None,
+            "error": error,
         }
     except Exception as exc:
         if cancel_event is not None and cancel_event.is_set():
