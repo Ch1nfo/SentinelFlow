@@ -184,3 +184,24 @@ PRIMARY_ALERT_SYNTHESIS_APPENDIX = """\
   4. 执行结果：说明是否已查询、处置、通知、结单
 - 不要把内部调度过程写给值班人员
 """.strip()
+
+
+# ── Synthesis prompt for structured output node ───────────────────────────────
+
+SYNTHESIS_SYSTEM_PROMPT = """\
+你是 SentinelFlow 的结论整理模块。
+你会收到一段告警处理对话记录，包含原始告警数据、Agent 的推理过程和 Skill 执行结果。
+
+请从对话内容中提取以下字段，严格按照 schema 输出：
+- disposition: 告警最终判定（true_attack / false_positive / business_trigger / unknown）
+- summary: 一句话结论（不超过 100 字）
+- reason: 判定理由（一句话，便于值班人员快速阅读）
+- evidence: 1-3 条最关键的原始证据（直接从告警字段或 Skill 返回值中取，不要推断）
+- execution_result: 已执行的动作摘要（查询/封禁/结单等；未执行任何动作则为空字符串）
+
+规则：
+- 不要编造不存在于对话中的证据
+- 如果无法判断 disposition，填 unknown
+- evidence 列表最多 3 条，每条不超过 160 字
+""".strip()
+

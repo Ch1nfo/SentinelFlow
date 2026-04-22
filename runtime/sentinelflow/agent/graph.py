@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from sentinelflow.agent.nodes import agent_node, should_continue
@@ -9,6 +10,8 @@ from sentinelflow.agent.tools import build_agent_tools
 from sentinelflow.config.runtime import SentinelFlowRuntimeConfig
 from sentinelflow.services.skill_approval_service import SkillApprovalService
 from sentinelflow.skills.adapters import SentinelFlowSkillRuntime
+
+LOGGER = logging.getLogger(__name__)
 
 
 def build_agent_graph(
@@ -89,8 +92,76 @@ def build_agent_graph(
     builder.add_node("agent_node", _agent)
     builder.add_node("tools_node", ToolNode(tools))
     builder.add_node("approval_gate", _approval_gate)
+    builder.add_node("synthesis_node", _build_synthesis_node(runtime_config))
     builder.add_edge(START, "agent_node")
-    builder.add_conditional_edges("agent_node", should_continue, {"tools": "tools_node", "__end__": END})
+    # When the agent decides to stop (no more tool calls), run synthesis before END
+    builder.add_conditional_edges("agent_node", should_continue, {"tools": "tools_node", "__end__": "synthesis_node"})
+    builder.add_edge("synthesis_node", END)
     builder.add_edge("tools_node", "approval_gate")
     builder.add_conditional_edges("approval_gate", _route_after_tools, {"agent_node": "agent_node", "__end__": END})
     return builder.compile()
+
+
+def _build_synthesis_node(runtime_config: SentinelFlowRuntimeConfig):
+    """Factory that returns the synthesis_node coroutine closed over runtime_config."""
+
+    async def _synthesis(state: SentinelFlowAgentState) -> dict:
+        """
+        Compress the agent conversation into a structured AlertJudgment.
+
+        Skipped when:
+        - approval is pending (agent has not finished yet)
+        - alert_source is human_command (no judgment fields needed)
+        """
+        from langchain_openai import ChatOpenAI
+        from langchain_core.messages import HumanMessage, SystemMessage
+        from sentinelflow.agent.prompts import SYNTHESIS_SYSTEM_PROMPT
+        from sentinelflow.agent.schemas import AlertJudgment
+
+        # ── Skip conditions ──────────────────────────────────────────────────
+        if state.get("approval_pending"):
+            return {}
+        alert_data = state.get("alert_data") or {}
+        if str(alert_data.get("alert_source", "")).strip() == "human_command":
+            return {}
+
+        # ── Build synthesis message ──────────────────────────────────────────
+        alert_json = json.dumps(alert_data, ensure_ascii=False, indent=2)
+        conversation_parts: list[str] = [
+            f"原始告警数据：\n```json\n{alert_json}\n```\n\n以下是处理过程："
+        ]
+        for msg in state.get("messages", []):
+            msg_type = getattr(msg, "type", "")
+            content = str(getattr(msg, "content", "")).strip()
+            if not content:
+                continue
+            if msg_type == "ai":
+                conversation_parts.append(f"\nAgent 分析：{content}")
+            elif msg_type == "tool":
+                # Truncate long tool results to stay within context limits
+                conversation_parts.append(f"\nSkill 返回：{content[:600]}")
+
+        synthesis_messages = [
+            SystemMessage(content=SYNTHESIS_SYSTEM_PROMPT),
+            HumanMessage(content="\n".join(conversation_parts)),
+        ]
+
+        # ── Call structured LLM ──────────────────────────────────────────────
+        try:
+            llm = ChatOpenAI(
+                model=runtime_config.llm_model,
+                api_key=runtime_config.llm_api_key,
+                base_url=runtime_config.llm_api_base_url,
+                temperature=0,  # deterministic for schema extraction
+                timeout=runtime_config.llm_timeout,
+            ).with_structured_output(AlertJudgment)
+            result: AlertJudgment = await llm.ainvoke(synthesis_messages)
+            return {"structured_judgment": result.model_dump()}
+        except Exception:
+            LOGGER.warning(
+                "synthesis_node: structured output call failed, "
+                "_serialize_alert_result will fall back to text parsing."
+            )
+            return {"structured_judgment": None}
+
+    return _synthesis

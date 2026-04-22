@@ -1386,7 +1386,68 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             graph_result["approval_request"] = approval_request or {}
             graph_result["route"] = "approval_required"
             return graph_result
+        # Orchestrator graph has no synthesis_node; run synthesis in Python layer
+        if not graph_result.get("structured_judgment"):
+            graph_result["structured_judgment"] = await self._run_synthesis(
+                graph_result, effective_config=effective_config
+            )
         return self._serialize_alert_result(alert, graph_result, action_hint)
+
+    async def _run_synthesis(
+        self,
+        graph_result: dict[str, Any],
+        effective_config=None,
+    ) -> dict[str, Any] | None:
+        """
+        Run a structured-output LLM call to extract AlertJudgment from a graph result.
+
+        Used by the orchestrator path, which has no synthesis_node inside its graph.
+        Returns None on any error; _serialize_alert_result will then fall back to text parsing.
+        """
+        try:
+            from langchain_openai import ChatOpenAI
+            from langchain_core.messages import HumanMessage, SystemMessage
+            from sentinelflow.agent.prompts import SYNTHESIS_SYSTEM_PROMPT
+            from sentinelflow.agent.schemas import AlertJudgment
+        except ModuleNotFoundError:
+            return None
+
+        try:
+            config = effective_config or load_runtime_config()
+            llm = ChatOpenAI(
+                model=config.llm_model,
+                api_key=config.llm_api_key,
+                base_url=config.llm_api_base_url,
+                temperature=0,
+                timeout=config.llm_timeout,
+            ).with_structured_output(AlertJudgment)
+
+            final_response = str(graph_result.get("final_response", "")).strip()
+            worker_parts: list[str] = []
+            for wr in (graph_result.get("worker_results") or [])[:5]:
+                if not isinstance(wr, dict):
+                    continue
+                worker_name = str(wr.get("worker") or wr.get("worker_agent") or "worker").strip()
+                resp = str(wr.get("final_response", "")).strip()[:400]
+                if resp:
+                    worker_parts.append(f"子Agent [{worker_name}]: {resp}")
+
+            conversation_text = f"主Agent最终结论：{final_response}"
+            if worker_parts:
+                conversation_text += "\n\n子Agent执行结果：\n" + "\n".join(worker_parts)
+
+            messages = [
+                SystemMessage(content=SYNTHESIS_SYSTEM_PROMPT),
+                HumanMessage(content=conversation_text),
+            ]
+            result: AlertJudgment = await llm.ainvoke(messages)
+            return result.model_dump()
+        except Exception:
+            LOGGER.warning(
+                "_run_synthesis: structured output failed for orchestrator path, "
+                "_serialize_alert_result will use text parsing fallback."
+            )
+            return None
 
 
     async def run_command(
@@ -1463,6 +1524,8 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             "messages": serialized_messages,
             "tool_calls": tool_calls,
             "event_id_ref": state.get("event_id_ref", ""),
+            # Pass through structured judgment produced by synthesis_node (may be None)
+            "structured_judgment": state.get("structured_judgment"),
         }
 
     def _serialize_alert_result(
@@ -1474,13 +1537,25 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         skill_runs = self._extract_skill_runs(graph_result)
         fallback_judgment = self.triage_service.analyze_alert(alert)
         final_text = str(graph_result.get("final_response", "")).strip()
-        inferred_disposition = self._infer_disposition(final_text, fallback_judgment.disposition.value)
-        disposition = inferred_disposition
-        summary = self._infer_summary(final_text, fallback_judgment.summary)
-        reason = self._infer_reason(final_text, alert, fallback_judgment)
+
+        # ── Prefer structured judgment from synthesis_node; fallback to text parsing ──
+        structured = graph_result.get("structured_judgment") or {}
+        if isinstance(structured, dict) and structured.get("disposition"):
+            LOGGER.debug("_serialize_alert_result: using structured_judgment (synthesis path)")
+            disposition = str(structured["disposition"]).strip() or fallback_judgment.disposition.value
+            summary = str(structured.get("summary") or "").strip() or fallback_judgment.summary
+            reason = str(structured.get("reason") or "").strip() or fallback_judgment.summary
+            evidence = [str(e).strip() for e in (structured.get("evidence") or []) if str(e).strip()]
+        else:
+            LOGGER.debug("_serialize_alert_result: structured_judgment absent, using text parsing fallback")
+            disposition = self._infer_disposition(final_text, fallback_judgment.disposition.value)
+            summary = self._infer_summary(final_text, fallback_judgment.summary)
+            reason = self._infer_reason(final_text, alert, fallback_judgment)
+            evidence = self._infer_evidence(final_text, alert, fallback_judgment)
+        # ─────────────────────────────────────────────────────────────────────────────
+
         if not summary or summary in {"--", "-", "—"}:
             summary = reason or fallback_judgment.summary
-        evidence = self._infer_evidence(final_text, alert, fallback_judgment)
         analysis_step = self._build_analysis_step(graph_result, disposition, summary, reason, evidence)
         enrichment = self._first_enrichment_payload(skill_runs)
         closure_run = self._select_closure_run(skill_runs, action_hint)
