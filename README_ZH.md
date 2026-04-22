@@ -2,9 +2,9 @@
 
 # SentinelFlow
 
-### AI 驱动的安全运营平台 — 多 Agent SOC 自动化分析引擎
+### AI-Native SecOps 控制平面 — 多 Agent SOC 自动化平台
 
-[![版本](https://img.shields.io/badge/版本-0.3.0-blue.svg)](https://github.com/Ch1nfo/SentinelFlow/releases)
+[![版本](https://img.shields.io/badge/版本-1.0.0-blue.svg)](https://github.com/Ch1nfo/SentinelFlow/releases)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![许可证](https://img.shields.io/badge/许可证-MIT-green.svg)](LICENSE)
 [![平台](https://img.shields.io/badge/平台-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#)
@@ -22,16 +22,16 @@
 
 **SentinelFlow** 是一个全栈 SOC 自动化平台，将 **基于 LangGraph 的多 Agent 编排运行时**与**面向运营协同的 React WebUI** 深度结合。不同于固化的剧本，你将拥有一套灵活、可扩展的 Agent 体系——主 Agent（Supervisor）统一调度各专项子 Agent（Worker），每个子 Agent 均可装配可热插拔的 Skill，实现外部 API 调用、情报富化脚本、工单闭合等任意安全运营动作。
 
-- **多 Agent 编排** — 基于 LangGraph 的 Supervisor + Worker SubGraph 模式，每个 Worker 是以 `@tool` 形式封装的独立 ReAct SubGraph
-- **可插拔 Skill 系统** — 在 skills 目录下放入 `SKILL.md` + `main.py` 即可，Agent 自动发现并调用，支持细粒度的按 Agent 权限控制
-- **双入口处理** — 同时接受原始安全告警（SIEM/SOAR 的 JSON 告警）和 WebUI 聊天界面的自由文本人工指令
-- **Agent Workflow 引擎** — 定义高频场景的固定多步骤工作流，主 Agent 智能选择最优 Workflow 或回退到自由 ReAct
-- **双模式告警接入** — 支持通过 HTTP API 轮询拉取告警，或运行自定义 Python 脚本接入任意告警源
-- **AI 辅助解析规则生成** — 粘贴告警样本，大模型自动生成字段映射解析规则，并实时预览解析结果
-- **持续自动执行** — 开启自动执行循环，无需人工干预即可自动处置队列中的告警任务
+- **多 Agent 编排** — 基于 LangGraph 的 Supervisor + Worker SubGraph 模式，支持顺序/并行委派以及 Workflow 回退
+- **完整运营控制台** — 统一 WebUI 覆盖总览、告警工作台、任务中心、对话指挥台、Skills、Agents、Workflows 和平台设置
+- **可插拔 Skill 系统** — 在本地插件工作区中放入 `SKILL.md` + `main.py` 即可，Agent 自动发现并调用，支持细粒度的按 Agent 权限控制
+- **双入口处理** — 同时接受原始安全告警（SIEM/SOAR 的 JSON 告警）和 WebUI 对话台中的自由文本人工指令
+- **Agent Workflow 引擎** — 定义可复用的多步骤工作流，主 Agent 智能选择最优 Workflow 或回退到自由 ReAct
+- **灵活告警接入** — 支持通过 HTTP API 轮询拉取告警，或运行自定义 Python 脚本接入任意告警源
+- **AI 辅助解析规则生成** — 粘贴告警样本，大模型自动生成字段映射解析规则，并支持预览后保存
+- **持续自动执行与失败重试** — 开启后台自动执行循环，并按可配置延迟自动重试失败任务
 - **审批与断点恢复** — `approval_required` Skill 在对话与手动单告警场景下会暂停图执行，在 UI 中显示审批卡，并在批准/拒绝后从 checkpoint 恢复
-- **细粒度权限策略** — 按 Agent 配置 Skill 白/黑名单、执行审批门控、审计日志和任务取消支持
-- **全栈交付** — FastAPI 后端 + React/Vite 前端，统一开发入口，生产级项目布局
+- **细粒度治理策略** — 按 Agent 配置 Skill 权限、按模式分离 Worker 委派权限、执行审批门控、审计日志和 Agent 级模型覆盖
 
 ## 界面预览
 
@@ -53,7 +53,9 @@
 
 - **Supervisor + Worker SubGraph** — 主 Agent 通过 LangGraph 的 `ToolNode` 将任务委托给子 Agent，每个子 Agent 以独立 ReAct SubGraph 编译后封装为 `@tool`
 - **并行委派** — 主 Agent 可通过 `delegate_parallel` 同时将多个独立子任务分发给不同 Worker 并行执行
-- **Agent Workflow 引擎** — 定义可复用的固定多步骤工作流，用于高频场景；主 Agent 通过 LLM 推理选择最优工作流
+- **Agent Workflow 引擎** — 定义可复用的固定多步骤工作流，用于高频场景；主 Agent 通过 LLM 推理选择最优工作流，未命中时回退到自由 ReAct
+- **按模式分离的 Worker 权限** — 主 Agent 在对话式执行与告警处置执行下可以使用不同的 Worker 白名单
+- **提示词分层** — 主 Agent 支持基础 / 指令 / 告警 / 汇总四类提示词，子 Agent 使用统一执行提示词
 - **取消与步骤上限** — 所有编排图均尊重 `cancel_event` 线程标志；`worker_max_steps` 限制编排递归深度，防止失控
 
 ### 可插拔 Skill 系统
@@ -62,32 +64,37 @@
 - **两种 Skill 类型**：`doc`（纯知识型，供 Agent 阅读）和 `hybrid`（文档 + 可执行子进程）
 - **按 Agent 权限控制** — `doc_skill_allowlist`、`exec_skill_allowlist`、每个 Skill 的 `approval_required` 标志；`approval_required` 仅对对话与手动单告警生效，且每次执行都需要单独审批，自动执行 / 自动重试 / 调试会绕过审批
 - **子进程隔离执行** — Skill 在隔离子进程中运行，结构化 JSON 输入/输出，内置审计日志
-- **WebUI 内 Skill 管理** — 直接在配置中心创建、编辑、删除 Skill，并支持在线调试执行
+- **WebUI 内 Skill 管理** — 直接在独立 Skills 页面创建、编辑、删除、查看并在线调试 Skill
 
 ### 告警接入流水线
 
 - **双模式告警源** — `api` 模式轮询任意 REST 端点（支持自定义 Method、Header、Query、Body）；`script` 模式运行自定义 Python 脚本，读取其 stdout 作为告警数据，适用于无 API 的自定义数据源
 - **AI 辅助解析规则生成** — 粘贴原始告警样本，大模型自动生成 `field_mapping` 解析规则并实时预览；大模型不可用时自动降级为启发式规则推断
+- **抓取 / 解析校验** — 保存前可直接测试上游抓取、导入解析规则 JSON，并预览解析后的标准化告警
 - **灵活字段映射** — 基于点路径表达式，将任意 JSON 结构映射到 SentinelFlow 标准字段（`eventIds`、`alert_name`、`sip`、`dip`、`alert_time` 等）
 - **去重与幂等** — SQLite 支撑的去重存储，防止活跃告警被重复入队
 - **轮询调度器** — 可配置轮询间隔；支持在 UI 中手动触发立即轮询
-- **容错与重试** — 失败任务可手动重试，或在下次轮询时自动重新处理
+- **容错与重试** — 失败任务可手动重试，也可按可配置重试间隔自动重新处理
 
 ### 任务队列与执行
 
-- **SQLite 任务队列持久化** — 默认将告警处置任务与审批记录持久化到 `runtime/.sentinelflow/sys_queue.db`，进程重启后自动恢复
+- **SQLite 任务队列持久化** — 默认将告警处置任务与审批记录持久化到 `.sentinelflow/sys_queue.db`，进程重启后自动恢复
 - **持续自动执行** — 开启自动执行循环后，无需人工干预即可自动顺序处理所有排队任务
+- **失败任务自动重试** — 可配置失败任务重试间隔，让后台循环自动拾取满足条件的失败任务再次处置
 - **手动单任务触发** — 随时从告警工作台触发单条任务的 Agent 处置
 - **完整任务生命周期** — `queued → running → awaiting_approval / pending_closure / succeeded / failed / completed`；手动审批可在不丢失断点状态的情况下暂停任务
-- **结构化执行链路** — 每个任务存储完整 `execution_trace`，涵盖告警接收、Agent 研判、Skill 调用、结单结果和最终状态
+- **结构化执行链路** — 每个任务存储完整 `execution_trace`，涵盖告警接收、Workflow 使用、Agent 研判、Skill 调用、审批状态、结单结果和最终状态
+- **基于事实的结果收敛** — 最终状态、研判分类、处置结果、结单状态和 Workflow 使用情况会统一收敛到结构化 `final_facts`
 
 ### 安全运营 WebUI
 
-- **告警工作台** — 浏览、过滤告警任务，手动触发 Agent 处置，查看完整执行链路追踪
-- **Agent 对话** — 自由文本指令界面，向主 Agent 发送人工指令，支持流式响应输出
-- **配置中心** — 统一配置页面，涵盖 LLM 凭据、告警源连接、解析规则、轮询参数、自动执行开关——所有配置实时持久化，无需重启服务
+- **总览仪表盘** — 统一展示运行健康度、任务数量、Agent/Skill 可用性、研判分布、处置结果和最近平台动作
+- **告警工作台** — 浏览、过滤告警任务，手动触发 Agent 处置，查看告警上下文、审批状态和完整执行链路
+- **任务中心** — 以任务为中心查看队列状态、重试失败任务、处理待审批 Skill，并检查完整处置全流程
+- **对话指挥台** — 自由文本指令界面，支持多会话、流式响应、子 Agent 摘要和内联审批卡片
+- **配置中心** — 统一配置页面，涵盖 LLM 凭据、告警源连接、解析规则、轮询参数、失败重试间隔、自动执行开关——所有配置实时持久化，无需重启服务
 - **Skill 管理** — 创建、查看、编辑、删除 Skill；支持携带自定义参数进行在线调试执行
-- **Agent 管理** — 配置主 Agent 和子 Agent：提示词（默认/告警/指令/汇总 四种变体）、LLM 参数覆盖、Skill 权限
+- **Agent 管理** — 配置主 Agent 和子 Agent：提示词（默认/告警/指令/汇总 四种变体）、LLM 参数覆盖、Skill 权限和按模式分离的 Worker 委派权限
 - **Workflow 管理** — 创建、编辑 Agent Workflow；支持从 UI 直接发起测试运行
 
 ### 平台与架构
@@ -95,7 +102,7 @@
 - **FastAPI 后端** — 异步 Python 运行时，结构化 JSON API，uvicorn 服务器
 - **React + Vite 前端** — TypeScript、TailwindCSS、组件化架构
 - **统一开发入口** — `python scripts/dev.py dev` 一条命令启动全部服务
-- **源码优先的本地布局** — 运行时代码位于 `runtime/`，WebUI 位于 `webui/`，辅助脚本位于 `scripts/`，本地插件与运行时状态默认保存在 `runtime/.sentinelflow/`
+- **源码优先的本地布局** — 运行时代码位于 `runtime/`，WebUI 位于 `webui/`，辅助脚本位于 `scripts/`，本地插件与运行时状态默认保存在项目根 `.sentinelflow/`
 
 ## 架构总览
 
@@ -106,7 +113,8 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                   React WebUI (Vite + TS)                       │
 │  ┌──────────────┐  ┌─────────────────┐  ┌───────────────────┐   │
-│  │  告警管理面板  │  │  Agent 对话界面  │  │    配置管理中心    │   │
+│  │ 总览 / 告警 / │  │  对话台 + 审批   │  │ 插件与配置管理中心 │   │
+│  │   任务页面    │  │                  │  │                   │   │
 │  └──────────────┘  └─────────────────┘  └───────────────────┘   │
 └──────────────────────────┬──────────────────────────────────────┘
                            │  REST API（FastAPI）
@@ -155,6 +163,8 @@
 - **`AlertParserGenerator`** — 大模型辅助 + 启发式 JSON 告警字段映射规则生成器
 - **`SentinelFlowSkillRuntime`** — 管理 Skill 生命周期，将 Skill 适配为 LangChain 工具供 Agent 使用
 - **`AgentWorkflowRegistry`** — 列举和解析固定多步骤 Agent Workflow 定义
+- **`SkillApprovalService`** — 持久化审批记录与断点恢复状态，用于人机协同执行
+- **`AuditService`** — 记录分发、任务执行、审批处理和后台服务相关审计事件
 
 </details>
 
@@ -167,8 +177,8 @@
 ├── scripts/
 │   ├── dev.py                          # 统一本地开发入口
 │   └── serve_webui.py                  # 生产环境 WebUI 静态文件服务
+├── .sentinelflow/                      # 本地插件、runtime.json、SQLite 队列（运行时生成）
 ├── runtime/
-│   ├── .sentinelflow/                  # 本地插件、runtime.json、SQLite 队列（运行时生成）
 │   └── sentinelflow/
 │       ├── agent/
 │       │   ├── service.py              # 顶层 Agent 服务（编排核心逻辑）
@@ -259,7 +269,7 @@ sentinelflow backend
 
 ### 配置方式
 
-**推荐方式**：直接在 WebUI 的 **配置中心** 填写配置，所有参数默认实时持久化到 `runtime/.sentinelflow/runtime.json`，无需重启服务。
+**推荐方式**：直接在 WebUI 的 **配置中心** 填写配置，所有参数默认实时持久化到 `.sentinelflow/runtime.json`，无需重启服务。
 
 **备选方式**：将 `.env.example` 复制为 `.env` 并填写环境变量（所有参数均以 `SENTINELFLOW_` 为前缀）：
 
@@ -351,7 +361,7 @@ cp .env.example .env
 
 ### 5. 添加你的第一个 Skill（可选）
 
-在 `runtime/.sentinelflow/plugins/skills/`（默认源码树工作区）下创建目录并添加 `SKILL.md`，或直接在 WebUI 的 **Skill 管理** 面板中在线创建：
+在 `.sentinelflow/plugins/skills/`（默认本地工作区）下创建目录并添加 `SKILL.md`，或直接在 WebUI 的 **Skill 管理** 页面中在线创建：
 
 ```markdown
 ---
@@ -419,7 +429,7 @@ SentinelFlow 支持两种告警源模式，可在配置中心切换：
 <details>
 <summary><strong>如何定义一个子 Agent（Worker）？</strong></summary>
 
-在 `runtime/.sentinelflow/plugins/agents/`（默认源码树工作区）下创建目录，包含 `agent.yaml` 和可选的提示词文件，或直接使用 WebUI 的 **Agent 管理** 面板：
+在 `.sentinelflow/plugins/agents/`（默认本地工作区）下创建目录，包含 `agent.yaml` 和可选的提示词文件，或直接使用 WebUI 的 **Agent 管理** 页面：
 
 ```yaml
 # agent.yaml
@@ -447,7 +457,7 @@ worker_max_steps: 3
 <details>
 <summary><strong>自动执行模式是什么？</strong></summary>
 
-开启后（通过配置中心或 `SENTINELFLOW_AUTO_EXECUTE_ENABLED=true`），SentinelFlow 启动一个 asyncio 后台循环，持续拾取 `queued` 状态的任务并通过 Agent 流水线自动处置——无需任何人工干预。可随时在 UI 中停止。
+开启后（通过配置中心或 `SENTINELFLOW_AUTO_EXECUTE_ENABLED=true`），SentinelFlow 启动一个 asyncio 后台循环，持续拾取 `queued` 状态的任务并通过 Agent 流水线自动处置，无需任何人工干预。如果同时配置了失败重试间隔，满足条件的失败任务也会在延迟后被自动再次处置。可随时在 UI 中停止。
 
 </details>
 
@@ -461,21 +471,21 @@ WebUI 和告警接入流水线不依赖 LLM Key 即可正常运行。但 AI Agen
 <details>
 <summary><strong>项目数据存储在哪里？</strong></summary>
 
-- **Agent 定义**：默认位于 `runtime/.sentinelflow/plugins/agents/`
-- **Skill 插件**：默认位于 `runtime/.sentinelflow/plugins/skills/`
-- **Workflow 定义**：默认位于 `runtime/.sentinelflow/plugins/workflows/`
-- **运行时配置**（WebUI 持久化）：默认位于 `runtime/.sentinelflow/runtime.json`
-- **任务队列 / 审批记录**：`runtime/.sentinelflow/sys_queue.db`（SQLite）
+- **Agent 定义**：默认位于 `.sentinelflow/plugins/agents/`
+- **Skill 插件**：默认位于 `.sentinelflow/plugins/skills/`
+- **Workflow 定义**：默认位于 `.sentinelflow/plugins/workflows/`
+- **运行时配置**（WebUI 持久化）：默认位于 `.sentinelflow/runtime.json`
+- **任务队列 / 审批记录**：`.sentinelflow/sys_queue.db`（SQLite）
 - **环境变量默认值**：项目根目录 `.env`（可选）
 
-如果 SentinelFlow 运行在另一个已经提供项目根 `.sentinelflow/` 的平台工作区中，运行时会优先使用那个外部插件根目录；在普通源码仓库下，实际生效的本地工作区是 `runtime/.sentinelflow/`。
+当前项目布局下，实际生效的本地工作区就是项目根 `.sentinelflow/` 目录。
 
 </details>
 
 <details>
 <summary><strong>如何定义固定多步骤 Agent Workflow？</strong></summary>
 
-在 `runtime/.sentinelflow/plugins/workflows/<workflow-id>/`（默认源码树工作区）下创建 `workflow.json`，或使用 WebUI 的 **Workflow 管理** 面板。主 Agent 通过结构化 LLM 推理为来袭告警选择最优工作流，若无匹配则回退到自由 ReAct。
+在 `.sentinelflow/plugins/workflows/<workflow-id>/`（默认本地工作区）下创建 `workflow.json`，或使用 WebUI 的 **Workflow 管理** 页面。主 Agent 通过结构化 LLM 推理为来袭告警选择最优工作流，若无匹配则回退到自由 ReAct。
 
 ```json
 {
