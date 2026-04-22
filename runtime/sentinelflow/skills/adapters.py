@@ -46,4 +46,20 @@ class SentinelFlowSkillRuntime:
             arguments=arguments or {},
             context=context or {},
         )
-        return self.executor.execute(skill, request)
+        result = self.executor.execute(skill, request)
+        # Enforce the skill contract: data must be a dict so that downstream
+        # consumers (agent tools, evaluate_worker_result) can safely parse it
+        # as JSON. Non-dict results indicate a malformed skill implementation.
+        if result.success and not isinstance(result.data, dict):
+            return SkillExecutionResult(
+                success=False,
+                skill=name,
+                error=(
+                    f"Skill [{name}] returned a non-dict value "
+                    f"(got {type(result.data).__name__!r}). "
+                    "Skill entry must return a JSON-serialisable dict."
+                ),
+                data={"raw": result.data} if result.data is not None else {},
+            )
+        return result
+
