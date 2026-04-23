@@ -360,6 +360,10 @@
     @apply min-h-0 flex-1 overflow-y-auto;
   }
 
+  .sentinelflow-skill-list-scroll {
+    @apply min-h-0 flex-1 overflow-y-auto;
+  }
+
   .sentinelflow-task-list-scroll {
     @apply min-h-0 flex-1 overflow-y-auto;
   }

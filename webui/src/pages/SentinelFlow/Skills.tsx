@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { BookOpen, RefreshCw, Search, Sparkles } from 'lucide-react'
 import { createSkill, debugSkill, deleteSkill, fetchSkillDetail, fetchSkills, saveSkill, type SkillDebugResponse, type SkillDetail, type SkillSummary } from '@/api/sentinelflow'
 import KeyValueList from '@/components/sentinelflow/KeyValueList'
@@ -17,6 +17,8 @@ function getSkillTypeLabel(type: string) {
 
 export default function SentinelFlowSkillsPage() {
   const { data, loading, error, reload } = useSentinelFlowAsyncData(fetchSkills, [])
+  const detailPanelRef = useRef<HTMLDivElement | null>(null)
+  const skillListPanelRef = useRef<HTMLDivElement | null>(null)
   const [selectedSkill, setSelectedSkill] = useState<SkillSummary | null>(null)
   const [detail, setDetail] = useState<SkillDetail | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
@@ -32,6 +34,8 @@ export default function SentinelFlowSkillsPage() {
   const [debugOutput, setDebugOutput] = useState<SkillDebugResponse | null>(null)
   const [debugError, setDebugError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
+  const [skillListPanelHeight, setSkillListPanelHeight] = useState<number | null>(null)
+  const [skillListMaxHeight, setSkillListMaxHeight] = useState<number | null>(null)
   const [draft, setDraft] = useState({
     name: '',
     description: '',
@@ -67,6 +71,39 @@ export default function SentinelFlowSkillsPage() {
       return haystack.includes(query)
     })
   }, [data?.skills, searchQuery])
+
+  useEffect(() => {
+    const detailNode = detailPanelRef.current
+    const listPanelNode = skillListPanelRef.current
+    if (!detailNode || !listPanelNode || typeof ResizeObserver === 'undefined') return
+
+    const syncHeight = () => {
+      try {
+        const detailHeight = Math.max(0, Math.round(detailNode.getBoundingClientRect().height))
+        const scrollNode = listPanelNode.querySelector('.sentinelflow-skill-list-scroll') as HTMLDivElement | null
+        const scrollHeight = scrollNode?.offsetHeight ?? 0
+        const chromeHeight = Math.max(0, Math.round(listPanelNode.offsetHeight - scrollHeight))
+        const nextHeight = Math.max(0, detailHeight - chromeHeight)
+        setSkillListPanelHeight(detailHeight || null)
+        setSkillListMaxHeight(nextHeight || null)
+      } catch {
+        setSkillListPanelHeight(null)
+        setSkillListMaxHeight(null)
+      }
+    }
+
+    try {
+      syncHeight()
+      const observer = new ResizeObserver(() => syncHeight())
+      observer.observe(detailNode)
+      observer.observe(listPanelNode)
+      return () => observer.disconnect()
+    } catch {
+      setSkillListPanelHeight(null)
+      setSkillListMaxHeight(null)
+      return
+    }
+  }, [detail, detailError, filteredSkills.length, loading, error])
 
   async function handleRefresh() {
     if (refreshing) return
@@ -381,26 +418,36 @@ export default function SentinelFlowSkillsPage() {
         </div>
 
         <div className="sentinelflow-grid-2">
-          <div className="sentinelflow-detail-panel">
-            <table className="sentinelflow-data-table">
-              <thead>
-                <tr><th>Skill</th><th>类型</th><th>是否可执行</th></tr>
-              </thead>
-              <tbody>
-                {loading ? <tr><td colSpan={3}>正在加载 Skills...</td></tr> : null}
-                {error ? <tr><td colSpan={3}>加载失败：{error}</td></tr> : null}
-                {!loading && !error ? filteredSkills.map((skill) => (
-                  <tr key={skill.name} className={selectedSkill?.name === skill.name ? 'sentinelflow-table-row-active' : ''} onClick={() => setSelectedSkill(skill)}>
-                    <td>{skill.name}</td>
-                    <td>{getSkillTypeLabel(skill.type)}</td>
-                    <td>{skill.executable ? '是' : '否'}</td>
-                  </tr>
-                )) : null}
-                {!loading && !error && filteredSkills.length === 0 ? <tr><td colSpan={3}>没有匹配的 Skill。</td></tr> : null}
-              </tbody>
-            </table>
+          <div
+            ref={skillListPanelRef}
+            className="sentinelflow-detail-panel h-auto overflow-hidden"
+            style={skillListPanelHeight ? { height: `${skillListPanelHeight}px` } : undefined}
+          >
+            <h3>可用 Skills</h3>
+            <div
+              className="sentinelflow-skill-list-scroll"
+              style={skillListMaxHeight ? { maxHeight: `${skillListMaxHeight}px` } : undefined}
+            >
+              <table className="sentinelflow-data-table">
+                <thead>
+                  <tr><th>Skill</th><th>类型</th><th>是否可执行</th></tr>
+                </thead>
+                <tbody>
+                  {loading ? <tr><td colSpan={3}>正在加载 Skills...</td></tr> : null}
+                  {error ? <tr><td colSpan={3}>加载失败：{error}</td></tr> : null}
+                  {!loading && !error ? filteredSkills.map((skill) => (
+                    <tr key={skill.name} className={selectedSkill?.name === skill.name ? 'sentinelflow-table-row-active' : ''} onClick={() => setSelectedSkill(skill)}>
+                      <td>{skill.name}</td>
+                      <td>{getSkillTypeLabel(skill.type)}</td>
+                      <td>{skill.executable ? '是' : '否'}</td>
+                    </tr>
+                  )) : null}
+                  {!loading && !error && filteredSkills.length === 0 ? <tr><td colSpan={3}>没有匹配的 Skill。</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
           </div>
-          <div className="sentinelflow-detail-panel">
+          <div ref={detailPanelRef} className="sentinelflow-detail-panel h-auto self-start">
             <h3>{detail?.name ?? 'Skill 详情'}</h3>
             <p className="sentinelflow-muted-text">{detail?.description ?? '选择一个 Skill 查看说明文档。'}</p>
             {detail ? (
