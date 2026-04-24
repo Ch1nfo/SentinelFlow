@@ -514,8 +514,7 @@ export default function SentinelFlowAlertsPage() {
                   <div className="sentinelflow-context-card"><strong>告警名称</strong><span>{String(selectedPayload.alert_name ?? selectedTask.title ?? '未提供')}</span></div>
                   <div className="sentinelflow-context-card"><strong>告警时间</strong><span>{formatAlertTime(selectedTask.alert_time)}</span></div>
                   <div className="sentinelflow-context-card"><strong>事件号</strong><span>{selectedTask.event_ids || '未提供'}</span></div>
-                  <div className="sentinelflow-context-card"><strong>来源</strong><span>{String(selectedPayload.alert_source_name ?? selectedTask.source_name ?? selectedPayload.alert_source ?? '未提供')}</span></div>
-                  <div className="sentinelflow-context-card"><strong>来源 ID</strong><span>{String(selectedPayload.alert_source_id ?? selectedTask.source_id ?? 'default')}</span></div>
+                  <div className="sentinelflow-context-card"><strong>来源</strong><span>{String(selectedPayload.alert_source ?? '未提供')}</span></div>
                   <div className="sentinelflow-context-card"><strong>源 IP</strong><span>{String(selectedPayload.sip ?? '未提供')}</span></div>
                   <div className="sentinelflow-context-card"><strong>目的 IP</strong><span title={dipPreview.fullText}>{dipPreview.text}</span></div>
                   <div className="sentinelflow-context-card"><strong>当前研判</strong><span>{String(selectedPayload.current_judgment ?? '未提供')}</span></div>
