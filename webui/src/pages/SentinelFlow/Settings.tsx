@@ -221,6 +221,8 @@ export default function SentinelFlowSettingsPage() {
   const fetchPreviewLines = fetchPreviewStr.split('\n')
   const isLongPreview = fetchPreviewLines.length > 20
   const isScriptMode = draft.alertSourceType === 'script'
+  const selectedSourceIndex = Math.max(0, draft.alertSources.findIndex((source) => source.id === draft.selectedSourceId))
+  const canEditSourceAnalysisPrompt = selectedSourceIndex > 0
 
   function handleImportRuleFromFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
@@ -620,7 +622,16 @@ export default function SentinelFlowSettingsPage() {
           <div className="sentinelflow-settings-form">
             <label className="sentinelflow-settings-field"><span>告警轮询间隔（秒）</span><input className="sentinelflow-settings-input" value={draft.pollIntervalSeconds} onChange={(event) => updateDraft('pollIntervalSeconds', event.target.value)} /></label>
             <label className="sentinelflow-settings-field"><span>处置失败重试间隔（秒）</span><input className="sentinelflow-settings-input" value={draft.failedRetryIntervalSeconds} onChange={(event) => updateDraft('failedRetryIntervalSeconds', event.target.value)} placeholder="0 表示关闭自动重试" /></label>
-            <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>当前源专属告警分析 Prompt</span><textarea className="sentinelflow-settings-input min-h-[140px]" value={draft.alertSourceAnalysisPrompt} onChange={(event) => updateDraft('alertSourceAnalysisPrompt', event.target.value)} placeholder="多告警源时，第二个及后续来源会优先使用这里的主 Agent 告警分析 Prompt。" /></label>
+            {canEditSourceAnalysisPrompt ? (
+              <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>当前源专属告警分析 Prompt</span><textarea className="sentinelflow-settings-input min-h-[140px]" value={draft.alertSourceAnalysisPrompt} onChange={(event) => updateDraft('alertSourceAnalysisPrompt', event.target.value)} placeholder="当前告警源会优先使用这里的主 Agent 告警分析 Prompt。" /></label>
+            ) : (
+              <div className="sentinelflow-settings-field sentinelflow-settings-field-full">
+                <span>当前源专属告警分析 Prompt</span>
+                <div className="sentinelflow-message-block">
+                  第一个告警源使用 Agents 页面里主 Agent 的告警分析 Prompt；新增的第二个及后续告警源可在这里配置独立 Prompt。
+                </div>
+              </div>
+            )}
             <label className="sentinelflow-settings-field"><span>接入方式</span><select className="sentinelflow-settings-input" value={draft.alertSourceType} onChange={(event) => updateDraft('alertSourceType', event.target.value)}><option value="api">接口接入</option><option value="script">脚本接入</option></select></label>
             {!isScriptMode ? (
               <>
