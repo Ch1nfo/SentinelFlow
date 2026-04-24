@@ -38,7 +38,7 @@ def __getattr__(name: str):
         "skill_runtime", "audit_service", "agent_service",
         "triage_service", "agent_workflow_runner", "task_runner_service",
         "dispatch_service", "polling_service", "alert_parser_generator",
-        "auto_execution_service", "skill_approval_service",
+        "auto_execution_service", "weekly_alert_cleanup_service", "skill_approval_service",
     }
     if name in _EXPORTED:
         import sentinelflow.api.app as _app

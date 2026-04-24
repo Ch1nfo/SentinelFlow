@@ -29,6 +29,7 @@ type SettingsDraft = {
   llmModel: string
   llmTemperature: string
   llmTimeout: string
+  weeklyAlertCleanupEnabled: boolean
   alertSourceEnabled: boolean
   alertSourceType: string
   alertSourceUrl: string
@@ -150,6 +151,7 @@ function buildDraft(settings: RuntimeSettingsResponse): SettingsDraft {
     llmModel: settings.llm.model,
     llmTemperature: String(settings.llm.temperature),
     llmTimeout: String(settings.llm.timeout),
+    weeklyAlertCleanupEnabled: settings.runtime.weekly_alert_cleanup_enabled,
     alertSourceEnabled: selectedSource.enabled,
     alertSourceType: selectedSource.type,
     alertSourceUrl: selectedSource.url,
@@ -187,6 +189,7 @@ export default function SentinelFlowSettingsPage() {
       llmModel: '',
       llmTemperature: '0',
       llmTimeout: '60',
+      weeklyAlertCleanupEnabled: false,
       alertSourceEnabled: false,
       alertSourceType: 'api',
       alertSourceUrl: '',
@@ -588,6 +591,10 @@ export default function SentinelFlowSettingsPage() {
           <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>LLM API Key</span><input type="password" className="sentinelflow-settings-input" value={draft.llmApiKey} onChange={(event) => updateDraft('llmApiKey', event.target.value)} placeholder={settings?.llm.api_key_configured ? '已配置，可重新填写覆盖' : ''} /></label>
           <label className="sentinelflow-settings-toggle"><input type="checkbox" checked={draft.agentEnabled} onChange={(event) => updateDraft('agentEnabled', event.target.checked)} /><span>启用 Agent Runtime</span></label>
           <label className="sentinelflow-settings-toggle"><input type="checkbox" checked={draft.alertSourceEnabled} onChange={(event) => updateDraft('alertSourceEnabled', event.target.checked)} /><span>启用告警接入</span></label>
+          <label className="sentinelflow-settings-toggle"><input type="checkbox" checked={draft.weeklyAlertCleanupEnabled} onChange={(event) => updateDraft('weeklyAlertCleanupEnabled', event.target.checked)} /><span>每周刷新告警</span></label>
+        </div>
+        <div className="mt-3 sentinelflow-message-block">
+          开启后，系统会在每周一 01:00 清理本周一 00:00 之前存储的告警；周一 00:00 到 01:00 的新告警会保留。
         </div>
         <div className="mt-6 rounded-2xl border border-gray-200 bg-gray-50 p-5">
           <div className="mb-4">

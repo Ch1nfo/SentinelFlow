@@ -25,6 +25,7 @@ from sentinelflow.services.dispatch_service import AlertDispatchService
 from sentinelflow.services.skill_approval_service import SkillApprovalService
 from sentinelflow.services.task_runner_service import AlertTaskRunnerService
 from sentinelflow.services.triage_service import TriageService
+from sentinelflow.services.weekly_alert_cleanup_service import WeeklyAlertCleanupService
 from sentinelflow.skills.adapters import SentinelFlowSkillRuntime
 from sentinelflow.workflows.agent_workflow_runner import SentinelFlowAgentWorkflowRunner
 
@@ -77,6 +78,10 @@ auto_execution_service = AlertAutoExecutionService(
     task_runner_service=task_runner_service,
     audit_service=audit_service,
 )
+weekly_alert_cleanup_service = WeeklyAlertCleanupService(
+    dispatch_service=dispatch_service,
+    audit_service=audit_service,
+)
 alert_parser_generator = AlertParserGenerator()
 
 
@@ -84,10 +89,12 @@ alert_parser_generator = AlertParserGenerator()
 async def lifespan(_app: FastAPI):
     await polling_service.start()
     await auto_execution_service.start()
+    await weekly_alert_cleanup_service.start()
     auto_execution_service.apply_persisted_state()
     try:
         yield
     finally:
+        await weekly_alert_cleanup_service.stop()
         await auto_execution_service.stop()
         await polling_service.stop()
 

@@ -76,6 +76,7 @@ class SentinelFlowRuntimeConfig:
     llm_model: str
     llm_temperature: float
     llm_timeout: int
+    weekly_alert_cleanup_enabled: bool
     alert_source_enabled: bool
     alert_source_type: str
     alert_source_url: str
@@ -105,6 +106,7 @@ def _default_values() -> dict[str, Any]:
         "llm_model": os.getenv("SENTINELFLOW_LLM_MODEL", "").strip(),
         "llm_temperature": float(os.getenv("SENTINELFLOW_LLM_TEMPERATURE", "0")),
         "llm_timeout": int(os.getenv("SENTINELFLOW_LLM_TIMEOUT", "60")),
+        "weekly_alert_cleanup_enabled": _read_env_bool("SENTINELFLOW_WEEKLY_ALERT_CLEANUP_ENABLED", False),
         "alert_source_enabled": _read_env_bool("SENTINELFLOW_ALERT_SOURCE_ENABLED", False),
         "alert_source_type": os.getenv("SENTINELFLOW_ALERT_SOURCE_TYPE", "api").strip().lower() or "api",
         "alert_source_url": os.getenv("SENTINELFLOW_ALERT_SOURCE_URL", "").strip(),
@@ -219,6 +221,7 @@ def _normalize_config(values: dict[str, Any]) -> SentinelFlowRuntimeConfig:
         llm_model=str(values.get("llm_model", "")).strip(),
         llm_temperature=float(values.get("llm_temperature", 0)),
         llm_timeout=int(values.get("llm_timeout", 60)),
+        weekly_alert_cleanup_enabled=_read_bool_value(values.get("weekly_alert_cleanup_enabled"), False),
         alert_source_enabled=primary_source.alert_source_enabled,
         alert_source_type=primary_source.alert_source_type,
         alert_source_url=primary_source.alert_source_url,

@@ -28,6 +28,7 @@ class RuntimeConfigRequest(BaseModel):
     llm_model: str | None = Field(default=None, alias="llmModel")
     llm_temperature: float | None = Field(default=None, alias="llmTemperature")
     llm_timeout: int | None = Field(default=None, alias="llmTimeout")
+    weekly_alert_cleanup_enabled: bool | None = Field(default=None, alias="weeklyAlertCleanupEnabled")
     alert_source_enabled: bool | None = Field(default=None, alias="alertSourceEnabled")
     alert_source_type: str | None = Field(default=None, alias="alertSourceType")
     alert_source_url: str | None = Field(default=None, alias="alertSourceUrl")
@@ -56,6 +57,7 @@ class RuntimeConfigRequest(BaseModel):
             "llm_model": self.llm_model,
             "llm_temperature": self.llm_temperature,
             "llm_timeout": self.llm_timeout,
+            "weekly_alert_cleanup_enabled": self.weekly_alert_cleanup_enabled,
             "alert_source_enabled": self.alert_source_enabled,
             "alert_source_type": self.alert_source_type,
             "alert_source_url": self.alert_source_url,

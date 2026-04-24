@@ -17,6 +17,22 @@ DB_PATH = CONFIG_DIR / "sys_queue.db"
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
+def _parse_task_datetime(value: str, default_tz) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    if "T" not in normalized and " " in normalized:
+        normalized = normalized.replace(" ", "T", 1)
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=default_tz or timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
 class AlertDispatchService:
     """Dispatches fresh alerts into queued SentinelFlow handling tasks (SQLite backed)."""
 
@@ -507,6 +523,35 @@ class AlertDispatchService:
             self.dedup.forget(key)
             
         return len(removed_keys)
+
+    def delete_tasks_before(self, cutoff: datetime) -> int:
+        default_tz = cutoff.tzinfo or timezone.utc
+        cutoff_utc = cutoff.astimezone(timezone.utc) if cutoff.tzinfo else cutoff.replace(tzinfo=timezone.utc)
+        removed_keys: list[str] = []
+        removed_task_ids: list[str] = []
+        for task in self.list_tasks():
+            candidate_time = _parse_task_datetime(task.alert_time, default_tz) or _parse_task_datetime(task.updated_at, default_tz)
+            if candidate_time is None or candidate_time >= cutoff_utc:
+                continue
+            removed_task_ids.append(task.task_id)
+            removed_keys.append(f"{task.source_id}:{task.event_ids}")
+
+        if not removed_task_ids:
+            return 0
+
+        with self.lock, sqlite_transaction(DB_PATH, begin_mode="IMMEDIATE") as conn:
+            for task_id in removed_task_ids:
+                conn.execute("DELETE FROM alert_tasks WHERE task_id = ?", (task_id,))
+
+        for key in removed_keys:
+            self.dedup.forget(key)
+
+        self.audit_service.record(
+            "weekly_alert_cleanup",
+            f"Deleted {len(removed_task_ids)} alert tasks before {cutoff_utc.isoformat()}.",
+            {"count": len(removed_task_ids), "cutoff": cutoff_utc.isoformat()},
+        )
+        return len(removed_task_ids)
 
     def get_task(self, task_id: str) -> AlertHandlingTask | None:
         with self.lock, self._get_conn() as conn:

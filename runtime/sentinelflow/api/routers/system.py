@@ -75,6 +75,7 @@ def runtime_settings() -> dict[str, Any]:
             "workflow_engine": branding.workflow_engine_label,
             "agent_enabled": runtime_config.agent_enabled,
             "auto_execute_enabled": runtime_config.auto_execute_enabled,
+            "weekly_alert_cleanup_enabled": runtime_config.weekly_alert_cleanup_enabled,
         },
         "llm": {
             "api_base_url": runtime_config.llm_api_base_url,

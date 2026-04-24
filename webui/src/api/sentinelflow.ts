@@ -209,6 +209,7 @@ export type RuntimeSettingsResponse = {
     workflow_engine: string
     agent_enabled: boolean
     auto_execute_enabled: boolean
+    weekly_alert_cleanup_enabled: boolean
   }
   llm: {
     api_base_url: string
@@ -801,6 +802,7 @@ export async function saveRuntimeSettings(payload: {
   llmModel: string
   llmTemperature: string
   llmTimeout: string
+  weeklyAlertCleanupEnabled: boolean
   alertSourceEnabled?: boolean
   alertSourceType?: string
   alertSourceUrl?: string
