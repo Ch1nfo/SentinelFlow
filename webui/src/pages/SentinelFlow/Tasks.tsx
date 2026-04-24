@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Clock, ListTodo, RotateCcw, ShieldCheck, XCircle } from 'lucide-react'
 import {
   decideApproval,
-  fetchPollAlerts,
+  fetchAllPollAlerts,
   fetchRuntimeSettings,
   handleAlertAction,
   type AlertTask,
@@ -278,7 +278,7 @@ function ProcessTrace({ trace, traceOwnerId }: { trace: ExecutionTraceItem[]; tr
 }
 
 export default function SentinelFlowTasksPage() {
-  const { data: poll, loading, error, reload: reloadPoll, setData: setPollData } = useSentinelFlowAsyncData(fetchPollAlerts, [])
+  const { data: poll, loading, error, reload: reloadPoll, setData: setPollData } = useSentinelFlowAsyncData(fetchAllPollAlerts, [])
   const { data: settings } = useSentinelFlowAsyncData(fetchRuntimeSettings, [])
   const [activity, setActivity] = useState<RuntimeActivity | null>(() => readRuntimeActivity())
   const [runningAction, setRunningAction] = useState('')
@@ -368,7 +368,7 @@ export default function SentinelFlowTasksPage() {
   }, [selectedTaskId, processExpanded, filteredTasks.length, selectedTask?.task_id, selectedTask?.status])
 
   const refreshTasks = useCallback(() => {
-    void fetchPollAlerts().then((next) => {
+    void fetchAllPollAlerts().then((next) => {
       setPollData(next)
     })
   }, [setPollData])
@@ -381,7 +381,7 @@ export default function SentinelFlowTasksPage() {
     const action = autoExecuteEnabled ? 'auto_execute_stop' : 'auto_execute_start'
     setRunningAction(action)
     try {
-      const result = await handleAlertAction(action)
+      const result = await handleAlertAction(action, undefined, undefined, 'all')
       const next: RuntimeActivity = {
         type: 'alert_action',
         title: autoExecuteEnabled ? '停止自动执行' : '开始自动执行',

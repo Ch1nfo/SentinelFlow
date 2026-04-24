@@ -473,6 +473,10 @@ export async function fetchPollAlerts(sourceId?: string): Promise<PollAlertsResp
   return getJson(`/api/sentinelflow/alerts/state${suffix}`)
 }
 
+export async function fetchAllPollAlerts(): Promise<PollAlertsResponse> {
+  return fetchPollAlerts('all')
+}
+
 export async function handleAlertAction(action: string, task?: AlertTask, alert?: Record<string, unknown>, sourceId?: string) {
   return postJson<AlertActionResponse>('/api/sentinelflow/alerts/handle', { action, task, alert, sourceId })
 }
