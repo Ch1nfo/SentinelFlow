@@ -7,6 +7,7 @@ import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / ".sentinelflow"
@@ -14,6 +15,7 @@ CONFIG_PATH = CONFIG_DIR / "runtime.json"
 ALERT_SOURCE_SCRIPT_DIR = CONFIG_DIR / "alert_sources"
 ALERT_SOURCE_SCRIPT_PATH = ALERT_SOURCE_SCRIPT_DIR / "custom_fetch.py"
 _CONFIG_LOCK = threading.Lock()
+DEFAULT_ALERT_SOURCE_ID = "default"
 
 
 def _read_bool_value(value: Any, default: bool = False) -> bool:
@@ -31,6 +33,36 @@ def _read_env_bool(name: str, default: bool = False) -> bool:
 def _normalize_alert_source_type(value: Any) -> str:
     normalized = str(value or "api").strip().lower()
     return normalized if normalized in {"api", "script"} else "api"
+
+
+@dataclass(frozen=True, slots=True)
+class AlertSourceConfig:
+    id: str
+    name: str
+    alert_source_enabled: bool
+    alert_source_type: str
+    alert_source_url: str
+    alert_source_method: str
+    alert_source_headers: str
+    alert_source_query: str
+    alert_source_body: str
+    alert_source_timeout: int
+    alert_source_sample_payload: str
+    alert_parser_rule: dict[str, Any]
+    alert_script_code: str
+    alert_script_timeout: int
+    auto_execute_enabled: bool
+    poll_interval_seconds: int
+    failed_retry_interval_seconds: int
+    analysis_prompt: str = ""
+
+    @property
+    def enabled(self) -> bool:
+        return self.alert_source_enabled
+
+    @property
+    def type(self) -> str:
+        return self.alert_source_type
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +91,7 @@ class SentinelFlowRuntimeConfig:
     auto_execute_enabled: bool
     poll_interval_seconds: int
     failed_retry_interval_seconds: int
+    alert_sources: list[AlertSourceConfig]
 
 
 def _default_values() -> dict[str, Any]:
@@ -87,10 +120,95 @@ def _default_values() -> dict[str, Any]:
         "auto_execute_enabled": _read_env_bool("SENTINELFLOW_AUTO_EXECUTE_ENABLED", False),
         "poll_interval_seconds": int(os.getenv("SENTINELFLOW_POLL_INTERVAL_SECONDS", "60")),
         "failed_retry_interval_seconds": int(os.getenv("SENTINELFLOW_FAILED_RETRY_INTERVAL_SECONDS", "0")),
+        "alert_sources": [],
     }
 
 
+def _value_from_any(values: dict[str, Any], *keys: str, default: Any = None) -> Any:
+    for key in keys:
+        if key in values:
+            return values[key]
+    return default
+
+
+def _normalize_alert_source(values: dict[str, Any], index: int = 0) -> AlertSourceConfig:
+    source_id = str(_value_from_any(values, "id", "source_id", "sourceId", default="")).strip()
+    if not source_id:
+        source_id = DEFAULT_ALERT_SOURCE_ID if index == 0 else f"source-{uuid4().hex[:8]}"
+    name = str(_value_from_any(values, "name", "source_name", "sourceName", default="")).strip()
+    if not name:
+        name = "默认告警源" if index == 0 else f"告警源 {index + 1}"
+    return AlertSourceConfig(
+        id=source_id,
+        name=name,
+        alert_source_enabled=_read_bool_value(_value_from_any(values, "alert_source_enabled", "enabled", default=False), False),
+        alert_source_type=_normalize_alert_source_type(_value_from_any(values, "alert_source_type", "type", default="api")),
+        alert_source_url=str(_value_from_any(values, "alert_source_url", "url", default="")).strip(),
+        alert_source_method=str(_value_from_any(values, "alert_source_method", "method", default="GET")).strip().upper() or "GET",
+        alert_source_headers=str(_value_from_any(values, "alert_source_headers", "headers", default="")).strip(),
+        alert_source_query=str(_value_from_any(values, "alert_source_query", "query", default="")).strip(),
+        alert_source_body=str(_value_from_any(values, "alert_source_body", "body", default="")).strip(),
+        alert_source_timeout=int(_value_from_any(values, "alert_source_timeout", "timeout", default=15) or 15),
+        alert_source_sample_payload=str(_value_from_any(values, "alert_source_sample_payload", "sample_payload", "samplePayload", default="")).strip(),
+        alert_parser_rule=(
+            _value_from_any(values, "alert_parser_rule", "parser_rule", "parserRule", default={})
+            if isinstance(_value_from_any(values, "alert_parser_rule", "parser_rule", "parserRule", default={}), dict)
+            else {}
+        ),
+        alert_script_code=str(_value_from_any(values, "alert_script_code", "script_code", "scriptCode", default="")),
+        alert_script_timeout=int(_value_from_any(values, "alert_script_timeout", "script_timeout", "scriptTimeout", default=30) or 30),
+        auto_execute_enabled=_read_bool_value(_value_from_any(values, "auto_execute_enabled", "autoExecuteEnabled", default=False), False),
+        poll_interval_seconds=max(int(_value_from_any(values, "poll_interval_seconds", "pollIntervalSeconds", default=60) or 0), 0),
+        failed_retry_interval_seconds=max(int(_value_from_any(values, "failed_retry_interval_seconds", "failedRetryIntervalSeconds", default=0) or 0), 0),
+        analysis_prompt=str(_value_from_any(values, "analysis_prompt", "analysisPrompt", default="")),
+    )
+
+
+def _legacy_source_values(values: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": DEFAULT_ALERT_SOURCE_ID,
+        "name": "默认告警源",
+        "alert_source_enabled": values.get("alert_source_enabled"),
+        "alert_source_type": values.get("alert_source_type"),
+        "alert_source_url": values.get("alert_source_url"),
+        "alert_source_method": values.get("alert_source_method"),
+        "alert_source_headers": values.get("alert_source_headers"),
+        "alert_source_query": values.get("alert_source_query"),
+        "alert_source_body": values.get("alert_source_body"),
+        "alert_source_timeout": values.get("alert_source_timeout"),
+        "alert_source_sample_payload": values.get("alert_source_sample_payload"),
+        "alert_parser_rule": values.get("alert_parser_rule"),
+        "alert_script_code": values.get("alert_script_code"),
+        "alert_script_timeout": values.get("alert_script_timeout"),
+        "auto_execute_enabled": values.get("auto_execute_enabled"),
+        "poll_interval_seconds": values.get("poll_interval_seconds"),
+        "failed_retry_interval_seconds": values.get("failed_retry_interval_seconds"),
+        "analysis_prompt": "",
+    }
+
+
+def _normalize_alert_sources(values: dict[str, Any]) -> list[AlertSourceConfig]:
+    raw_sources = values.get("alert_sources")
+    sources: list[AlertSourceConfig] = []
+    if isinstance(raw_sources, list):
+        seen: set[str] = set()
+        for index, item in enumerate(raw_sources):
+            if not isinstance(item, dict):
+                continue
+            source = _normalize_alert_source(item, index)
+            source_id = source.id
+            if source_id in seen:
+                source = _normalize_alert_source({**asdict(source), "id": f"{source_id}-{uuid4().hex[:6]}"}, index)
+            seen.add(source.id)
+            sources.append(source)
+    if sources:
+        return sources
+    return [_normalize_alert_source(_legacy_source_values(values), 0)]
+
+
 def _normalize_config(values: dict[str, Any]) -> SentinelFlowRuntimeConfig:
+    alert_sources = _normalize_alert_sources(values)
+    primary_source = alert_sources[0]
     return SentinelFlowRuntimeConfig(
         demo_mode=_read_bool_value(values.get("demo_mode"), False),
         demo_fallback=_read_bool_value(values.get("demo_fallback"), True),
@@ -101,21 +219,22 @@ def _normalize_config(values: dict[str, Any]) -> SentinelFlowRuntimeConfig:
         llm_model=str(values.get("llm_model", "")).strip(),
         llm_temperature=float(values.get("llm_temperature", 0)),
         llm_timeout=int(values.get("llm_timeout", 60)),
-        alert_source_enabled=_read_bool_value(values.get("alert_source_enabled"), False),
-        alert_source_type=_normalize_alert_source_type(values.get("alert_source_type", "api")),
-        alert_source_url=str(values.get("alert_source_url", "")).strip(),
-        alert_source_method=str(values.get("alert_source_method", "GET")).strip().upper() or "GET",
-        alert_source_headers=str(values.get("alert_source_headers", "")).strip(),
-        alert_source_query=str(values.get("alert_source_query", "")).strip(),
-        alert_source_body=str(values.get("alert_source_body", "")).strip(),
-        alert_source_timeout=int(values.get("alert_source_timeout", 15)),
-        alert_source_sample_payload=str(values.get("alert_source_sample_payload", "")).strip(),
-        alert_parser_rule=values.get("alert_parser_rule", {}) if isinstance(values.get("alert_parser_rule", {}), dict) else {},
-        alert_script_code=str(values.get("alert_script_code", "")),
-        alert_script_timeout=int(values.get("alert_script_timeout", 30)),
-        auto_execute_enabled=_read_bool_value(values.get("auto_execute_enabled"), False),
-        poll_interval_seconds=int(values.get("poll_interval_seconds", 60)),
-        failed_retry_interval_seconds=max(int(values.get("failed_retry_interval_seconds", 0)), 0),
+        alert_source_enabled=primary_source.alert_source_enabled,
+        alert_source_type=primary_source.alert_source_type,
+        alert_source_url=primary_source.alert_source_url,
+        alert_source_method=primary_source.alert_source_method,
+        alert_source_headers=primary_source.alert_source_headers,
+        alert_source_query=primary_source.alert_source_query,
+        alert_source_body=primary_source.alert_source_body,
+        alert_source_timeout=primary_source.alert_source_timeout,
+        alert_source_sample_payload=primary_source.alert_source_sample_payload,
+        alert_parser_rule=primary_source.alert_parser_rule,
+        alert_script_code=primary_source.alert_script_code,
+        alert_script_timeout=primary_source.alert_script_timeout,
+        auto_execute_enabled=primary_source.auto_execute_enabled,
+        poll_interval_seconds=primary_source.poll_interval_seconds,
+        failed_retry_interval_seconds=primary_source.failed_retry_interval_seconds,
+        alert_sources=alert_sources,
     )
 
 

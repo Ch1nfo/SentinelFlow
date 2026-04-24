@@ -92,6 +92,8 @@ export type AlertTask = {
   workflow_name: string
   title: string
   description: string
+  source_id?: string
+  source_name?: string
   alert_time?: string
   status: AlertTaskStatus | string
   retry_count: number
@@ -103,6 +105,13 @@ export type AlertTask = {
 }
 
 export type PollAlertsResponse = {
+  source_id?: string
+  alert_sources?: Array<{
+    id: string
+    name: string
+    enabled: boolean
+    auto_execute_enabled: boolean
+  }>
   fetched_count: number
   queued_count: number
   updated_count: number
@@ -213,6 +222,8 @@ export type RuntimeSettingsResponse = {
     agent_unavailable_reason: string
   }
   alert_source: {
+    id: string
+    name: string
     enabled: boolean
     type: string
     url: string
@@ -226,7 +237,13 @@ export type RuntimeSettingsResponse = {
     parser_configured: boolean
     script_code: string
     script_timeout: number
+    auto_execute_enabled: boolean
+    poll_interval_seconds: string
+    failed_retry_interval_seconds: string
+    analysis_prompt: string
   }
+  alert_sources: AlertSourceSettings[]
+  default_alert_source_id: string
   features: {
     natural_language_dispatch: boolean
     alert_polling: boolean
@@ -235,6 +252,28 @@ export type RuntimeSettingsResponse = {
     agent_runtime: boolean
   }
   persisted_overrides: Record<string, unknown>
+}
+
+export type AlertSourceSettings = {
+  id: string
+  name: string
+  enabled: boolean
+  type: string
+  url: string
+  method: string
+  headers: string
+  query: string
+  body: string
+  timeout: number
+  sample_payload: string
+  parser_rule: Record<string, unknown>
+  parser_configured: boolean
+  script_code: string
+  script_timeout: number
+  auto_execute_enabled: boolean
+  poll_interval_seconds: string
+  failed_retry_interval_seconds: string
+  analysis_prompt: string
 }
 
 export type AlertSourceFetchResponse = {
@@ -429,12 +468,13 @@ export async function fetchDashboardSummary(): Promise<DashboardSummaryResponse>
   return getJson('/api/sentinelflow/dashboard/summary')
 }
 
-export async function fetchPollAlerts(): Promise<PollAlertsResponse> {
-  return getJson('/api/sentinelflow/alerts/state')
+export async function fetchPollAlerts(sourceId?: string): Promise<PollAlertsResponse> {
+  const suffix = sourceId ? `?sourceId=${encodeURIComponent(sourceId)}` : ''
+  return getJson(`/api/sentinelflow/alerts/state${suffix}`)
 }
 
-export async function handleAlertAction(action: string, task?: AlertTask, alert?: Record<string, unknown>) {
-  return postJson<AlertActionResponse>('/api/sentinelflow/alerts/handle', { action, task, alert })
+export async function handleAlertAction(action: string, task?: AlertTask, alert?: Record<string, unknown>, sourceId?: string) {
+  return postJson<AlertActionResponse>('/api/sentinelflow/alerts/handle', { action, task, alert, sourceId })
 }
 
 export async function fetchSkills(): Promise<{ skills: SkillSummary[] }> {
@@ -769,6 +809,7 @@ export async function saveRuntimeSettings(payload: {
   alertParserRule?: Record<string, unknown>
   alertScriptCode?: string
   alertScriptTimeout?: string
+  alertSources?: Array<Record<string, unknown>>
 }) {
   return postJson<RuntimeSettingsResponse>('/api/sentinelflow/runtime/settings', payload)
 }

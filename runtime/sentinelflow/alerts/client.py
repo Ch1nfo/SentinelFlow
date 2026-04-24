@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from typing import Any
@@ -12,8 +13,9 @@ import urllib3
 from sentinelflow.alerts.parser_runtime import AlertParserRuntime, parse_jsonish
 from sentinelflow.config.runtime import (
     ALERT_SOURCE_SCRIPT_DIR,
-    ALERT_SOURCE_SCRIPT_PATH,
+    DEFAULT_ALERT_SOURCE_ID,
     PROJECT_ROOT,
+    AlertSourceConfig,
     SentinelFlowRuntimeConfig,
     load_runtime_config,
 )
@@ -172,57 +174,95 @@ class SOCAlertApiClient:
         self.timeout = timeout
         self.parser_runtime = AlertParserRuntime()
 
-    def fetch_open_alerts(self) -> dict[str, Any]:
+    def _default_source(self, runtime: Any) -> Any:
+        sources = getattr(runtime, "alert_sources", None)
+        if isinstance(sources, list) and sources:
+            return sources[0]
+        return runtime
+
+    def _source_name(self, source: Any) -> str:
+        return str(getattr(source, "name", "") or "默认告警源").strip() or "默认告警源"
+
+    def _source_id(self, source: Any) -> str:
+        return str(getattr(source, "id", "") or DEFAULT_ALERT_SOURCE_ID).strip() or DEFAULT_ALERT_SOURCE_ID
+
+    def _attach_source_metadata(self, result: dict[str, Any], source: Any) -> dict[str, Any]:
+        source_id = self._source_id(source)
+        source_name = self._source_name(source)
+        alerts = result.get("alerts")
+        if isinstance(alerts, list):
+            for alert in alerts:
+                if not isinstance(alert, dict):
+                    continue
+                alert["alert_source_id"] = source_id
+                alert["alert_source_name"] = source_name
+                if not str(alert.get("alert_source", "")).strip():
+                    alert["alert_source"] = source_name
+        result["source_id"] = source_id
+        result["source_name"] = source_name
+        return result
+
+    def fetch_open_alerts(self, source: AlertSourceConfig | None = None) -> dict[str, Any]:
         config = load_runtime_config()
+        active_source = source or self._default_source(config)
         if config.demo_mode:
-            return self._demo_alerts()
-        if not config.alert_source_enabled:
+            return self._attach_source_metadata(self._demo_alerts(), active_source)
+        if not getattr(active_source, "alert_source_enabled", False):
             return {"error": "当前未启用告警接入配置。"}
-        if config.alert_source_type == "script":
-            fetched = self.fetch_script_alerts(config)
+        if getattr(active_source, "alert_source_type", "api") == "script":
+            fetched = self.fetch_script_alerts(active_source)
             if "error" in fetched:
                 if config.demo_fallback:
-                    return self._demo_alerts(error=str(fetched["error"]))
+                    return self._attach_source_metadata(self._demo_alerts(error=str(fetched["error"])), active_source)
                 return fetched
-            return fetched
+            return self._attach_source_metadata(fetched, active_source)
 
-        if not config.alert_source_url:
+        if not getattr(active_source, "alert_source_url", ""):
             return {"error": "当前未配置告警接入 URL。"}
-        if not config.alert_parser_rule:
+        if not getattr(active_source, "alert_parser_rule", {}):
             return {"error": "当前还没有保存告警解析规则。"}
 
-        fetched = self.fetch_raw_alert_payload(config)
+        try:
+            fetched = self.fetch_raw_alert_payload(active_source, config)
+        except TypeError:
+            fetched = self.fetch_raw_alert_payload(active_source)
         if "error" in fetched:
             if config.demo_fallback:
-                return self._demo_alerts(error=str(fetched["error"]))
+                return self._attach_source_metadata(self._demo_alerts(error=str(fetched["error"])), active_source)
             return fetched
-        parsed = self.parser_runtime.normalize(fetched.get("raw_payload"), config.alert_parser_rule)
+        parsed = self.parser_runtime.normalize(fetched.get("raw_payload"), getattr(active_source, "alert_parser_rule", {}))
         if parsed.get("error"):
             return {
                 "error": parsed["error"],
                 "raw_payload": fetched.get("raw_payload"),
             }
         parsed_count = int(parsed.get("count", 0) or 0)
-        return {
+        result = {
             "count": parsed_count,
             "alerts": parsed.get("alerts", []),
             "raw_payload": fetched.get("raw_payload"),
             "snapshot_complete": _infer_snapshot_complete(fetched.get("raw_payload"), parsed_count),
         }
+        return self._attach_source_metadata(result, active_source)
 
-    def fetch_raw_alert_payload(self, config: SentinelFlowRuntimeConfig | None = None) -> dict[str, Any]:
-        runtime = config or load_runtime_config()
+    def fetch_raw_alert_payload(
+        self,
+        config: AlertSourceConfig | SentinelFlowRuntimeConfig | None = None,
+        runtime_config: SentinelFlowRuntimeConfig | None = None,
+    ) -> dict[str, Any]:
+        runtime = runtime_config or load_runtime_config()
+        source = config or self._default_source(runtime)
         if not runtime.verify_ssl:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        effective_timeout = self.timeout or runtime.alert_source_timeout
-        method = runtime.alert_source_method.strip().upper() or "GET"
-        query = _build_payload(runtime.alert_source_query)
-        body = _build_payload(runtime.alert_source_body)
-        headers = _build_headers(runtime.alert_source_headers)
+        effective_timeout = self.timeout or getattr(source, "alert_source_timeout", 15)
+        method = str(getattr(source, "alert_source_method", "GET")).strip().upper() or "GET"
+        query = _build_payload(getattr(source, "alert_source_query", ""))
+        body = _build_payload(getattr(source, "alert_source_body", ""))
+        headers = _build_headers(getattr(source, "alert_source_headers", ""))
         try:
             response = requests.request(
                 method,
-                runtime.alert_source_url,
+                getattr(source, "alert_source_url", ""),
                 params=query if isinstance(query, dict) else None,
                 json=body if isinstance(body, (dict, list)) else None,
                 data=body if isinstance(body, str) else None,
@@ -231,7 +271,7 @@ class SOCAlertApiClient:
                 verify=runtime.verify_ssl,
             )
         except requests.exceptions.Timeout:
-            return {"error": f"请求超时（>{effective_timeout}s）：{runtime.alert_source_url}"}
+            return {"error": f"请求超时（>{effective_timeout}s）：{getattr(source, 'alert_source_url', '')}"}
         except requests.exceptions.ConnectionError as exc:
             return {"error": f"网络连接失败：{exc}"}
         except requests.exceptions.RequestException as exc:
@@ -249,24 +289,26 @@ class SOCAlertApiClient:
     def preview_parse(self, raw_payload: Any, parser_rule: Any) -> dict[str, Any]:
         return self.parser_runtime.preview(raw_payload, parser_rule)
 
-    def fetch_script_alerts(self, config: SentinelFlowRuntimeConfig | None = None) -> dict[str, Any]:
-        runtime = config or load_runtime_config()
-        code = runtime.alert_script_code.strip()
+    def fetch_script_alerts(self, config: AlertSourceConfig | SentinelFlowRuntimeConfig | None = None) -> dict[str, Any]:
+        runtime = config or self._default_source(load_runtime_config())
+        code = str(getattr(runtime, "alert_script_code", "")).strip()
         if not code:
             return {"error": "当前未配置告警接入脚本。"}
 
         try:
             ALERT_SOURCE_SCRIPT_DIR.mkdir(parents=True, exist_ok=True)
-            ALERT_SOURCE_SCRIPT_PATH.write_text(code + ("" if code.endswith("\n") else "\n"), encoding="utf-8")
+            safe_source_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", self._source_id(runtime)) or DEFAULT_ALERT_SOURCE_ID
+            script_path = ALERT_SOURCE_SCRIPT_DIR / f"{safe_source_id}_custom_fetch.py"
+            script_path.write_text(code + ("" if code.endswith("\n") else "\n"), encoding="utf-8")
             completed = subprocess.run(
-                [sys.executable, str(ALERT_SOURCE_SCRIPT_PATH)],
+                [sys.executable, str(script_path)],
                 cwd=str(PROJECT_ROOT),
                 capture_output=True,
                 text=True,
-                timeout=self.timeout or runtime.alert_script_timeout,
+                timeout=self.timeout or getattr(runtime, "alert_script_timeout", 30),
             )
         except subprocess.TimeoutExpired:
-            return {"error": f"脚本执行超时（>{self.timeout or runtime.alert_script_timeout}s）。"}
+            return {"error": f"脚本执行超时（>{self.timeout or getattr(runtime, 'alert_script_timeout', 30)}s）。"}
         except OSError as exc:
             return {"error": f"脚本执行失败：{exc}"}
 

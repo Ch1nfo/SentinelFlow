@@ -264,6 +264,24 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             items.append(f"- name: {worker.name}\n  description: {worker.description or worker.name}")
         return "\n".join(items)
 
+    def _with_alert_source_prompt(self, primary_agent, alert: dict[str, Any]):
+        if primary_agent is None or getattr(primary_agent, "role", "") != "primary":
+            return primary_agent
+        if alert.get("alert_source") == "human_command":
+            return primary_agent
+        config = load_runtime_config()
+        sources = list(getattr(config, "alert_sources", []) or [])
+        if len(sources) <= 1:
+            return primary_agent
+        source_id = str(alert.get("alert_source_id", "")).strip()
+        source_index = next((index for index, source in enumerate(sources) if source.id == source_id), 0)
+        if source_index == 0:
+            return primary_agent
+        source_prompt = str(getattr(sources[source_index], "analysis_prompt", "")).strip()
+        if not source_prompt:
+            return primary_agent
+        return replace(primary_agent, prompt_alert=source_prompt)
+
     def _build_primary_prompt(self, primary_agent, appendix_template: str, workers: list) -> str:
         mode_map = {
             PRIMARY_COMMAND_ORCHESTRATION_APPENDIX: "primary_orchestrate_command",
@@ -1482,6 +1500,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         execution_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         agent_definition = resolve_default_agent(self.agent_root, agent_name)
+        agent_definition = self._with_alert_source_prompt(agent_definition, alert)
         workers = self._resolve_worker_candidates(agent_definition, entry_type="alert")
         if self._should_use_orchestrator(agent_definition, workers):
             return await self._orchestrate_alert(agent_definition, workers, alert, action_hint, cancel_event, status_callback=status_callback, execution_context=execution_context)

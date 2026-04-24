@@ -13,7 +13,7 @@ VISIBLE_RUNTIME_OVERRIDE_KEYS = {
     "alert_source_type", "alert_source_url", "alert_source_method",
     "alert_source_headers", "alert_source_query", "alert_source_body",
     "alert_source_timeout", "alert_source_sample_payload", "alert_parser_rule",
-    "alert_script_code", "alert_script_timeout",
+    "alert_script_code", "alert_script_timeout", "alert_sources",
 }
 
 
@@ -27,7 +27,8 @@ def _resolve_task(payload: AlertActionRequest):
             return task
     event_ids = str(payload.task.get("event_ids", "")).strip()
     if event_ids:
-        return dispatch_service.get_task_by_event_id(event_ids)
+        source_id = str(payload.task.get("source_id") or payload.task.get("sourceId") or "").strip()
+        return dispatch_service.get_task_by_event_id(event_ids, source_id=source_id or None)
     return None
 
 

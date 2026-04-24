@@ -20,6 +20,8 @@ class TriageService:
             workflow_name="agent_react",
             title=alert_name,
             description=f"Handle alert {event_ids} through workflow agent_react.",
+            source_id=str(alert.get("alert_source_id", "default")).strip() or "default",
+            source_name=str(alert.get("alert_source_name", "默认告警源")).strip() or "默认告警源",
             alert_time=str(alert.get("alert_time", "")).strip(),
             payload={"alert_data": alert},
         )

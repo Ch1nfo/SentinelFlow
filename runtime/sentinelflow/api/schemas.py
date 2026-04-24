@@ -13,6 +13,7 @@ class AlertActionRequest(BaseModel):
     action: str
     task: dict[str, Any] | None = None
     alert: dict[str, Any] | None = None
+    source_id: str | None = Field(default=None, alias="sourceId")
 
 
 class RuntimeConfigRequest(BaseModel):
@@ -40,6 +41,7 @@ class RuntimeConfigRequest(BaseModel):
     alert_script_code: str | None = Field(default=None, alias="alertScriptCode")
     alert_script_timeout: int | None = Field(default=None, alias="alertScriptTimeout")
     auto_execute_enabled: bool | None = Field(default=None, alias="autoExecuteEnabled")
+    alert_sources: list[dict[str, Any]] | None = Field(default=None, alias="alertSources")
 
     def to_payload(self) -> dict[str, Any]:
         payload = {
@@ -67,6 +69,7 @@ class RuntimeConfigRequest(BaseModel):
             "alert_script_code": self.alert_script_code,
             "alert_script_timeout": self.alert_script_timeout,
             "auto_execute_enabled": self.auto_execute_enabled,
+            "alert_sources": self.alert_sources,
         }
         return {key: value for key, value in payload.items() if value is not None}
 

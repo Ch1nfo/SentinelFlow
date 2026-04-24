@@ -4,6 +4,7 @@ import re
 import queue
 import threading
 import time
+from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
 from fastapi import APIRouter
@@ -18,6 +19,42 @@ router = APIRouter(prefix="/api/sentinelflow")
 
 active_command_cancellations: dict[str, threading.Event] = {}
 active_command_lock = threading.Lock()
+
+
+def _alert_sources_payload() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": source.id,
+            "name": source.name,
+            "enabled": source.alert_source_enabled,
+            "auto_execute_enabled": source.auto_execute_enabled,
+        }
+        for source in load_runtime_config().alert_sources
+    ]
+
+
+def _default_source_id() -> str:
+    sources = load_runtime_config().alert_sources
+    return sources[0].id if sources else "default"
+
+
+def _resolve_source_id(value: str | None = None) -> str:
+    candidate = str(value or "").strip()
+    sources = load_runtime_config().alert_sources
+    if candidate and any(source.id == candidate for source in sources):
+        return candidate
+    return sources[0].id if sources else (candidate or "default")
+
+
+def _save_source_auto_execute(source_id: str, enabled: bool) -> None:
+    config = load_runtime_config()
+    next_sources = []
+    for source in config.alert_sources:
+        data = asdict(source) if hasattr(source, "__dataclass_fields__") else dict(source)
+        if data.get("id") == source_id:
+            data["auto_execute_enabled"] = enabled
+        next_sources.append(data)
+    save_runtime_config({"alert_sources": next_sources})
 
 
 def _run_coroutine_in_new_loop(coro):
@@ -207,21 +244,29 @@ def dashboard_summary() -> dict[str, Any]:
 
 
 @router.get("/alerts/poll")
-async def poll_alerts() -> dict[str, Any]:
-    result = await polling_service.poll_once()
-    auto_state = auto_execution_service.state()
+async def poll_alerts(sourceId: str | None = None) -> dict[str, Any]:
+    source_id = _resolve_source_id(sourceId)
+    result = await polling_service.poll_once(source_id)
+    auto_state = auto_execution_service.state(source_id)
     result.auto_execute_enabled = auto_state["enabled"]
     result.auto_execute_running = auto_state["running"]
-    return _serialize(result)
+    payload = _serialize(result)
+    payload["source_id"] = source_id
+    payload["alert_sources"] = _alert_sources_payload()
+    return payload
 
 
 @router.get("/alerts/state")
-def alerts_state() -> dict[str, Any]:
-    result = polling_service.get_latest_result()
-    auto_state = auto_execution_service.state()
+def alerts_state(sourceId: str | None = None) -> dict[str, Any]:
+    source_id = _resolve_source_id(sourceId)
+    result = polling_service.get_latest_result(source_id)
+    auto_state = auto_execution_service.state(source_id)
     result.auto_execute_enabled = auto_state["enabled"]
     result.auto_execute_running = auto_state["running"]
-    return _serialize(result)
+    payload = _serialize(result)
+    payload["source_id"] = source_id
+    payload["alert_sources"] = _alert_sources_payload()
+    return payload
 
 
 
@@ -231,9 +276,10 @@ async def handle_alert(payload: AlertActionRequest) -> dict[str, Any]:
     event_ids = str(alert.get("eventIds", "")).strip()
     task = _resolve_task(payload)
     task_id = task.task_id if task else ""
+    source_id = _resolve_source_id(payload.source_id or (task.source_id if task else None) or str(alert.get("alert_source_id", "")).strip())
 
     if payload.action == "refresh_poll":
-        result = await polling_service.poll_once()
+        result = await polling_service.poll_once(source_id)
         return {
             "action": payload.action,
             "success": not result.errors,
@@ -244,11 +290,13 @@ async def handle_alert(payload: AlertActionRequest) -> dict[str, Any]:
         }
 
     if payload.action == "auto_run_pending":
-        retry_interval_seconds = max(int(load_runtime_config().failed_retry_interval_seconds or 0), 0)
-        queued_count = len([task for task in dispatch_service.list_tasks() if task.status == "queued"])
-        retry_candidate_count = len(dispatch_service.list_failed_retry_candidates(retry_interval_seconds, max_retry_count=3))
-        auto_execution_service.request_run_once()
-        executor_state = auto_execution_service.state()
+        config = load_runtime_config()
+        source_config = next((source for source in config.alert_sources if source.id == source_id), config.alert_sources[0])
+        retry_interval_seconds = max(int(source_config.failed_retry_interval_seconds or 0), 0)
+        queued_count = len([task for task in dispatch_service.list_tasks(source_id=source_id) if task.status == "queued"])
+        retry_candidate_count = len(dispatch_service.list_failed_retry_candidates(retry_interval_seconds, max_retry_count=3, source_id=source_id))
+        auto_execution_service.request_run_once(source_id)
+        executor_state = auto_execution_service.state(source_id)
         return {
             "action": payload.action,
             "success": True,
@@ -260,33 +308,34 @@ async def handle_alert(payload: AlertActionRequest) -> dict[str, Any]:
                 "retry_candidate_count": retry_candidate_count,
                 "executor_enabled": executor_state.get("enabled", False),
                 "executor_running": executor_state.get("running", False),
+                "source_id": source_id,
             },
             "task": None,
             "error": None,
         }
 
     if payload.action == "auto_execute_start":
-        save_runtime_config({"auto_execute_enabled": True})
-        auto_execution_service.enable()
+        _save_source_auto_execute(source_id, True)
+        auto_execution_service.enable(source_id)
         return {
             "action": payload.action,
             "success": True,
             "task_id": "",
             "event_ids": "",
-            "data": {"auto_execution": auto_execution_service.state()},
+            "data": {"auto_execution": auto_execution_service.state(source_id), "source_id": source_id},
             "task": None,
             "error": None,
         }
 
     if payload.action == "auto_execute_stop":
-        save_runtime_config({"auto_execute_enabled": False})
-        auto_execution_service.disable()
+        _save_source_auto_execute(source_id, False)
+        auto_execution_service.disable(source_id)
         return {
             "action": payload.action,
             "success": True,
             "task_id": "",
             "event_ids": "",
-            "data": {"auto_execution": auto_execution_service.state()},
+            "data": {"auto_execution": auto_execution_service.state(source_id), "source_id": source_id},
             "task": None,
             "error": None,
         }

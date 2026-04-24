@@ -42,6 +42,12 @@ type CommandDataLike = {
   primary_agent?: string
   worker_agent?: string
   delegation_reason?: string
+  approval_request?: {
+    approval_id?: string
+    skill_name?: string
+    arguments_summary?: string
+    message?: string
+  }
   worker_results?: WorkerStepLike[]
   worker_result?: {
     tool_calls?: ToolCallLike[]

@@ -185,6 +185,7 @@ export default function SentinelFlowAlertsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
   const [payloadExpanded, setPayloadExpanded] = useState(false)
   const [actionState, setActionState] = useState<{ action: string; running: boolean }>({ action: '', running: false })
   const [actionResult, setActionResult] = useState<AlertActionResponse | null>(null)
@@ -203,8 +204,11 @@ export default function SentinelFlowAlertsPage() {
       setError(null)
     }
     try {
-      const result = await fetchPollAlerts()
+      const result = await fetchPollAlerts(selectedSourceId ?? undefined)
       setData(result)
+      if (!selectedSourceId && result.source_id) {
+        setSelectedSourceId(result.source_id)
+      }
       if (!silent) {
         setLoading(false)
       }
@@ -224,11 +228,11 @@ export default function SentinelFlowAlertsPage() {
         setLoading(false)
       }
     }
-  }, [])
+  }, [selectedSourceId])
 
   useEffect(() => {
     void loadTasks()
-  }, [])
+  }, [loadTasks])
 
   useSentinelFlowLiveRefresh(
     () => loadTasks({ silent: true }),
@@ -236,6 +240,8 @@ export default function SentinelFlowAlertsPage() {
   )
 
   const tasks = [...(data?.tasks ?? [])].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
+  const alertSources = data?.alert_sources ?? []
+  const selectedSource = alertSources.find((source) => source.id === (selectedSourceId ?? data?.source_id)) ?? alertSources[0] ?? null
 
   useEffect(() => {
     setSelectedTaskId((current) => {
@@ -322,9 +328,9 @@ export default function SentinelFlowAlertsPage() {
     void loadTasks({ silent: true })
     try {
       const result = action === 'refresh_poll' || action === 'auto_run_pending' || action === 'auto_execute_start' || action === 'auto_execute_stop'
-        ? await handleAlertAction(action)
+        ? await handleAlertAction(action, undefined, undefined, selectedSourceId ?? data?.source_id)
         : selectedTask
-          ? await handleAlertAction(action, selectedTask)
+          ? await handleAlertAction(action, selectedTask, undefined, selectedSourceId ?? data?.source_id)
           : null
       if (!result) return
       setActionResult(result)
@@ -386,6 +392,26 @@ export default function SentinelFlowAlertsPage() {
       />
 
       <Surface title="告警工作台" subtitle={withProductName('这里直接承载 SentinelFlow 的轮询结果、单条动作和人工复核操作。')}>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white p-4">
+          <div>
+            <div className="text-sm font-semibold text-gray-900">当前告警源</div>
+            <div className="mt-1 text-sm text-gray-600">{selectedSource?.name ?? '默认告警源'}</div>
+          </div>
+          <select
+            className="sentinelflow-settings-input max-w-xs"
+            value={selectedSourceId ?? data?.source_id ?? ''}
+            onChange={(event) => {
+              setSelectedSourceId(event.target.value)
+              setSelectedTaskId(null)
+            }}
+          >
+            {alertSources.length ? alertSources.map((source) => (
+              <option key={source.id} value={source.id}>{source.name}</option>
+            )) : (
+              <option value={data?.source_id ?? 'default'}>默认告警源</option>
+            )}
+          </select>
+        </div>
         <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
             <div className="mb-2 text-sm font-semibold text-emerald-900">业务触发</div>
@@ -417,7 +443,7 @@ export default function SentinelFlowAlertsPage() {
             <span>完成：{data?.completed_count ?? 0}</span>
             <span>跳过：{data?.skipped_count ?? 0}</span>
             <span>失败：{data?.failed_count ?? 0}</span>
-            <span>自动执行：{autoExecuteEnabled ? (autoExecuteRunning ? '自动执行中' : '已开启') : '未开启'}</span>
+            <span>{selectedSource?.name ?? '当前源'}自动执行：{autoExecuteEnabled ? (autoExecuteRunning ? '自动执行中' : '已开启') : '未开启'}</span>
             <span>已结单：{summary?.operations.closed_success ?? 0}</span>
             <span>已处置：{summary?.operations.disposed_success ?? 0}</span>
             <span>人工处置：{summary?.operations.manual_completed ?? 0}</span>
@@ -488,7 +514,8 @@ export default function SentinelFlowAlertsPage() {
                   <div className="sentinelflow-context-card"><strong>告警名称</strong><span>{String(selectedPayload.alert_name ?? selectedTask.title ?? '未提供')}</span></div>
                   <div className="sentinelflow-context-card"><strong>告警时间</strong><span>{formatAlertTime(selectedTask.alert_time)}</span></div>
                   <div className="sentinelflow-context-card"><strong>事件号</strong><span>{selectedTask.event_ids || '未提供'}</span></div>
-                  <div className="sentinelflow-context-card"><strong>来源</strong><span>{String(selectedPayload.alert_source ?? '未提供')}</span></div>
+                  <div className="sentinelflow-context-card"><strong>来源</strong><span>{String(selectedPayload.alert_source_name ?? selectedTask.source_name ?? selectedPayload.alert_source ?? '未提供')}</span></div>
+                  <div className="sentinelflow-context-card"><strong>来源 ID</strong><span>{String(selectedPayload.alert_source_id ?? selectedTask.source_id ?? 'default')}</span></div>
                   <div className="sentinelflow-context-card"><strong>源 IP</strong><span>{String(selectedPayload.sip ?? '未提供')}</span></div>
                   <div className="sentinelflow-context-card"><strong>目的 IP</strong><span title={dipPreview.fullText}>{dipPreview.text}</span></div>
                   <div className="sentinelflow-context-card"><strong>当前研判</strong><span>{String(selectedPayload.current_judgment ?? '未提供')}</span></div>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 from sentinelflow.alerts.client import SOCAlertApiClient
 from sentinelflow.alerts.dedup import AlertDedupStore
@@ -21,6 +22,8 @@ class AlertPollingService:
         self.dedup = dedup
         self.dispatch_service = dispatch_service
         self._latest_result = PollingDispatchResult(tasks=self.dispatch_service.list_tasks())
+        self._latest_results: dict[str, PollingDispatchResult] = {}
+        self._next_poll_at: dict[str, float] = {}
         self._loop_task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._wake_event = asyncio.Event()
@@ -28,19 +31,33 @@ class AlertPollingService:
         self._wake_lock = threading.Lock()
         self._wake_requested = False
 
-    def get_latest_result(self) -> PollingDispatchResult:
+    def _resolve_source(self, source_id: str | None = None):
+        config = load_runtime_config()
+        sources = list(getattr(config, "alert_sources", []) or [])
+        if not sources:
+            return None
+        if source_id:
+            selected = next((source for source in sources if source.id == source_id), None)
+            if selected is not None:
+                return selected
+        return sources[0]
+
+    def get_latest_result(self, source_id: str | None = None) -> PollingDispatchResult:
+        source = self._resolve_source(source_id)
+        effective_source_id = source.id if source is not None else (source_id or "default")
+        latest = self._latest_results.get(effective_source_id, self._latest_result)
         return PollingDispatchResult(
-            fetched_count=self._latest_result.fetched_count,
-            queued_count=self._latest_result.queued_count,
-            updated_count=self._latest_result.updated_count,
-            completed_count=self._latest_result.completed_count,
-            skipped_count=self._latest_result.skipped_count,
-            failed_count=self._latest_result.failed_count,
-            snapshot_complete=self._latest_result.snapshot_complete,
-            auto_execute_enabled=self._latest_result.auto_execute_enabled,
-            auto_execute_running=self._latest_result.auto_execute_running,
-            tasks=self.dispatch_service.list_tasks(),
-            errors=list(self._latest_result.errors),
+            fetched_count=latest.fetched_count,
+            queued_count=latest.queued_count,
+            updated_count=latest.updated_count,
+            completed_count=latest.completed_count,
+            skipped_count=latest.skipped_count,
+            failed_count=latest.failed_count,
+            snapshot_complete=latest.snapshot_complete,
+            auto_execute_enabled=latest.auto_execute_enabled,
+            auto_execute_running=latest.auto_execute_running,
+            tasks=self.dispatch_service.list_tasks(source_id=effective_source_id) if effective_source_id else self.dispatch_service.list_tasks(),
+            errors=list(latest.errors),
         )
 
     async def start(self) -> None:
@@ -94,16 +111,35 @@ class AlertPollingService:
     async def _run_scheduler(self) -> None:
         while not self._stop_event.is_set():
             config = load_runtime_config()
-            interval = max(int(config.poll_interval_seconds or 0), 0)
-            if not config.alert_source_enabled or interval <= 0:
+            sources = [
+                source
+                for source in getattr(config, "alert_sources", []) or []
+                if source.alert_source_enabled and max(int(source.poll_interval_seconds or 0), 0) > 0
+            ]
+            if not sources:
                 await self._wait_for_reconfigure()
                 continue
 
-            reconfigured = await self._wait_for_reconfigure(timeout=interval)
-            if reconfigured or self._stop_event.is_set():
+            now = time.monotonic()
+            for source in sources:
+                self._next_poll_at.setdefault(source.id, now)
+            active_ids = {source.id for source in sources}
+            for source_id in list(self._next_poll_at):
+                if source_id not in active_ids:
+                    self._next_poll_at.pop(source_id, None)
+
+            due_sources = [source for source in sources if self._next_poll_at.get(source.id, now) <= now]
+            if due_sources:
+                for source in due_sources:
+                    await self.poll_once(source.id)
+                    self._next_poll_at[source.id] = time.monotonic() + max(int(source.poll_interval_seconds or 0), 1)
                 continue
 
-            await self.poll_once()
+            next_due = min(self._next_poll_at.get(source.id, now + 1) for source in sources)
+            timeout = max(next_due - now, 0.1)
+            reconfigured = await self._wait_for_reconfigure(timeout=timeout)
+            if reconfigured or self._stop_event.is_set():
+                continue
 
     async def _wait_for_reconfigure(self, timeout: int | None = None) -> bool:
         if self._consume_wake_request():
@@ -120,34 +156,46 @@ class AlertPollingService:
         except asyncio.TimeoutError:
             return self._consume_wake_request()
 
-    async def poll_once(self) -> PollingDispatchResult:
-        response = self.client.fetch_open_alerts()
-        if "error" in response:
+    async def poll_once(self, source_id: str | None = None) -> PollingDispatchResult:
+        source = self._resolve_source(source_id)
+        if source is None:
             self._latest_result = PollingDispatchResult(
+                failed_count=1,
+                snapshot_complete=False,
+                errors=["当前没有可用的告警源配置。"],
+            )
+            return self.get_latest_result(source_id)
+        response = self.client.fetch_open_alerts(source)
+        if "error" in response:
+            latest = PollingDispatchResult(
                 fetched_count=0,
                 queued_count=0,
                 skipped_count=0,
                 failed_count=1,
                 snapshot_complete=False,
-                auto_execute_enabled=self._latest_result.auto_execute_enabled,
-                auto_execute_running=self._latest_result.auto_execute_running,
+                auto_execute_enabled=self._latest_results.get(source.id, self._latest_result).auto_execute_enabled,
+                auto_execute_running=self._latest_results.get(source.id, self._latest_result).auto_execute_running,
                 errors=[str(response.get("error", "Unknown polling error"))],
             )
-            return self.get_latest_result()
+            self._latest_results[source.id] = latest
+            self._latest_result = latest
+            return self.get_latest_result(source.id)
 
         alerts = response.get("alerts", [])
         if not isinstance(alerts, list):
-            self._latest_result = PollingDispatchResult(
+            latest = PollingDispatchResult(
                 fetched_count=0,
                 queued_count=0,
                 skipped_count=0,
                 failed_count=1,
                 snapshot_complete=False,
-                auto_execute_enabled=self._latest_result.auto_execute_enabled,
-                auto_execute_running=self._latest_result.auto_execute_running,
+                auto_execute_enabled=self._latest_results.get(source.id, self._latest_result).auto_execute_enabled,
+                auto_execute_running=self._latest_results.get(source.id, self._latest_result).auto_execute_running,
                 errors=["Polling response has invalid alerts structure."],
             )
-            return self.get_latest_result()
+            self._latest_results[source.id] = latest
+            self._latest_result = latest
+            return self.get_latest_result(source.id)
 
         if response.get("demo_mode") and not alerts and not response.get("fallback_triggered"):
             self.dispatch_service.clear_demo_tasks()
@@ -156,6 +204,8 @@ class AlertPollingService:
         queued_tasks, skipped, updated, completed, errors = await self.dispatch_service.dispatch(
             alerts,
             allow_missing_completion=snapshot_complete,
+            source_id=source.id,
+            source_name=source.name,
         )
         
         fallback_errors = []
@@ -164,7 +214,7 @@ class AlertPollingService:
             
         combined_errors = fallback_errors + errors
 
-        self._latest_result = PollingDispatchResult(
+        latest = PollingDispatchResult(
             fetched_count=len(alerts),
             queued_count=len(queued_tasks),
             updated_count=updated,
@@ -172,9 +222,11 @@ class AlertPollingService:
             skipped_count=skipped,
             failed_count=len(combined_errors),
             snapshot_complete=snapshot_complete,
-            auto_execute_enabled=self._latest_result.auto_execute_enabled,
-            auto_execute_running=self._latest_result.auto_execute_running,
-            tasks=self.dispatch_service.list_tasks(),
+            auto_execute_enabled=self._latest_results.get(source.id, self._latest_result).auto_execute_enabled,
+            auto_execute_running=self._latest_results.get(source.id, self._latest_result).auto_execute_running,
+            tasks=self.dispatch_service.list_tasks(source_id=source.id),
             errors=combined_errors,
         )
-        return self.get_latest_result()
+        self._latest_results[source.id] = latest
+        self._latest_result = latest
+        return self.get_latest_result(source.id)

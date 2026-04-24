@@ -114,6 +114,8 @@ class AlertHandlingTask:
     workflow_name: str
     title: str
     description: str
+    source_id: str = "default"
+    source_name: str = "默认告警源"
     alert_time: str = ""
     updated_at: str = ""
     status: str = "queued"

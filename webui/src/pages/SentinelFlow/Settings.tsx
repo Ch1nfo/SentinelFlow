@@ -41,30 +41,131 @@ type SettingsDraft = {
   alertParserRule: Record<string, unknown>
   alertScriptCode: string
   alertScriptTimeout: string
+  alertSourceName: string
+  alertSourceAnalysisPrompt: string
+  selectedSourceId: string
+  alertSources: AlertSourceDraft[]
+}
+
+type AlertSourceDraft = {
+  id: string
+  name: string
+  enabled: boolean
+  type: string
+  url: string
+  method: string
+  headers: string
+  query: string
+  body: string
+  timeout: string
+  samplePayload: string
+  parserRule: Record<string, unknown>
+  scriptCode: string
+  scriptTimeout: string
+  autoExecuteEnabled: boolean
+  pollIntervalSeconds: string
+  failedRetryIntervalSeconds: string
+  analysisPrompt: string
+}
+
+function sourceFromSettings(source: RuntimeSettingsResponse['alert_sources'][number]): AlertSourceDraft {
+  return {
+    id: source.id,
+    name: source.name,
+    enabled: source.enabled,
+    type: source.type,
+    url: source.url,
+    method: source.method,
+    headers: source.headers,
+    query: source.query,
+    body: source.body,
+    timeout: String(source.timeout),
+    samplePayload: source.sample_payload,
+    parserRule: source.parser_rule,
+    scriptCode: source.script_code,
+    scriptTimeout: String(source.script_timeout),
+    autoExecuteEnabled: source.auto_execute_enabled,
+    pollIntervalSeconds: source.poll_interval_seconds,
+    failedRetryIntervalSeconds: source.failed_retry_interval_seconds,
+    analysisPrompt: source.analysis_prompt,
+  }
+}
+
+function sourceToPayload(source: AlertSourceDraft) {
+  return {
+    id: source.id,
+    name: source.name,
+    enabled: source.enabled,
+    type: source.type,
+    url: source.url,
+    method: source.method,
+    headers: source.headers,
+    query: source.query,
+    body: source.body,
+    timeout: source.timeout,
+    samplePayload: source.samplePayload,
+    parserRule: source.parserRule,
+    scriptCode: source.scriptCode,
+    scriptTimeout: source.scriptTimeout,
+    autoExecuteEnabled: source.autoExecuteEnabled,
+    pollIntervalSeconds: source.pollIntervalSeconds,
+    failedRetryIntervalSeconds: source.failedRetryIntervalSeconds,
+    analysisPrompt: source.analysisPrompt,
+  }
+}
+
+function createBlankSource(index: number): AlertSourceDraft {
+  const id = `source-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+  return {
+    id,
+    name: `告警源 ${index + 1}`,
+    enabled: false,
+    type: 'api',
+    url: '',
+    method: 'GET',
+    headers: '{}',
+    query: '{}',
+    body: '',
+    timeout: '15',
+    samplePayload: '',
+    parserRule: {},
+    scriptCode: '',
+    scriptTimeout: '30',
+    autoExecuteEnabled: false,
+    pollIntervalSeconds: '60',
+    failedRetryIntervalSeconds: '0',
+    analysisPrompt: '',
+  }
 }
 
 function buildDraft(settings: RuntimeSettingsResponse): SettingsDraft {
+  const sources = (settings.alert_sources?.length ? settings.alert_sources : [settings.alert_source]).map(sourceFromSettings)
+  const selectedSource = sources.find((source) => source.id === settings.default_alert_source_id) ?? sources[0] ?? createBlankSource(0)
   return {
-    pollIntervalSeconds: settings.runtime.poll_interval_seconds,
-    failedRetryIntervalSeconds: settings.runtime.failed_retry_interval_seconds,
+    pollIntervalSeconds: selectedSource.pollIntervalSeconds,
+    failedRetryIntervalSeconds: selectedSource.failedRetryIntervalSeconds,
     agentEnabled: settings.runtime.agent_enabled,
     llmApiBaseUrl: settings.llm.api_base_url,
     llmApiKey: '',
     llmModel: settings.llm.model,
     llmTemperature: String(settings.llm.temperature),
     llmTimeout: String(settings.llm.timeout),
-    alertSourceEnabled: settings.alert_source.enabled,
-    alertSourceType: settings.alert_source.type,
-    alertSourceUrl: settings.alert_source.url,
-    alertSourceMethod: settings.alert_source.method,
-    alertSourceHeaders: settings.alert_source.headers,
-    alertSourceQuery: settings.alert_source.query,
-    alertSourceBody: settings.alert_source.body,
-    alertSourceTimeout: String(settings.alert_source.timeout),
-    alertSourceSamplePayload: settings.alert_source.sample_payload,
-    alertParserRule: settings.alert_source.parser_rule,
-    alertScriptCode: settings.alert_source.script_code,
-    alertScriptTimeout: String(settings.alert_source.script_timeout),
+    alertSourceEnabled: selectedSource.enabled,
+    alertSourceType: selectedSource.type,
+    alertSourceUrl: selectedSource.url,
+    alertSourceMethod: selectedSource.method,
+    alertSourceHeaders: selectedSource.headers,
+    alertSourceQuery: selectedSource.query,
+    alertSourceBody: selectedSource.body,
+    alertSourceTimeout: selectedSource.timeout,
+    alertSourceSamplePayload: selectedSource.samplePayload,
+    alertParserRule: selectedSource.parserRule,
+    alertScriptCode: selectedSource.scriptCode,
+    alertScriptTimeout: selectedSource.scriptTimeout,
+    alertSourceName: selectedSource.name,
+    alertSourceAnalysisPrompt: selectedSource.analysisPrompt,
+    selectedSourceId: selectedSource.id,
+    alertSources: sources.length ? sources : [selectedSource],
   }
 }
 
@@ -98,6 +199,10 @@ export default function SentinelFlowSettingsPage() {
       alertParserRule: {},
       alertScriptCode: '',
       alertScriptTimeout: '30',
+      alertSourceName: '默认告警源',
+      alertSourceAnalysisPrompt: '',
+      selectedSourceId: 'default',
+      alertSources: [createBlankSource(0)],
     }),
   )
   const [parserMessage, setParserMessage] = useState<string | null>(null)
@@ -144,8 +249,120 @@ export default function SentinelFlowSettingsPage() {
     writeSessionValue(SETTINGS_DRAFT_KEY, draft)
   }, [draft])
 
+  function updateSelectedSource(current: SettingsDraft, updates: Partial<AlertSourceDraft>): SettingsDraft {
+    const sourceId = current.selectedSourceId || current.alertSources[0]?.id || 'default'
+    return {
+      ...current,
+      alertSources: current.alertSources.map((source) => (
+        source.id === sourceId ? { ...source, ...updates } : source
+      )),
+    }
+  }
+
   function updateDraft<K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) {
-    setDraft((current) => ({ ...current, [key]: value }))
+    setDraft((current) => {
+      const next = { ...current, [key]: value }
+      if (key === 'alertSourceName') return updateSelectedSource(next, { name: String(value) })
+      if (key === 'alertSourceEnabled') return updateSelectedSource(next, { enabled: Boolean(value) })
+      if (key === 'alertSourceType') return updateSelectedSource(next, { type: String(value) })
+      if (key === 'alertSourceUrl') return updateSelectedSource(next, { url: String(value) })
+      if (key === 'alertSourceMethod') return updateSelectedSource(next, { method: String(value) })
+      if (key === 'alertSourceHeaders') return updateSelectedSource(next, { headers: String(value) })
+      if (key === 'alertSourceQuery') return updateSelectedSource(next, { query: String(value) })
+      if (key === 'alertSourceBody') return updateSelectedSource(next, { body: String(value) })
+      if (key === 'alertSourceTimeout') return updateSelectedSource(next, { timeout: String(value) })
+      if (key === 'alertSourceSamplePayload') return updateSelectedSource(next, { samplePayload: String(value) })
+      if (key === 'alertParserRule') return updateSelectedSource(next, { parserRule: value as Record<string, unknown> })
+      if (key === 'alertScriptCode') return updateSelectedSource(next, { scriptCode: String(value) })
+      if (key === 'alertScriptTimeout') return updateSelectedSource(next, { scriptTimeout: String(value) })
+      if (key === 'pollIntervalSeconds') return updateSelectedSource(next, { pollIntervalSeconds: String(value) })
+      if (key === 'failedRetryIntervalSeconds') return updateSelectedSource(next, { failedRetryIntervalSeconds: String(value) })
+      if (key === 'alertSourceAnalysisPrompt') return updateSelectedSource(next, { analysisPrompt: String(value) })
+      return next
+    })
+  }
+
+  function selectSource(sourceId: string) {
+    setDraft((current) => {
+      const source = current.alertSources.find((item) => item.id === sourceId) ?? current.alertSources[0]
+      if (!source) return current
+      return {
+        ...current,
+        selectedSourceId: source.id,
+        pollIntervalSeconds: source.pollIntervalSeconds,
+        failedRetryIntervalSeconds: source.failedRetryIntervalSeconds,
+        alertSourceEnabled: source.enabled,
+        alertSourceType: source.type,
+        alertSourceUrl: source.url,
+        alertSourceMethod: source.method,
+        alertSourceHeaders: source.headers,
+        alertSourceQuery: source.query,
+        alertSourceBody: source.body,
+        alertSourceTimeout: source.timeout,
+        alertSourceSamplePayload: source.samplePayload,
+        alertParserRule: source.parserRule,
+        alertScriptCode: source.scriptCode,
+        alertScriptTimeout: source.scriptTimeout,
+        alertSourceName: source.name,
+        alertSourceAnalysisPrompt: source.analysisPrompt,
+      }
+    })
+  }
+
+  function addSource() {
+    setDraft((current) => {
+      const source = createBlankSource(current.alertSources.length)
+      return {
+        ...current,
+        alertSources: [...current.alertSources, source],
+        selectedSourceId: source.id,
+        pollIntervalSeconds: source.pollIntervalSeconds,
+        failedRetryIntervalSeconds: source.failedRetryIntervalSeconds,
+        alertSourceEnabled: source.enabled,
+        alertSourceType: source.type,
+        alertSourceUrl: source.url,
+        alertSourceMethod: source.method,
+        alertSourceHeaders: source.headers,
+        alertSourceQuery: source.query,
+        alertSourceBody: source.body,
+        alertSourceTimeout: source.timeout,
+        alertSourceSamplePayload: source.samplePayload,
+        alertParserRule: source.parserRule,
+        alertScriptCode: source.scriptCode,
+        alertScriptTimeout: source.scriptTimeout,
+        alertSourceName: source.name,
+        alertSourceAnalysisPrompt: source.analysisPrompt,
+      }
+    })
+  }
+
+  function deleteSelectedSource() {
+    setDraft((current) => {
+      if (current.alertSources.length <= 1) return current
+      const remaining = current.alertSources.filter((source) => source.id !== current.selectedSourceId)
+      const nextSource = remaining[0]
+      return {
+        ...current,
+        alertSources: remaining,
+        selectedSourceId: nextSource.id,
+        pollIntervalSeconds: nextSource.pollIntervalSeconds,
+        failedRetryIntervalSeconds: nextSource.failedRetryIntervalSeconds,
+        alertSourceEnabled: nextSource.enabled,
+        alertSourceType: nextSource.type,
+        alertSourceUrl: nextSource.url,
+        alertSourceMethod: nextSource.method,
+        alertSourceHeaders: nextSource.headers,
+        alertSourceQuery: nextSource.query,
+        alertSourceBody: nextSource.body,
+        alertSourceTimeout: nextSource.timeout,
+        alertSourceSamplePayload: nextSource.samplePayload,
+        alertParserRule: nextSource.parserRule,
+        alertScriptCode: nextSource.scriptCode,
+        alertScriptTimeout: nextSource.scriptTimeout,
+        alertSourceName: nextSource.name,
+        alertSourceAnalysisPrompt: nextSource.analysisPrompt,
+      }
+    })
   }
 
   async function handleSave() {
@@ -155,6 +372,7 @@ export default function SentinelFlowSettingsPage() {
       const saved = await saveRuntimeSettings({
         ...draft,
         llmApiKey: draft.llmApiKey.trim() || undefined,
+        alertSources: draft.alertSources.map(sourceToPayload),
       })
       setSettings(saved)
       setDraft(buildDraft(saved))
@@ -176,6 +394,7 @@ export default function SentinelFlowSettingsPage() {
       const saved = await saveRuntimeSettings({
         ...draft,
         llmApiKey: draft.llmApiKey.trim() || undefined,
+        alertSources: draft.alertSources.map(sourceToPayload),
       })
       setSettings(saved)
       setDraft(buildDraft(saved))
@@ -373,9 +592,35 @@ export default function SentinelFlowSettingsPage() {
             <h3 className="text-lg font-semibold text-gray-900">告警接入配置</h3>
             <p className="mt-1 text-sm text-gray-600">支持直接请求上游接口，或者在页面里粘贴 Python 脚本并输出标准告警 JSON。</p>
           </div>
+          <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-gray-900">告警源</div>
+              <div className="flex gap-2">
+                <button type="button" className="sentinelflow-ghost-button" onClick={addSource}>新增告警源</button>
+                <button type="button" className="sentinelflow-ghost-button" onClick={deleteSelectedSource} disabled={draft.alertSources.length <= 1}>删除当前源</button>
+              </div>
+            </div>
+            <div className="sentinelflow-quick-actions mb-4">
+              {draft.alertSources.map((source) => (
+                <button
+                  key={source.id}
+                  type="button"
+                  className={`sentinelflow-chip-button${source.id === draft.selectedSourceId ? ' sentinelflow-chip-button-active' : ''}`}
+                  onClick={() => selectSource(source.id)}
+                >
+                  {source.name || source.id}
+                </button>
+              ))}
+            </div>
+            <div className="sentinelflow-settings-form">
+              <label className="sentinelflow-settings-field"><span>告警源名称</span><input className="sentinelflow-settings-input" value={draft.alertSourceName} onChange={(event) => updateDraft('alertSourceName', event.target.value)} /></label>
+              <label className="sentinelflow-settings-toggle"><input type="checkbox" checked={draft.alertSourceEnabled} onChange={(event) => updateDraft('alertSourceEnabled', event.target.checked)} /><span>启用当前告警源</span></label>
+            </div>
+          </div>
           <div className="sentinelflow-settings-form">
             <label className="sentinelflow-settings-field"><span>告警轮询间隔（秒）</span><input className="sentinelflow-settings-input" value={draft.pollIntervalSeconds} onChange={(event) => updateDraft('pollIntervalSeconds', event.target.value)} /></label>
             <label className="sentinelflow-settings-field"><span>处置失败重试间隔（秒）</span><input className="sentinelflow-settings-input" value={draft.failedRetryIntervalSeconds} onChange={(event) => updateDraft('failedRetryIntervalSeconds', event.target.value)} placeholder="0 表示关闭自动重试" /></label>
+            <label className="sentinelflow-settings-field sentinelflow-settings-field-full"><span>当前源专属告警分析 Prompt</span><textarea className="sentinelflow-settings-input min-h-[140px]" value={draft.alertSourceAnalysisPrompt} onChange={(event) => updateDraft('alertSourceAnalysisPrompt', event.target.value)} placeholder="多告警源时，第二个及后续来源会优先使用这里的主 Agent 告警分析 Prompt。" /></label>
             <label className="sentinelflow-settings-field"><span>接入方式</span><select className="sentinelflow-settings-input" value={draft.alertSourceType} onChange={(event) => updateDraft('alertSourceType', event.target.value)}><option value="api">接口接入</option><option value="script">脚本接入</option></select></label>
             {!isScriptMode ? (
               <>

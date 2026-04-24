@@ -84,7 +84,7 @@ alert_parser_generator = AlertParserGenerator()
 async def lifespan(_app: FastAPI):
     await polling_service.start()
     await auto_execution_service.start()
-    auto_execution_service.apply_persisted_state(load_runtime_config().auto_execute_enabled)
+    auto_execution_service.apply_persisted_state()
     try:
         yield
     finally:
