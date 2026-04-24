@@ -330,8 +330,8 @@ async def handle_alert(payload: AlertActionRequest) -> dict[str, Any]:
         queued_count = 0
         retry_candidate_count = 0
         for current_source_id in target_ids:
-            source_config = next((source for source in config.alert_sources if source.id == current_source_id), config.alert_sources[0])
-            retry_interval_seconds = max(int(source_config.failed_retry_interval_seconds or 0), 0)
+            source_config = next((source for source in config.alert_sources if source.id == current_source_id), None)
+            retry_interval_seconds = max(int(getattr(source_config, "failed_retry_interval_seconds", 0) or 0), 0)
             queued_count += len([task for task in dispatch_service.list_tasks(source_id=current_source_id) if task.status == "queued"])
             retry_candidate_count += len(dispatch_service.list_failed_retry_candidates(retry_interval_seconds, max_retry_count=3, source_id=current_source_id))
             auto_execution_service.request_run_once(current_source_id)

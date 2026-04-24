@@ -235,12 +235,12 @@ class AlertDispatchService:
         )
         return updated_task
 
-    def _list_missing_open_polled_tasks(self, active_event_ids: set[str], source_id: str = "default") -> list[AlertHandlingTask]:
-        return [task for task in self.list_open_polled_tasks(source_id) if task.event_ids not in active_event_ids]
+    def _list_missing_open_polled_tasks(self, active_event_ids_for_source: set[str], source_id: str = "default") -> list[AlertHandlingTask]:
+        return [task for task in self.list_open_polled_tasks(source_id) if task.event_ids not in active_event_ids_for_source]
 
-    def _complete_missing_polled_tasks(self, active_event_ids: set[str], source_id: str = "default") -> list[AlertHandlingTask]:
+    def _complete_missing_polled_tasks(self, active_event_ids_for_source: set[str], source_id: str = "default") -> list[AlertHandlingTask]:
         completed: list[AlertHandlingTask] = []
-        for task in self._list_missing_open_polled_tasks(active_event_ids, source_id):
+        for task in self._list_missing_open_polled_tasks(active_event_ids_for_source, source_id):
             previous_status = task.status
             existing_result = dict(task.last_result_data) if isinstance(task.last_result_data, dict) else {}
             existing_trace = existing_result.get("execution_trace", [])
@@ -331,7 +331,7 @@ class AlertDispatchService:
         skipped = 0
         updated = 0
         errors: list[str] = []
-        active_event_ids: set[str] = set()
+        active_event_ids_for_source: set[str] = set()
 
         for alert in alerts:
             alert["alert_source_id"] = str(alert.get("alert_source_id", source_id)).strip() or source_id
@@ -340,7 +340,7 @@ class AlertDispatchService:
             if not event_id:
                 errors.append("Skipping alert with empty eventIds.")
                 continue
-            active_event_ids.add(event_id)
+            active_event_ids_for_source.add(event_id)
             effective_source_id = str(alert.get("alert_source_id", source_id)).strip() or "default"
             existing = self.get_task_by_event_id(event_id, source_id=effective_source_id)
             if existing and existing.status == "queued":
@@ -421,9 +421,9 @@ class AlertDispatchService:
 
         completed: list[AlertHandlingTask] = []
         if allow_missing_completion:
-            completed = self._complete_missing_polled_tasks(active_event_ids, source_id)
+            completed = self._complete_missing_polled_tasks(active_event_ids_for_source, source_id)
         else:
-            missing_candidates = self._list_missing_open_polled_tasks(active_event_ids, source_id)
+            missing_candidates = self._list_missing_open_polled_tasks(active_event_ids_for_source, source_id)
             if missing_candidates:
                 self.audit_service.record(
                     "alert_missing_completion_skipped",
