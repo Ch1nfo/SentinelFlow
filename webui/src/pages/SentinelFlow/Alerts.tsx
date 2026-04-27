@@ -145,6 +145,11 @@ function isReDisposableStatus(task: AlertTask): boolean {
   return status === 'failed' || status === 'pending_closure'
 }
 
+function isPrimaryDisposeDisabled(task: AlertTask): boolean {
+  const status = getEffectiveTaskStatus(task)
+  return status === 'running' || status === 'succeeded' || status === 'completed'
+}
+
 function getEffectiveTaskStatus(task: AlertTask): AlertTask['status'] | string {
   const result = (task.last_result_data ?? {}) as Record<string, unknown>
   const finalFacts = (result.final_facts as Record<string, unknown> | undefined) ?? {}
@@ -566,7 +571,7 @@ export default function SentinelFlowAlertsPage() {
                   </div>
                 ) : null}
                 <div className="sentinelflow-action-bar">
-                  <button type="button" className="sentinelflow-primary-button" onClick={() => void runAction('triage_dispose')} disabled={actionState.running}>处置当前告警</button>
+                  <button type="button" className="sentinelflow-primary-button" onClick={() => void runAction('triage_dispose')} disabled={actionState.running || isPrimaryDisposeDisabled(selectedTask)}>处置当前告警</button>
                   {isReDisposableStatus(selectedTask) ? (
                     <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('retry_task')} disabled={actionState.running}>
                       {getEffectiveTaskStatus(selectedTask) === 'pending_closure' ? '重新处置' : '重试任务'}
