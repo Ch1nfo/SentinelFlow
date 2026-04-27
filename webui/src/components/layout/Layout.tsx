@@ -15,7 +15,7 @@ import {
   Siren,
 } from 'lucide-react'
 import { brand, withProductName } from '@/config/brand'
-import { fetchPollAlerts } from '@/api/sentinelflow'
+import { fetchAllPollAlerts, type AlertTask, type PollAlertsResponse } from '@/api/sentinelflow'
 import { useSentinelFlowLiveRefresh } from '@/hooks/useSentinelFlowLiveRefresh'
 
 type NavItem = {
@@ -30,10 +30,39 @@ type NavSection = {
   items: NavItem[]
 }
 
+type NewAlertNoticeGroup = {
+  sourceId: string
+  sourceName: string
+  count: number
+}
+
+type NewAlertNotice = {
+  total: number
+  groups: NewAlertNoticeGroup[]
+  timestamp: string
+}
+
+function getPayloadSourceName(payload: AlertTask['payload']): string {
+  const value = payload.alert_source_name
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function getAlertTaskSourceName(task: AlertTask, result: PollAlertsResponse): string {
+  const sourceName = task.source_name?.trim()
+  if (sourceName) return sourceName
+
+  const payloadSourceName = getPayloadSourceName(task.payload)
+  if (payloadSourceName) return payloadSourceName
+
+  const sourceId = task.source_id?.trim()
+  const matchedSourceName = result.alert_sources?.find((source) => source.id === sourceId)?.name.trim()
+  return matchedSourceName || '默认告警源'
+}
+
 export default function Layout() {
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
-  const [newAlertNotice, setNewAlertNotice] = useState<{ count: number; timestamp: string } | null>(null)
+  const [newAlertNotice, setNewAlertNotice] = useState<NewAlertNotice | null>(null)
   const knownTaskIdsRef = useRef<Set<string> | null>(null)
 
   const navigation = useMemo<NavSection[]>(
@@ -67,22 +96,32 @@ export default function Layout() {
 
   const refreshAlertNotice = useMemo(
     () => async () => {
-      const result = await fetchPollAlerts()
+      const result = await fetchAllPollAlerts()
       const currentTaskIds = new Set((result.tasks ?? []).map((task) => task.task_id).filter(Boolean))
       if (knownTaskIdsRef.current === null) {
         knownTaskIdsRef.current = currentTaskIds
         return
       }
       const previous = knownTaskIdsRef.current
-      let addedCount = 0
-      for (const taskId of currentTaskIds) {
-        if (!previous.has(taskId)) {
-          addedCount += 1
+      const groupsBySource = new Map<string, NewAlertNoticeGroup>()
+      for (const task of result.tasks ?? []) {
+        const taskId = task.task_id
+        if (!taskId || previous.has(taskId)) continue
+        const sourceId = task.source_id?.trim() || 'default'
+        const sourceName = getAlertTaskSourceName(task, result)
+        const groupKey = `${sourceId}:${sourceName}`
+        const currentGroup = groupsBySource.get(groupKey)
+        if (currentGroup) {
+          currentGroup.count += 1
+        } else {
+          groupsBySource.set(groupKey, { sourceId, sourceName, count: 1 })
         }
       }
       knownTaskIdsRef.current = currentTaskIds
-      if (addedCount > 0) {
-        setNewAlertNotice({ count: addedCount, timestamp: new Date().toISOString() })
+      const groups = Array.from(groupsBySource.values())
+      const total = groups.reduce((sum, group) => sum + group.count, 0)
+      if (total > 0) {
+        setNewAlertNotice({ total, groups, timestamp: new Date().toISOString() })
       }
     },
     [],
@@ -109,9 +148,11 @@ export default function Layout() {
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold text-slate-900">发现新告警</div>
               <div className="mt-1 text-sm leading-6 text-slate-600">
-                {newAlertNotice.count === 1
-                  ? '新增一条告警，请于告警工作台查看'
-                  : `新增 ${newAlertNotice.count} 条告警，请于告警工作台查看`}
+                {newAlertNotice.groups.length === 1
+                  ? `发现 ${newAlertNotice.total} 条 ${newAlertNotice.groups[0].sourceName} 新告警，请于告警工作台查看。`
+                  : `发现 ${newAlertNotice.total} 条新告警：${newAlertNotice.groups
+                      .map((group) => `${group.sourceName} ${group.count} 条`)
+                      .join('、')}，请于告警工作台查看。`}
               </div>
               <div className="mt-3 flex items-center gap-3">
                 <Link to="/alerts" className="text-sm font-semibold text-sky-700 hover:text-sky-600">

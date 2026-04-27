@@ -17,6 +17,28 @@ import { withProductName } from '@/config/brand'
 import { publishRuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
 import { useSentinelFlowLiveRefresh } from '@/hooks/useSentinelFlowLiveRefresh'
 
+const ALERTS_SELECTED_SOURCE_STORAGE_KEY = 'sentinelflow.alerts.selectedSourceId'
+
+function readStoredSelectedSourceId(): string | null {
+  try {
+    return window.localStorage.getItem(ALERTS_SELECTED_SOURCE_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function storeSelectedSourceId(sourceId: string | null) {
+  try {
+    if (sourceId) {
+      window.localStorage.setItem(ALERTS_SELECTED_SOURCE_STORAGE_KEY, sourceId)
+    } else {
+      window.localStorage.removeItem(ALERTS_SELECTED_SOURCE_STORAGE_KEY)
+    }
+  } catch {
+    // Ignore storage failures; the selector still works for the current session.
+  }
+}
+
 function getDispositionLabel(value: string) {
   if (value === 'true_attack') return '真实攻击'
   if (value === 'business_trigger') return '业务触发'
@@ -185,7 +207,7 @@ export default function SentinelFlowAlertsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
-  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(() => readStoredSelectedSourceId())
   const [payloadExpanded, setPayloadExpanded] = useState(false)
   const [actionState, setActionState] = useState<{ action: string; running: boolean }>({ action: '', running: false })
   const [actionResult, setActionResult] = useState<AlertActionResponse | null>(null)
@@ -206,8 +228,12 @@ export default function SentinelFlowAlertsPage() {
     try {
       const result = await fetchPollAlerts(selectedSourceId ?? undefined)
       setData(result)
-      if (!selectedSourceId && result.source_id) {
-        setSelectedSourceId(result.source_id)
+      const knownSourceIds = (result.alert_sources ?? []).map((source) => source.id)
+      const selectedSourceExists = selectedSourceId && (knownSourceIds.length === 0 || knownSourceIds.includes(selectedSourceId))
+      const nextSelectedSourceId = selectedSourceExists ? selectedSourceId : result.source_id
+      if (nextSelectedSourceId && nextSelectedSourceId !== selectedSourceId) {
+        setSelectedSourceId(nextSelectedSourceId)
+        storeSelectedSourceId(nextSelectedSourceId)
       }
       if (!silent) {
         setLoading(false)
@@ -401,7 +427,9 @@ export default function SentinelFlowAlertsPage() {
             className="sentinelflow-settings-input max-w-xs"
             value={selectedSourceId ?? data?.source_id ?? ''}
             onChange={(event) => {
-              setSelectedSourceId(event.target.value)
+              const nextSourceId = event.target.value
+              setSelectedSourceId(nextSourceId)
+              storeSelectedSourceId(nextSourceId)
               setSelectedTaskId(null)
             }}
           >
