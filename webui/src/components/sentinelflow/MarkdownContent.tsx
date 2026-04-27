@@ -21,6 +21,32 @@ function applyInlineMarkdown(text: string): string {
   return output
 }
 
+function isTableRow(line: string): boolean {
+  const trimmed = line.trim()
+  return trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.split('|').length >= 4
+}
+
+function isTableDelimiter(line: string): boolean {
+  if (!isTableRow(line)) return false
+  return splitTableRow(line).every((cell) => /^:?-{3,}:?$/.test(cell.trim()))
+}
+
+function splitTableRow(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim())
+}
+
+function renderTable(lines: string[]): string {
+  const headerCells = splitTableRow(lines[0])
+  const bodyRows = lines.slice(2).map(splitTableRow)
+  const columnCount = headerCells.length
+  const header = headerCells.map((cell) => `<th>${applyInlineMarkdown(cell)}</th>`).join('')
+  const body = bodyRows.map((row) => {
+    const cells = Array.from({ length: columnCount }, (_, index) => row[index] ?? '')
+    return `<tr>${cells.map((cell) => `<td>${applyInlineMarkdown(cell)}</td>`).join('')}</tr>`
+  }).join('')
+  return `<div class="sentinelflow-markdown-table-wrap"><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></div>`
+}
+
 function renderMarkdownToHtml(markdown: string): string {
   const normalized = markdown.replace(/\r\n/g, '\n').trim()
   if (!normalized) return ''
@@ -75,6 +101,17 @@ function renderMarkdownToHtml(markdown: string): string {
       continue
     }
 
+    if (isTableRow(line) && index + 1 < lines.length && isTableDelimiter(lines[index + 1])) {
+      const tableLines = [line, lines[index + 1]]
+      index += 2
+      while (index < lines.length && isTableRow(lines[index])) {
+        tableLines.push(lines[index])
+        index += 1
+      }
+      html.push(renderTable(tableLines))
+      continue
+    }
+
     const unordered = line.match(/^[-*]\s+(.+)$/)
     if (unordered) {
       const items: string[] = []
@@ -110,6 +147,7 @@ function renderMarkdownToHtml(markdown: string): string {
         /^```/.test(next) ||
         /^(#{1,4})\s+/.test(next) ||
         /^>\s?/.test(next) ||
+        (isTableRow(next) && index + 1 < lines.length && isTableDelimiter(lines[index + 1])) ||
         /^[-*]\s+/.test(next) ||
         /^\d+\.\s+/.test(next)
       ) {
