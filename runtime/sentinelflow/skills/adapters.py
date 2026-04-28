@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 
 from sentinelflow.domain.models import SkillExecutionRequest, SkillExecutionResult, SkillReadResult
@@ -32,6 +33,7 @@ class SentinelFlowSkillRuntime:
             output_schema=skill.spec.output_schema,
             entry=skill.spec.entry,
             mode=skill.spec.mode,
+            completion_policy=asdict(skill.spec.completion_policy),
         )
 
     def execute_skill(
@@ -62,4 +64,3 @@ class SentinelFlowSkillRuntime:
                 data={"raw": result.data} if result.data is not None else {},
             )
         return result
-

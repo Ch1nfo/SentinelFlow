@@ -1614,14 +1614,17 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         actions = aggregated_actions
         action_steps = aggregated_action_steps
         closure_step = effective_closure_step
-        success = self._compute_alert_task_success(
-            action_hint=action_hint,
-            closure_step=closure_step,
-            action_steps=action_steps,
-            skill_runs=skill_runs,
-            actions=actions,
-        )
         workflow_selection = self._extract_workflow_selection(alert, graph_result)
+        final_facts = self._build_final_facts(
+            structured_disposition=disposition,
+            closure_step=closure_step,
+            closure_result=closure_result,
+            action_steps=action_steps,
+            workflow_runs=workflow_runs,
+            success=False,
+        )
+        task_outcome = final_facts.get("task_outcome", {}) if isinstance(final_facts, dict) else {}
+        success = bool(task_outcome.get("success"))
         execution_trace = self._build_execution_trace(
             alert=alert,
             graph_result=graph_result,
@@ -1638,14 +1641,6 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             closure_result=closure_result,
             actions=actions,
             skill_runs=skill_runs,
-            success=success,
-        )
-        final_facts = self._build_final_facts(
-            structured_disposition=disposition,
-            closure_step=closure_step,
-            closure_result=closure_result,
-            action_steps=action_steps,
-            workflow_runs=workflow_runs,
             success=success,
         )
         if execution_trace:
@@ -1934,6 +1929,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             if not skill_name or self._is_same_skill_run(run, closure_run) or self._is_enrichment_run(run):
                 continue
             payload = run.get("payload", {})
+            completion_policy = self._completion_policy_for_skill(skill_name)
             steps.append(
                 {
                     "attempted": True,
@@ -1946,6 +1942,10 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                     "arguments": run.get("arguments", {}) if isinstance(run.get("arguments"), dict) else {},
                     "result": payload if isinstance(payload, dict) else {},
                     "error": payload.get("error") if isinstance(payload, dict) else None,
+                    "completion_policy": completion_policy,
+                    "completion_policy_enabled": bool(completion_policy.get("enabled")),
+                    "completion_effect": str(completion_policy.get("completion_effect", "none")).strip() or "none",
+                    "configured_action_kind": str(completion_policy.get("action_kind", "")).strip(),
                 }
             )
         return steps
@@ -1991,6 +1991,19 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         if "query" in normalized_name or "info" in normalized_name or "lookup" in normalized_name or "查询" in combined:
             return "collect_context"
         return "other"
+
+    def _completion_policy_for_skill(self, skill_name: str) -> dict[str, Any]:
+        try:
+            policy = self.skill_runtime.read_skill(skill_name).completion_policy
+        except Exception:
+            policy = {}
+        if not isinstance(policy, dict):
+            return {"enabled": False, "action_kind": "other", "completion_effect": "none"}
+        return {
+            "enabled": bool(policy.get("enabled")),
+            "action_kind": str(policy.get("action_kind", "other")).strip() or "other",
+            "completion_effect": str(policy.get("completion_effect", "none")).strip() or "none",
+        }
 
     def _build_final_facts(
         self,
@@ -2038,7 +2051,10 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             arguments = step.get("arguments", {})
             arguments = arguments if isinstance(arguments, dict) else {}
             step_success = bool(step.get("success"))
-            action_kind = self._classify_action_kind(str(step.get("skill_name", "")).strip(), payload, arguments)
+            configured_action_kind = str(step.get("configured_action_kind", "")).strip()
+            policy_enabled = bool(step.get("completion_policy_enabled"))
+            action_kind = configured_action_kind if policy_enabled and configured_action_kind else self._classify_action_kind(str(step.get("skill_name", "")).strip(), payload, arguments)
+            completion_effect = str(step.get("completion_effect", "none")).strip() or "none"
             target = self._extract_action_target(payload, arguments)
             disposal_actions.append(
                 {
@@ -2046,14 +2062,26 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                     "skill_name": str(step.get("skill_name", "")).strip(),
                     "target": target,
                     "success": step_success,
+                    "completion_policy_enabled": policy_enabled,
+                    "completion_effect": completion_effect,
                     "source_type": str(step.get("source_type", "primary") or "primary").strip(),
                     "source_name": str(step.get("source_name", "primary") or "primary").strip(),
                 }
             )
 
         successful_disposal_actions = [item for item in disposal_actions if isinstance(item, dict) and bool(item.get("success"))]
+        successful_terminal_notification = any(
+            bool(item.get("success"))
+            and bool(item.get("completion_policy_enabled"))
+            and str(item.get("completion_effect", "")).strip() == "notification"
+            for item in disposal_actions
+        )
+        terminal_action_complete = (
+            not closure_attempted
+            and successful_terminal_notification
+        )
         consistency_issues: list[str] = []
-        if successful_disposal_actions and not closure_attempted:
+        if successful_disposal_actions and not closure_attempted and not terminal_action_complete:
             consistency_issues.append("disposal_executed_but_closure_not_attempted")
         elif closure_attempted and not closure_success:
             consistency_issues.append("closure_attempted_but_not_successful")
@@ -2064,6 +2092,9 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         elif closure_attempted:
             outcome_status = "failed"
             outcome_success = False
+        elif terminal_action_complete:
+            outcome_status = "pending_manual_closure"
+            outcome_success = True
         else:
             outcome_status = "pending_closure"
             outcome_success = False
@@ -2100,7 +2131,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             "task_outcome": {
                 "success": outcome_success,
                 "status": outcome_status,
-                "source": "finalizer",
+                "source": "terminal_action_policy" if terminal_action_complete else "finalizer",
             },
             "consistency": {
                 "consistent": not consistency_issues,

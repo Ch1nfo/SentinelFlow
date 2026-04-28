@@ -5,7 +5,7 @@ from typing import Any
 
 from sentinelflow.domain.enums import SkillRuntimeMode, SkillType
 from sentinelflow.domain.errors import SkillConfigurationError
-from sentinelflow.domain.models import SkillSpec
+from sentinelflow.domain.models import SkillCompletionPolicy, SkillSpec
 from sentinelflow.skills.models import SentinelFlowSkill
 
 try:
@@ -84,6 +84,25 @@ def _coerce_bool(value: Any, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"true", "1", "yes", "on"}
     return default
+
+
+def _normalize_completion_policy(value: Any) -> SkillCompletionPolicy:
+    if not isinstance(value, dict):
+        return SkillCompletionPolicy()
+    enabled = _coerce_bool(value.get("enabled"), False)
+    action_kind = str(value.get("action_kind", "other")).strip() or "other"
+    completion_effect = str(value.get("completion_effect", "none")).strip() or "none"
+    allowed_action_kinds = {"ban_ip", "notify", "closure", "collect_context", "other"}
+    allowed_effects = {"containment", "notification", "closure", "none"}
+    if action_kind not in allowed_action_kinds:
+        action_kind = "other"
+    if completion_effect not in allowed_effects:
+        completion_effect = "none"
+    return SkillCompletionPolicy(
+        enabled=enabled,
+        action_kind=action_kind,
+        completion_effect=completion_effect,
+    )
 
 
 class SentinelFlowSkillLoader:
@@ -247,4 +266,5 @@ class SentinelFlowSkillLoader:
             execute_enabled=execute_enabled,
             approval_required=approval_required,
             audit_enabled=audit_enabled,
+            completion_policy=_normalize_completion_policy(meta.get("completion_policy")),
         )

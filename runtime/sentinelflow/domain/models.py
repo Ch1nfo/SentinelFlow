@@ -23,6 +23,13 @@ class SentinelFlowAlert:
 
 
 @dataclass(slots=True)
+class SkillCompletionPolicy:
+    enabled: bool = False
+    action_kind: str = "other"
+    completion_effect: str = "none"
+
+
+@dataclass(slots=True)
 class SkillSpec:
     name: str
     type: SkillType
@@ -36,6 +43,7 @@ class SkillSpec:
     execute_enabled: bool = False
     approval_required: bool = False
     audit_enabled: bool = True
+    completion_policy: SkillCompletionPolicy = field(default_factory=SkillCompletionPolicy)
 
 
 @dataclass(slots=True)
@@ -66,6 +74,7 @@ class SkillReadResult:
     output_schema: dict[str, Any] = field(default_factory=dict)
     entry: str | None = None
     mode: SkillRuntimeMode | None = None
+    completion_policy: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

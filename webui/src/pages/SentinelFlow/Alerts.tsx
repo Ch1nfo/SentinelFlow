@@ -51,6 +51,7 @@ function getTaskTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger'
   if (status === 'running') return 'info'
   if (status === 'queued') return 'warn'
   if (status === 'pending_closure') return 'warn'
+  if (status === 'pending_manual_closure') return 'warn'
   if (status === 'awaiting_approval') return 'warn'
   if (status === 'failed') return 'danger'
   if (status === 'succeeded' || status === 'completed') return 'success'
@@ -122,6 +123,7 @@ function getTaskStatusClass(task: AlertTask): string {
   if (status === 'running') return 'running'
   if (status === 'queued') return 'queued'
   if (status === 'pending_closure') return 'queued'
+  if (status === 'pending_manual_closure') return 'queued'
   if (status === 'awaiting_approval') return 'queued'
   if (status === 'failed') return 'danger'
   if (status === 'succeeded' || status === 'completed') return 'success'
@@ -133,6 +135,7 @@ function getTaskStatusLabel(task: AlertTask): string {
   if (status === 'queued') return '排队中'
   if (status === 'running') return '执行中'
   if (status === 'pending_closure') return '未执行'
+  if (status === 'pending_manual_closure') return '自动完成待结单'
   if (status === 'awaiting_approval') return '待审批'
   if (status === 'completed') return '已被人工处置'
   if (status === 'succeeded') return '已完成'
@@ -147,7 +150,7 @@ function isReDisposableStatus(task: AlertTask): boolean {
 
 function isPrimaryDisposeDisabled(task: AlertTask): boolean {
   const status = getEffectiveTaskStatus(task)
-  return status === 'running' || status === 'succeeded' || status === 'completed'
+  return status === 'running' || status === 'succeeded' || status === 'completed' || status === 'pending_manual_closure' || status === 'awaiting_approval'
 }
 
 function getEffectiveTaskStatus(task: AlertTask): AlertTask['status'] | string {
@@ -297,9 +300,19 @@ export default function SentinelFlowAlertsPage() {
   const selectedFinalFacts = (selectedResult.final_facts as Record<string, unknown> | undefined) ?? {}
   const selectedFinalJudgment = (selectedFinalFacts.judgment as Record<string, unknown> | undefined) ?? {}
   const selectedFinalConsistency = (selectedFinalFacts.consistency as Record<string, unknown> | undefined) ?? {}
+  const selectedTaskOutcome = (selectedFinalFacts.task_outcome as Record<string, unknown> | undefined) ?? {}
+  const selectedFinalDisposal = (selectedFinalFacts.disposal as Record<string, unknown> | undefined) ?? {}
   const selectedConsistencyIssues = Array.isArray(selectedFinalConsistency.issues)
     ? selectedFinalConsistency.issues.map((item) => String(item).trim()).filter(Boolean)
     : []
+  const selectedDisposalActions = Array.isArray(selectedFinalDisposal.actions)
+    ? selectedFinalDisposal.actions.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    : []
+  const selectedTerminalActions = selectedDisposalActions.filter((item) => {
+    const effect = String(item.completion_effect ?? '').trim()
+    return Boolean(item.success) && Boolean(item.completion_policy_enabled)
+  })
+  const selectedTaskOutcomeStatus = String(selectedTaskOutcome.status ?? '').trim()
   const selectedWorkflowRuns = normalizeWorkflowRuns(selectedResult.workflow_runs)
   const selectedApprovalRequest = (selectedResult.approval_request as Record<string, unknown> | undefined) ?? {}
   const selectedWorkflowRun = selectedWorkflowRuns[0] ?? null
@@ -624,6 +637,26 @@ export default function SentinelFlowAlertsPage() {
                           ))}
                         </ul>
                       </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                {selectedTaskOutcomeStatus === 'pending_manual_closure' ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">自动处置完成</div>
+                    <div className="mt-2 text-sm font-semibold text-amber-950">已完成自动封禁/通知，待人工在 SOC 结单。</div>
+                    {selectedTerminalActions.length ? (
+                      <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-amber-900">
+                        {selectedTerminalActions.map((item, index) => {
+                          const effect = String(item.completion_effect ?? '').trim()
+                          const kind = String(item.kind ?? item.skill_name ?? '').trim()
+                          const target = String(item.target ?? '').trim()
+                          return (
+                            <li key={`${selectedTask.task_id}-terminal-action-${index}`}>
+                              {effect === 'notification' ? '终态通知' : effect === 'containment' ? '遏制动作' : '终态动作'}：{kind || '未命名 Skill'}{target ? ` / ${target}` : ''}
+                            </li>
+                          )
+                        })}
+                      </ul>
                     ) : null}
                   </div>
                 ) : null}

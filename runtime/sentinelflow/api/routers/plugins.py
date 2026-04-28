@@ -29,6 +29,7 @@ def list_skills() -> dict[str, Any]:
             "approval_required": read.approval_required,
             "entry": read.entry,
             "mode": read.mode.value if read.mode else None,
+            "completion_policy": read.completion_policy,
         })
     return {"skills": skills}
 
@@ -48,7 +49,7 @@ def create_skill(payload: SkillCreateRequest) -> dict[str, Any]:
 
     _mirror_project_file(
         skill_dir / "SKILL.md",
-        _build_skill_markdown(payload.name, description, payload.content, skill_type, payload.mode, payload.approval_required),
+        _build_skill_markdown(payload.name, description, payload.content, skill_type, payload.mode, payload.approval_required, payload.completion_policy),
     )
     if skill_type == "hybrid":
         _mirror_project_file(skill_dir / "main.py", payload.code if payload.code.strip() else _build_skill_main(skill_name))
@@ -79,7 +80,7 @@ def save_skill(name: str, payload: SkillCreateRequest) -> dict[str, Any]:
     skill_dir = Path(".sentinelflow") / "plugins" / "skills" / new_slug
     _mirror_project_file(
         skill_dir / "SKILL.md",
-        _build_skill_markdown(payload.name, description, payload.content, skill_type, payload.mode, payload.approval_required),
+        _build_skill_markdown(payload.name, description, payload.content, skill_type, payload.mode, payload.approval_required, payload.completion_policy),
     )
     if skill_type == "hybrid":
         _mirror_project_file(skill_dir / "main.py", payload.code if payload.code.strip() else _build_skill_main(new_slug))
@@ -104,6 +105,7 @@ def get_skill(name: str) -> dict[str, Any]:
         "approval_required": read.approval_required,
         "entry": read.entry, "mode": read.mode.value if read.mode else None,
         "input_schema": read.input_schema, "output_schema": read.output_schema,
+        "completion_policy": read.completion_policy,
     }
 
 

@@ -1,4 +1,4 @@
-export type AlertTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'completed' | 'pending_closure' | 'awaiting_approval'
+export type AlertTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'completed' | 'pending_closure' | 'pending_manual_closure' | 'awaiting_approval'
 
 export type ApprovalRequest = {
   approval_id: string
@@ -140,6 +140,11 @@ export type SkillSummary = {
   description: string
   executable: boolean
   approval_required: boolean
+  completion_policy?: {
+    enabled: boolean
+    action_kind: string
+    completion_effect: string
+  }
   entry?: string | null
   mode?: string | null
 }
@@ -498,6 +503,11 @@ export async function createSkill(payload: {
   code: string
   mode?: string | null
   approvalRequired?: boolean
+  completionPolicy?: {
+    enabled: boolean
+    action_kind: string
+    completion_effect: string
+  }
 }) {
   return postJson<SkillDetail>('/api/sentinelflow/skills', payload)
 }
@@ -510,6 +520,11 @@ export async function saveSkill(name: string, payload: {
   code: string
   mode?: string | null
   approvalRequired?: boolean
+  completionPolicy?: {
+    enabled: boolean
+    action_kind: string
+    completion_effect: string
+  }
 }) {
   return postJson<SkillDetail>(`/api/sentinelflow/skills/${encodeURIComponent(name)}/save`, payload)
 }

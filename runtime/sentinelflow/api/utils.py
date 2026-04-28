@@ -184,6 +184,7 @@ def _build_skill_markdown(
     skill_type: str = "doc",
     mode: str | None = None,
     approval_required: bool = False,
+    completion_policy: dict[str, Any] | None = None,
 ) -> str:
     """
     Build the full SKILL.md text with frontmatter containing all skill metadata.
@@ -205,6 +206,15 @@ def _build_skill_markdown(
         fm_lines.append("  enabled: true")
         fm_lines.append(f"  approval_required: {'true' if approval_required else 'false'}")
         fm_lines.append("  audit: true")
+    policy = completion_policy if isinstance(completion_policy, dict) else {}
+    policy_enabled = bool(policy.get("enabled"))
+    if policy_enabled:
+        action_kind = str(policy.get("action_kind", "other")).strip() or "other"
+        completion_effect = str(policy.get("completion_effect", "none")).strip() or "none"
+        fm_lines.append("completion_policy:")
+        fm_lines.append("  enabled: true")
+        fm_lines.append(f"  action_kind: {action_kind}")
+        fm_lines.append(f"  completion_effect: {completion_effect}")
     fm_lines.append("---")
     frontmatter = "\n".join(fm_lines)
 

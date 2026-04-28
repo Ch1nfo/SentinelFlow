@@ -15,6 +15,34 @@ function getSkillTypeLabel(type: string) {
   return type
 }
 
+const DEFAULT_COMPLETION_POLICY = {
+  enabled: false,
+  action_kind: 'other',
+  completion_effect: 'none',
+}
+
+const COMPLETION_ACTION_OPTIONS = [
+  { value: 'ban_ip', label: '封禁 IP' },
+  { value: 'notify', label: '通知' },
+  { value: 'closure', label: '结单闭环' },
+  { value: 'collect_context', label: '上下文查询' },
+  { value: 'other', label: '其他' },
+]
+
+const COMPLETION_EFFECT_OPTIONS = [
+  { value: 'containment', label: '遏制/封禁' },
+  { value: 'notification', label: '通知人工' },
+  { value: 'closure', label: '结单闭环' },
+  { value: 'none', label: '不作为闭环条件' },
+]
+
+function completionPolicyLabel(policy: SkillSummary['completion_policy'] | undefined): string {
+  if (!policy?.enabled) return '未参与'
+  const action = COMPLETION_ACTION_OPTIONS.find((item) => item.value === policy.action_kind)?.label ?? policy.action_kind
+  const effect = COMPLETION_EFFECT_OPTIONS.find((item) => item.value === policy.completion_effect)?.label ?? policy.completion_effect
+  return `${action} / ${effect}`
+}
+
 export default function SentinelFlowSkillsPage() {
   const { data, loading, error, reload } = useSentinelFlowAsyncData(fetchSkills, [])
   const detailPanelRef = useRef<HTMLDivElement | null>(null)
@@ -44,6 +72,7 @@ export default function SentinelFlowSkillsPage() {
     content: '',
     code: '',
     approvalRequired: false,
+    completionPolicy: { ...DEFAULT_COMPLETION_POLICY },
   })
 
   useEffect(() => {
@@ -129,11 +158,12 @@ export default function SentinelFlowSkillsPage() {
         type: created.type,
         executable: created.executable,
         approval_required: created.approval_required,
+        completion_policy: created.completion_policy,
         entry: created.entry,
         mode: created.mode,
       })
       setDetail(created)
-      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false })
+      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false, completionPolicy: { ...DEFAULT_COMPLETION_POLICY } })
       setEditingSkillName(null)
     } catch (error) {
       setFormError(error instanceof Error ? error.message : '创建 Skill 失败。')
@@ -156,13 +186,14 @@ export default function SentinelFlowSkillsPage() {
         type: saved.type,
         executable: saved.executable,
         approval_required: saved.approval_required,
+        completion_policy: saved.completion_policy,
         entry: saved.entry,
         mode: saved.mode,
       })
       await reload()
       setEditingSkillName(null)
       setDebuggingSkillName(null)
-      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false })
+      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false, completionPolicy: { ...DEFAULT_COMPLETION_POLICY } })
       setDebugInput('{\n  "ip": "198.51.100.10"\n}')
       setDebugOutput(null)
       setDebugError(null)
@@ -184,7 +215,7 @@ export default function SentinelFlowSkillsPage() {
       setSelectedSkill(null)
       setDetail(null)
       setEditingSkillName(null)
-      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false })
+      setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false, completionPolicy: { ...DEFAULT_COMPLETION_POLICY } })
     } finally {
       setDeleting(false)
     }
@@ -203,6 +234,7 @@ export default function SentinelFlowSkillsPage() {
       content: detail.markdown,
       code: detail.code ?? '',
       approvalRequired: detail.approval_required,
+      completionPolicy: { ...DEFAULT_COMPLETION_POLICY, ...(detail.completion_policy ?? {}) },
     })
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -211,7 +243,7 @@ export default function SentinelFlowSkillsPage() {
     setEditingSkillName(null)
     setDebuggingSkillName(null)
     setFormError(null)
-    setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false })
+    setDraft({ name: '', description: '', type: 'doc', mode: 'subprocess', content: '', code: '', approvalRequired: false, completionPolicy: { ...DEFAULT_COMPLETION_POLICY } })
     setDebugInput('{\n  "ip": "198.51.100.10"\n}')
     setDebugOutput(null)
     setDebugError(null)
@@ -230,6 +262,7 @@ export default function SentinelFlowSkillsPage() {
       content: detail.markdown,
       code: detail.code ?? '',
       approvalRequired: detail.approval_required,
+      completionPolicy: { ...DEFAULT_COMPLETION_POLICY, ...(detail.completion_policy ?? {}) },
     })
     setDebugOutput(null)
     setDebugError(null)
@@ -255,6 +288,62 @@ export default function SentinelFlowSkillsPage() {
       setDebugRunning(false)
     }
   }
+
+  const completionPolicyControls = (
+    <div className="rounded-xl border border-gray-200 bg-white p-4">
+      <label className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+        <input
+          type="checkbox"
+          checked={draft.completionPolicy.enabled}
+          onChange={(event) => setDraft((current) => ({
+            ...current,
+            completionPolicy: {
+              ...current.completionPolicy,
+              enabled: event.target.checked,
+            },
+          }))}
+        />
+        参与自动处置闭环
+      </label>
+      <div className="mt-1 text-xs leading-5 text-gray-500">
+        勾选后，该 Skill 的成功执行可作为自动处置完成条件；未勾选的旧 Skill 不参与闭环判定。
+      </div>
+      {draft.completionPolicy.enabled ? (
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <select
+            className="sentinelflow-settings-input"
+            value={draft.completionPolicy.action_kind}
+            onChange={(event) => setDraft((current) => ({
+              ...current,
+              completionPolicy: {
+                ...current.completionPolicy,
+                action_kind: event.target.value,
+              },
+            }))}
+          >
+            {COMPLETION_ACTION_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+          <select
+            className="sentinelflow-settings-input"
+            value={draft.completionPolicy.completion_effect}
+            onChange={(event) => setDraft((current) => ({
+              ...current,
+              completionPolicy: {
+                ...current.completionPolicy,
+                completion_effect: event.target.value,
+              },
+            }))}
+          >
+            {COMPLETION_EFFECT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+    </div>
+  )
 
   return (
     <div className="sentinelflow-page-stack">
@@ -355,6 +444,7 @@ export default function SentinelFlowSkillsPage() {
                     </div>
                   </div>
                 ) : null}
+                {draft.type === 'hybrid' ? completionPolicyControls : null}
                 {draft.type === 'hybrid' ? (
                   <textarea className="sentinelflow-command-input font-mono" rows={12} placeholder="可执行代码（保存为 main.py）" value={draft.code} onChange={(event) => setDraft((current) => ({ ...current, code: event.target.value }))} />
                 ) : null}
@@ -392,6 +482,7 @@ export default function SentinelFlowSkillsPage() {
                   </div>
                 </div>
               ) : null}
+              {draft.type === 'hybrid' ? <div className="mt-3">{completionPolicyControls}</div> : null}
               {draft.type === 'hybrid' ? (
                 <textarea className="sentinelflow-command-input mt-3 font-mono" rows={10} placeholder="可执行代码（保存为 main.py）" value={draft.code} onChange={(event) => setDraft((current) => ({ ...current, code: event.target.value }))} />
               ) : null}
@@ -456,11 +547,13 @@ export default function SentinelFlowSkillsPage() {
                   { label: '类型', value: getSkillTypeLabel(detail.type) },
                   { label: '可执行', value: detail.executable ? '是' : '否' },
                   { label: '执行审批', value: detail.approval_required ? '需要审批（仅对对话 / 手动单告警；每次执行都需单独审批）' : '直接执行' },
+                  { label: '自动处置闭环', value: completionPolicyLabel(detail.completion_policy) },
                 ]}
               />
             ) : null}
             {detail?.executable ? <StatusBadge tone="success">可执行</StatusBadge> : null}
             {detail?.approval_required ? <StatusBadge tone="warn">执行需审批（对话 / 手动单告警；每次执行都需单独审批）</StatusBadge> : null}
+            {detail?.completion_policy?.enabled ? <StatusBadge tone="info">参与自动处置闭环</StatusBadge> : null}
             {detail?.approval_required ? <div className="mt-2 text-xs text-gray-500">自动执行、自动重试和调试当前 Skill 时会直接执行，不会停在审批状态；对话和手动单告警场景下，每次实际执行都会重新发起审批。</div> : null}
             {detailError ? <div className="sentinelflow-message-block sentinelflow-message-error">{detailError}</div> : null}
             {detail ? (

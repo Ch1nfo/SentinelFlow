@@ -26,10 +26,22 @@ class AlertTaskRunnerService:
         self.workflow_root = workflow_root
 
     def _agent_result_is_success(self, agent_result: dict[str, Any], selected_action: str) -> bool:
+        final_facts = agent_result.get("final_facts", {})
+        if isinstance(final_facts, dict):
+            task_outcome = final_facts.get("task_outcome", {})
+            if isinstance(task_outcome, dict) and isinstance(task_outcome.get("success"), bool):
+                return bool(task_outcome.get("success"))
         closure_step = agent_result.get("effective_closure_step", agent_result.get("closure_step", {}))
         return isinstance(closure_step, dict) and bool(closure_step.get("attempted")) and bool(closure_step.get("success"))
 
     def _agent_result_failure_reason(self, agent_result: dict[str, Any], selected_action: str) -> str:
+        final_facts = agent_result.get("final_facts", {})
+        if isinstance(final_facts, dict):
+            task_outcome = final_facts.get("task_outcome", {})
+            if isinstance(task_outcome, dict):
+                status = str(task_outcome.get("status", "")).strip()
+                if status == "pending_manual_closure":
+                    return "自动处置已完成，等待人工结单。"
         closure_step = agent_result.get("effective_closure_step", agent_result.get("closure_step", {}))
         if isinstance(closure_step, dict):
             if not bool(closure_step.get("attempted")):

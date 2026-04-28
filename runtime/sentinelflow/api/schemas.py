@@ -93,6 +93,7 @@ class SkillCreateRequest(BaseModel):
     mode: str | None = None
     code: str = ""
     approval_required: bool = Field(default=False, alias="approvalRequired")
+    completion_policy: dict[str, Any] | None = Field(default=None, alias="completionPolicy")
 
 
 class SkillDebugRequest(BaseModel):

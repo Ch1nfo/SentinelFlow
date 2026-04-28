@@ -34,6 +34,7 @@ function getTaskStatusLabel(status: TaskFilter | AlertTask['status']) {
   if (status === 'queued') return '排队中'
   if (status === 'running') return '执行中'
   if (status === 'pending_closure') return '未执行'
+  if (status === 'pending_manual_closure') return '自动完成待结单'
   if (status === 'awaiting_approval') return '待审批'
   if (status === 'succeeded') return '已完成'
   if (status === 'completed') return '已被人工处置'
@@ -85,6 +86,7 @@ function getTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' {
   const status = getEffectiveTaskStatus(task)
   if (status === 'succeeded' || status === 'completed') return 'success'
   if (status === 'pending_closure' || status === 'awaiting_approval') return 'warn'
+  if (status === 'pending_manual_closure') return 'warn'
   if (status === 'failed') return 'danger'
   if (status === 'running') return 'warn'
   return 'neutral'
@@ -310,6 +312,7 @@ export default function SentinelFlowTasksPage() {
       : tasks.filter((task) => {
           const status = String(getEffectiveTaskStatus(task))
           if (filter === 'failed') return isFailedBucketStatus(status)
+          if (filter === 'succeeded') return status === 'succeeded' || status === 'pending_manual_closure'
           return status === filter
         })
     return [...base].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
@@ -516,7 +519,7 @@ export default function SentinelFlowTasksPage() {
             </div>
             <div className="text-3xl font-bold text-gray-900">{tasks.filter((task) => {
               const status = getEffectiveTaskStatus(task)
-              return status === 'succeeded' || status === 'completed'
+              return status === 'succeeded' || status === 'completed' || status === 'pending_manual_closure'
             }).length}</div>
           </div>
           <div className="rounded-xl border border-gray-200 bg-white p-5">
