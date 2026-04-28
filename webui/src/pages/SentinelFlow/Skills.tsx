@@ -36,11 +36,47 @@ const COMPLETION_EFFECT_OPTIONS = [
   { value: 'none', label: '不作为闭环条件' },
 ]
 
+const COMPLETION_ACTION_DESCRIPTIONS: Record<string, string> = {
+  ban_ip: '用于标记该 Skill 是封禁/阻断动作，会在告警详情和统计中按处置动作展示。',
+  notify: '用于标记该 Skill 是通知动作，会在告警详情中按通知动作展示。',
+  closure: '用于标记该 Skill 是写入结单/闭环结果的动作。',
+  collect_context: '用于标记该 Skill 是补充上下文或情报查询动作，不应单独代表处置完成。',
+  other: '用于无法归类的动作，仅作为普通 Skill 调用记录。',
+}
+
+const COMPLETION_EFFECT_DESCRIPTIONS: Record<string, string> = {
+  containment: '表示这是遏制/封禁过程动作，成功后会作为处置事实展示，但不会单独让任务完成。',
+  notification: '表示这是终态通知，成功后任务进入“自动完成待结单”，等待人工填写 SOC 结果。',
+  closure: '表示这是正式结单闭环，成功后任务进入“已完成”。适合 exec/close。',
+  none: '表示只记录动作，不参与任务完成判定。',
+}
+
 function completionPolicyLabel(policy: SkillSummary['completion_policy'] | undefined): string {
   if (!policy?.enabled) return '未参与'
   const action = COMPLETION_ACTION_OPTIONS.find((item) => item.value === policy.action_kind)?.label ?? policy.action_kind
   const effect = COMPLETION_EFFECT_OPTIONS.find((item) => item.value === policy.completion_effect)?.label ?? policy.completion_effect
   return `${action} / ${effect}`
+}
+
+function completionPolicyEffectText(policy: SkillSummary['completion_policy'] | undefined): string {
+  if (!policy?.enabled) return '该 Skill 成功执行后不会影响任务闭环状态。'
+  const actionDescription = COMPLETION_ACTION_DESCRIPTIONS[policy.action_kind] ?? COMPLETION_ACTION_DESCRIPTIONS.other
+  const effectDescription = COMPLETION_EFFECT_DESCRIPTIONS[policy.completion_effect] ?? COMPLETION_EFFECT_DESCRIPTIONS.none
+  return `动作类型：${actionDescription} 闭环作用：${effectDescription}`
+}
+
+function completionPolicyOutcomeText(policy: SkillSummary['completion_policy'] | undefined): string {
+  if (!policy?.enabled) return '当前效果：不参与自动处置完成判定。'
+  if (policy.completion_effect === 'closure') {
+    return '当前效果：该 Skill 成功后，任务可直接收敛为“已完成”。'
+  }
+  if (policy.completion_effect === 'notification') {
+    return '当前效果：该 Skill 成功后，任务可收敛为“自动完成待结单”，等待人工在 SOC 结单。'
+  }
+  if (policy.completion_effect === 'containment') {
+    return '当前效果：该 Skill 成功后会展示为已完成的封禁/遏制动作，但不会单独让任务完成。'
+  }
+  return '当前效果：该 Skill 成功后只记录执行结果，不改变任务完成状态。'
 }
 
 export default function SentinelFlowSkillsPage() {
@@ -310,38 +346,53 @@ export default function SentinelFlowSkillsPage() {
       </div>
       {draft.completionPolicy.enabled ? (
         <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <select
-            className="sentinelflow-settings-input"
-            value={draft.completionPolicy.action_kind}
-            onChange={(event) => setDraft((current) => ({
-              ...current,
-              completionPolicy: {
-                ...current.completionPolicy,
-                action_kind: event.target.value,
-              },
-            }))}
-          >
-            {COMPLETION_ACTION_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-          <select
-            className="sentinelflow-settings-input"
-            value={draft.completionPolicy.completion_effect}
-            onChange={(event) => setDraft((current) => ({
-              ...current,
-              completionPolicy: {
-                ...current.completionPolicy,
-                completion_effect: event.target.value,
-              },
-            }))}
-          >
-            {COMPLETION_EFFECT_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
+          <div>
+            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">动作类型</div>
+            <select
+              className="sentinelflow-settings-input"
+              value={draft.completionPolicy.action_kind}
+              onChange={(event) => setDraft((current) => ({
+                ...current,
+                completionPolicy: {
+                  ...current.completionPolicy,
+                  action_kind: event.target.value,
+                },
+              }))}
+            >
+              {COMPLETION_ACTION_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <div className="mt-1 text-xs leading-5 text-gray-500">
+              {COMPLETION_ACTION_DESCRIPTIONS[draft.completionPolicy.action_kind] ?? COMPLETION_ACTION_DESCRIPTIONS.other}
+            </div>
+          </div>
+          <div>
+            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">闭环作用</div>
+            <select
+              className="sentinelflow-settings-input"
+              value={draft.completionPolicy.completion_effect}
+              onChange={(event) => setDraft((current) => ({
+                ...current,
+                completionPolicy: {
+                  ...current.completionPolicy,
+                  completion_effect: event.target.value,
+                },
+              }))}
+            >
+              {COMPLETION_EFFECT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <div className="mt-1 text-xs leading-5 text-gray-500">
+              {COMPLETION_EFFECT_DESCRIPTIONS[draft.completionPolicy.completion_effect] ?? COMPLETION_EFFECT_DESCRIPTIONS.none}
+            </div>
+          </div>
         </div>
       ) : null}
+      <div className={draft.completionPolicy.enabled ? 'mt-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800' : 'mt-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs leading-5 text-gray-500'}>
+        {completionPolicyOutcomeText(draft.completionPolicy)}
+      </div>
     </div>
   )
 
@@ -554,6 +605,12 @@ export default function SentinelFlowSkillsPage() {
             {detail?.executable ? <StatusBadge tone="success">可执行</StatusBadge> : null}
             {detail?.approval_required ? <StatusBadge tone="warn">执行需审批（对话 / 手动单告警；每次执行都需单独审批）</StatusBadge> : null}
             {detail?.completion_policy?.enabled ? <StatusBadge tone="info">参与自动处置闭环</StatusBadge> : null}
+            {detail ? (
+              <div className={detail.completion_policy?.enabled ? 'mt-3 rounded-xl border border-sky-100 bg-sky-50 p-3 text-xs leading-5 text-sky-800' : 'mt-3 rounded-xl border border-gray-100 bg-gray-50 p-3 text-xs leading-5 text-gray-500'}>
+                <div>{completionPolicyEffectText(detail.completion_policy)}</div>
+                <div className="mt-1 font-semibold">{completionPolicyOutcomeText(detail.completion_policy)}</div>
+              </div>
+            ) : null}
             {detail?.approval_required ? <div className="mt-2 text-xs text-gray-500">自动执行、自动重试和调试当前 Skill 时会直接执行，不会停在审批状态；对话和手动单告警场景下，每次实际执行都会重新发起审批。</div> : null}
             {detailError ? <div className="sentinelflow-message-block sentinelflow-message-error">{detailError}</div> : null}
             {detail ? (
