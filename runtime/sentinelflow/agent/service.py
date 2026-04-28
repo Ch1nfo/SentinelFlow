@@ -1956,7 +1956,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             return "false_positive"
         if normalized != "6":
             return ""
-        normalized_text = _clean_model_text(f"{memo} {detail_msg}").replace(" ", "")
+        normalized_text = _clean_model_text(detail_msg).replace(" ", "")
         if any(keyword in normalized_text for keyword in ("真实攻击", "恶意攻击", "确认攻击", "高危攻击")):
             return "true_attack"
         if any(keyword in normalized_text for keyword in ("规则误报", "误报")):
