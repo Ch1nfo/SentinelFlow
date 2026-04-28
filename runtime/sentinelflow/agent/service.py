@@ -2015,10 +2015,19 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         closure_memo = str(closure_result.get("memo") or "").strip()
         closure_detail = str(closure_result.get("detailMsg") or closure_result.get("detail_msg") or "").strip()
         mapped_disposition = self._resolve_closure_disposition(closure_status, closure_memo, closure_detail) if closure_success else ""
-
-        final_disposition = mapped_disposition or str(structured_disposition or "").strip() or "unknown"
-        judgment_source = "closure_result_mapping" if mapped_disposition else "structured_analysis"
-        judgment_confidence = "high" if mapped_disposition else ("medium" if structured_disposition else "low")
+        structured_disposition = str(structured_disposition or "").strip()
+        if mapped_disposition:
+            final_disposition = mapped_disposition
+            judgment_source = "closure_result_mapping"
+            judgment_confidence = "high"
+        elif closure_success and structured_disposition:
+            final_disposition = structured_disposition
+            judgment_source = "structured_analysis_after_closure"
+            judgment_confidence = "medium"
+        else:
+            final_disposition = structured_disposition or "unknown"
+            judgment_source = "structured_analysis"
+            judgment_confidence = "medium" if structured_disposition else "low"
 
         disposal_actions: list[dict[str, Any]] = []
         for step in action_steps:
@@ -2044,10 +2053,6 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
 
         successful_disposal_actions = [item for item in disposal_actions if isinstance(item, dict) and bool(item.get("success"))]
         consistency_issues: list[str] = []
-        if mapped_disposition and structured_disposition and mapped_disposition != structured_disposition:
-            consistency_issues.append(
-                f"closure_result_implies_{mapped_disposition}_but_structured_disposition_{structured_disposition}"
-            )
         if successful_disposal_actions and not closure_attempted:
             consistency_issues.append("disposal_executed_but_closure_not_attempted")
         elif closure_attempted and not closure_success:
