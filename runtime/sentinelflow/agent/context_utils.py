@@ -6,9 +6,13 @@ from typing import Any
 
 
 KEY_FACT_FIELDS = {
+    "to",
+    "notify_to",
     "recipient",
     "recipients",
+    "recipient_id",
     "receiver",
+    "receiver_id",
     "target",
     "target_ip",
     "ip",
@@ -21,11 +25,24 @@ KEY_FACT_FIELDS = {
     "notification_channel",
     "channel",
     "user",
+    "user_id",
     "username",
     "account",
+    "chat_id",
+    "group_id",
+    "mobile",
     "phone",
     "email",
     "webhook",
+}
+
+KEY_FACT_ALIASES = {
+    "to": ("to", "recipient"),
+    "notify_to": ("notify_to", "to", "recipient"),
+    "recipient": ("recipient", "to"),
+    "receiver": ("receiver", "recipient", "to"),
+    "recipient_id": ("recipient_id", "recipient", "to"),
+    "receiver_id": ("receiver_id", "recipient", "to"),
 }
 
 
@@ -75,7 +92,8 @@ def _collect_key_facts(value: Any, facts: dict[str, Any]) -> None:
         for key, item in value.items():
             normalized_key = str(key).strip()
             if normalized_key in KEY_FACT_FIELDS:
-                _merge_fact(facts, normalized_key, item)
+                for fact_key in KEY_FACT_ALIASES.get(normalized_key, (normalized_key,)):
+                    _merge_fact(facts, fact_key, item)
             if isinstance(item, (dict, list, tuple)):
                 _collect_key_facts(item, facts)
     elif isinstance(value, (list, tuple)):
@@ -129,7 +147,7 @@ def compact_worker_result_for_llm(worker_result: dict[str, Any]) -> dict[str, An
     compact: dict[str, Any] = {
         "step": worker_result.get("step", 0),
         "worker": str(worker_result.get("worker", worker_result.get("worker_agent", ""))).strip(),
-        "task_prompt": compact_text(worker_result.get("task_prompt", ""), 1000),
+        "task_prompt": str(worker_result.get("task_prompt", "")).strip(),
         "final_response": compact_text(worker_result.get("final_response", ""), 1600),
         "skills_used": list(worker_result.get("skills_used", []) or [])[:12],
         "tool_calls_summary": tool_calls_summary,
@@ -149,12 +167,13 @@ def build_context_envelope(
     delegated_task: str = "",
     workflow_step: dict[str, Any] | None = None,
     prior_facts: dict[str, Any] | None = None,
+    authoritative_inputs: dict[str, Any] | None = None,
     constraints: list[str] | None = None,
 ) -> dict[str, Any]:
     default_constraints = [
         "当前任务以 delegated_task / workflow_step 为准，原始输入只作为背景。",
         "不得从历史噪声中猜测发送对象、处置对象或结单对象。",
-        "关键对象只能来自当前任务、原始输入中的明确字段或 prior_facts。",
+        "关键对象只能来自当前任务、authoritative_inputs、原始输入中的明确字段或 prior_facts。",
         "如果关键对象缺失，必须说明缺失，不要编造。",
     ]
     return {
@@ -162,5 +181,6 @@ def build_context_envelope(
         "delegated_task": delegated_task,
         "workflow_step": workflow_step or {},
         "prior_facts": prior_facts or {},
+        "authoritative_inputs": _json_safe(authoritative_inputs or {}),
         "constraints": list(constraints or default_constraints),
     }

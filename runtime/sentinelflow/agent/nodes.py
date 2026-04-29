@@ -38,10 +38,16 @@ async def agent_node(state: SentinelFlowAgentState, llm, skill_root) -> dict:
         payload = str(alert_data.get("payload", "")).strip()
         delegated_task_prompt = str(alert_data.get("delegated_task_prompt", "")).strip()
         if delegated_task_prompt:
+            prior_facts = alert_data.get("prior_facts", {}) if isinstance(alert_data.get("prior_facts"), dict) else {}
             envelope = build_context_envelope(
                 original_input=payload,
                 delegated_task=delegated_task_prompt,
-                prior_facts=alert_data.get("prior_facts", {}) if isinstance(alert_data.get("prior_facts"), dict) else {},
+                prior_facts=prior_facts,
+                authoritative_inputs={
+                    "delegated_task": delegated_task_prompt,
+                    "original_input": payload,
+                    "prior_facts": prior_facts,
+                },
             )
             initial_msg = HumanMessage(
                 content=(
@@ -67,10 +73,16 @@ async def agent_node(state: SentinelFlowAgentState, llm, skill_root) -> dict:
         alert_json = json.dumps(alert_data, ensure_ascii=False, indent=2)
         delegated_task_prompt = str(alert_data.get("delegated_task_prompt", "")).strip()
         if delegated_task_prompt:
+            prior_facts = alert_data.get("prior_facts", {}) if isinstance(alert_data.get("prior_facts"), dict) else {}
             envelope = build_context_envelope(
                 original_input=alert_data,
                 delegated_task=delegated_task_prompt,
-                prior_facts=alert_data.get("prior_facts", {}) if isinstance(alert_data.get("prior_facts"), dict) else {},
+                prior_facts=prior_facts,
+                authoritative_inputs={
+                    "delegated_task": delegated_task_prompt,
+                    "original_input": alert_data,
+                    "prior_facts": prior_facts,
+                },
             )
             initial_msg = HumanMessage(
                 content=(
