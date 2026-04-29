@@ -35,9 +35,9 @@ async def agent_node(state: SentinelFlowAgentState, llm, skill_root) -> dict:
             )
         )
         system_msg = SystemMessage(content=prompt)
-        payload = str(alert_data.get("payload", "")).strip()
-        delegated_task_prompt = str(alert_data.get("delegated_task_prompt", "")).strip()
-        if delegated_task_prompt:
+        payload = str(alert_data.get("payload", ""))
+        delegated_task_prompt = str(alert_data.get("delegated_task_prompt", ""))
+        if delegated_task_prompt.strip():
             prior_facts = alert_data.get("prior_facts", {}) if isinstance(alert_data.get("prior_facts"), dict) else {}
             envelope = build_context_envelope(
                 original_input=payload,
@@ -71,8 +71,8 @@ async def agent_node(state: SentinelFlowAgentState, llm, skill_root) -> dict:
         )
         system_msg = SystemMessage(content=prompt)
         alert_json = json.dumps(alert_data, ensure_ascii=False, indent=2)
-        delegated_task_prompt = str(alert_data.get("delegated_task_prompt", "")).strip()
-        if delegated_task_prompt:
+        delegated_task_prompt = str(alert_data.get("delegated_task_prompt", ""))
+        if delegated_task_prompt.strip():
             prior_facts = alert_data.get("prior_facts", {}) if isinstance(alert_data.get("prior_facts"), dict) else {}
             envelope = build_context_envelope(
                 original_input=alert_data,

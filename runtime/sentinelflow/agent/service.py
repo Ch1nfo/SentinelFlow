@@ -229,7 +229,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         
         is_human_command = alert_data.get("alert_source") == "human_command"
         if is_human_command:
-            payload = str(alert_data.get("payload", "")).strip()
+            payload = str(alert_data.get("payload", ""))
             initial_msg = HumanMessage(content=f"请执行以下人工指令：{payload}")
         else:
             alert_json = json.dumps(alert_data, ensure_ascii=False, indent=2)
@@ -795,7 +795,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         }
 
     def _build_worker_wrapped_result(self, checkpoint: dict[str, Any], state: dict[str, Any], graph_result: dict[str, Any]) -> dict[str, Any]:
-        delegated_task_prompt = str((state.get("alert_data", {}) or {}).get("delegated_task_prompt", "")).strip()
+        delegated_task_prompt = str((state.get("alert_data", {}) or {}).get("delegated_task_prompt", ""))
         tool_calls = graph_result.get("tool_calls", [])
         skills_used = [
             str(item.get("name", "")).strip()
@@ -809,7 +809,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                 step_idx = int(checkpoint_thread_id.rsplit(":", 1)[1])
             except (ValueError, IndexError):
                 step_idx = 0
-        final_text = str(graph_result.get("final_response", "")).strip()
+        final_text = str(graph_result.get("final_response", ""))
         success, error = self.evaluate_worker_result(graph_result)
         tool_result_facts: dict[str, Any] = {}
         for message in graph_result.get("messages", []) or []:
@@ -825,7 +825,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             "step": step_idx or 1,
             "worker": str(checkpoint.get("agent_name", "")).strip() or str(graph_result.get("agent_name", "")).strip(),
             "task_prompt": delegated_task_prompt,
-            "final_response": final_text[:3000],
+            "final_response": final_text,
             "skills_used": skills_used,
             "tool_calls_summary": summarize_tool_calls(tool_calls),
             "key_facts": extract_key_facts(graph_result.get("key_facts", {}), tool_calls, final_text, tool_result_facts),
@@ -2393,10 +2393,10 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             return []
 
         messages: list[Any] = []
-        for item in history[-12:]:
+        for item in history:
             role = str(item.get("role", "")).strip().lower()
-            content = str(item.get("content", "")).strip()
-            if not content:
+            content = str(item.get("content", ""))
+            if not content.strip():
                 continue
             if role == "user":
                 messages.append(HumanMessage(content=content))

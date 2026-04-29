@@ -94,7 +94,8 @@ class SentinelFlowAgentWorkflowRunner:
         worker_result: dict[str, Any],
     ) -> dict[str, Any]:
         messages = worker_result.get("messages", [])
-        final_response = str(worker_result.get("final_response", "")).strip()
+        final_response = str(worker_result.get("final_response", ""))
+        final_response_for_check = final_response.strip()
         tool_result_facts: dict[str, Any] = {}
         for message in messages:
             if not isinstance(message, dict) or str(message.get("type", "")).strip() != "tool":
@@ -122,7 +123,7 @@ class SentinelFlowAgentWorkflowRunner:
                 if isinstance(parsed, dict) and (not parsed.get("success", True) or parsed.get("error")):
                     has_error = True
                     break
-            has_action = bool(final_response or worker_result.get("tool_calls"))
+            has_action = bool(final_response_for_check or worker_result.get("tool_calls"))
             success = has_action and not has_error
         tool_calls_summary = list(worker_result.get("tool_calls_summary", []) or [])
         if not tool_calls_summary:
@@ -135,7 +136,9 @@ class SentinelFlowAgentWorkflowRunner:
             "worker_agent": step.agent,
             "task_prompt": step.task_prompt,
             "workflow_task_prompt": task_prompt,
-            "final_response": compact_text(final_response, 1800),
+            "final_response": final_response,
+            "display_summary": compact_text(final_response, 1800),
+            "short_summary": compact_text(final_response, 500),
             "tool_calls": worker_result.get("tool_calls", []),
             "tool_calls_summary": tool_calls_summary,
             "actions_summary": [
@@ -148,34 +151,9 @@ class SentinelFlowAgentWorkflowRunner:
                 if isinstance(item, dict) and str(item.get("name", "")).strip()
             ],
             "key_facts": key_facts,
-            "error": compact_text(worker_result.get("error", ""), 500) or None,
+            "error": worker_result.get("error"),
             "success": success,
         }
-
-    def _build_prior_tool_args(self, step_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        tool_args: list[dict[str, Any]] = []
-        for item in step_results:
-            if not isinstance(item, dict):
-                continue
-            tool_calls_summary = item.get("tool_calls_summary", [])
-            if not isinstance(tool_calls_summary, list):
-                continue
-            for call in tool_calls_summary:
-                if not isinstance(call, dict):
-                    continue
-                args = call.get("args", {})
-                if not isinstance(args, dict):
-                    args = {}
-                tool_args.append(
-                    {
-                        "step": item.get("step"),
-                        "step_name": item.get("step_name"),
-                        "worker_agent": item.get("worker_agent"),
-                        "skill": str(call.get("name", "")).strip(),
-                        "args": args,
-                    }
-                )
-        return tool_args
 
     def _save_workflow_checkpoint(
         self,
@@ -411,7 +389,7 @@ class SentinelFlowAgentWorkflowRunner:
         workflow = self._deserialize_workflow(workflow_payload)
         workflow_input = state.get("workflow_input", {})
         workflow_input = workflow_input if isinstance(workflow_input, dict) else {}
-        task_prompt = str(state.get("task_prompt", "")).strip()
+        task_prompt = str(state.get("task_prompt", ""))
         step_results = list(state.get("step_results", []) or [])
         pending_step_index = int(state.get("pending_step_index", 1) or 1)
         execution_context = dict(state.get("execution_context", {}) or {})
@@ -500,58 +478,53 @@ class SentinelFlowAgentWorkflowRunner:
         delegated_task_prompt: str,
         step_results: list[dict[str, Any]],
     ) -> str:
-        effective_task_prompt = task_prompt.strip() or f"请作为流程中的子 Agent 完成第 {step_index} 步《{step_name}》需要承担的工作，并输出你的阶段性结果。"
-        prior_tool_args = self._build_prior_tool_args(step_results)
-        authoritative_inputs = {
-            "workflow_delegated_task": delegated_task_prompt.strip(),
-            "current_step_task": effective_task_prompt,
-            "original_input": workflow_input,
-            "prior_tool_args": prior_tool_args,
-        }
-        prior_facts = extract_key_facts(
-            authoritative_inputs,
-            *[
-                item.get("key_facts", {})
-                for item in step_results
-                if isinstance(item, dict)
-            ]
-        )
-        prior_steps = [
+        effective_task_prompt = task_prompt if task_prompt.strip() else f"请作为流程中的子 Agent 完成第 {step_index} 步《{step_name}》需要承担的工作，并输出你的阶段性结果。"
+        prior_step_results = [item for item in step_results if isinstance(item, dict)]
+        prior_step_summaries = [
             {
                 "step": item.get("step"),
                 "step_name": item.get("step_name"),
                 "worker_agent": item.get("worker_agent"),
                 "success": bool(item.get("success")),
-                "summary": compact_text(item.get("final_response", ""), 500),
+                "summary": item.get("short_summary") or compact_text(item.get("final_response", ""), 500),
                 "key_facts": item.get("key_facts", {}),
-                "actions_summary": item.get("actions_summary", []),
             }
-            for item in step_results
-            if isinstance(item, dict)
+            for item in prior_step_results
         ]
+        prior_facts = extract_key_facts(
+            workflow_input,
+            delegated_task_prompt,
+            effective_task_prompt,
+            prior_step_results,
+            *[
+                item.get("key_facts", {})
+                for item in prior_step_results
+            ]
+        )
         envelope = build_context_envelope(
             original_input=workflow_input,
-            delegated_task=delegated_task_prompt.strip(),
+            delegated_task=delegated_task_prompt,
             workflow_step={
                 "workflow_name": workflow.name,
                 "step_index": step_index,
                 "steps_count": len(workflow.steps),
                 "step_name": step_name,
                 "task_prompt": effective_task_prompt,
-                "prior_steps": prior_steps,
+                "prior_step_results": prior_step_results,
+                "prior_step_summaries": prior_step_summaries,
+                "prior_steps": prior_step_summaries,
             },
             prior_facts=prior_facts,
-            authoritative_inputs=authoritative_inputs,
         )
         return (
             f"你当前处于 Agent Workflow《{workflow.name}》的第 {step_index}/{len(workflow.steps)} 步：{step_name}\n\n"
-            "请只依据以下上下文执行当前步骤；prior_steps 是摘要，authoritative_inputs 中的命令和工具参数是完整执行依据：\n"
+            "请只依据以下上下文执行当前步骤；prior_step_results 是完整前置步骤结果，prior_step_summaries 只是阅读辅助：\n"
             f"```json\n{json.dumps(envelope, ensure_ascii=False, indent=2)}\n```\n\n"
             f"本步骤固定任务：\n{effective_task_prompt}\n\n"
             "要求：\n"
             "- 只完成当前步骤，不要尝试规划整个流程\n"
             "- 不要假设自己能调度其他 Agent\n"
-            "- 发送对象、处置对象、结单对象只能来自当前步骤、authoritative_inputs、原始上下文或 prior_facts\n"
+            "- 发送对象、处置对象、结单对象只能来自当前步骤、prior_step_results、原始上下文或 prior_facts\n"
             "- 如果关键对象缺失，明确说明缺失，不要编造\n"
             "- 输出简洁中文结果，必要时调用你已授权的 Skill\n"
         )
@@ -624,7 +597,7 @@ class SentinelFlowAgentWorkflowRunner:
                 {
                     "phase": "workflow_step",
                     "title": f"步骤：{str(step.get('step_name', '')).strip() or str(step.get('step_id', '')).strip() or '未命名步骤'}",
-                    "summary": str(step.get("final_response", "")).strip() or "该步骤已执行完成。",
+                    "summary": str(step.get("display_summary") or step.get("final_response", "")).strip() or "该步骤已执行完成。",
                     "success": bool(step.get("success")),
                     "data": step,
                 }

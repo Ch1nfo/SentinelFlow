@@ -115,23 +115,27 @@ def extract_key_facts(*values: Any) -> dict[str, Any]:
     return facts
 
 
-def summarize_tool_calls(tool_calls: Any, *, limit: int = 8) -> list[dict[str, Any]]:
+def summarize_tool_calls(tool_calls: Any, *, limit: int | None = None) -> list[dict[str, Any]]:
     if not isinstance(tool_calls, list):
         return []
     summaries: list[dict[str, Any]] = []
-    for call in tool_calls[:limit]:
+    selected_calls = tool_calls if limit is None else tool_calls[:limit]
+    for call in selected_calls:
         if not isinstance(call, dict):
             continue
         args = call.get("args", {})
         if not isinstance(args, dict):
             args = {}
-        summaries.append(
-            {
-                "name": str(call.get("name", "")).strip(),
-                "args": _json_safe(args),
-                "key_facts": extract_key_facts(args),
-            }
-        )
+        item = {
+            "name": str(call.get("name", "")).strip(),
+            "args": _json_safe(args),
+            "key_facts": extract_key_facts(args),
+        }
+        if call.get("id"):
+            item["id"] = str(call.get("id", "")).strip()
+        if call.get("type"):
+            item["type"] = str(call.get("type", "")).strip()
+        summaries.append(item)
     return [item for item in summaries if item.get("name")]
 
 
@@ -144,16 +148,19 @@ def compact_worker_result_for_llm(worker_result: dict[str, Any]) -> dict[str, An
         tool_calls_summary,
         worker_result.get("final_response", ""),
     )
+    final_response = str(worker_result.get("final_response", ""))
+    error = worker_result.get("error")
     compact: dict[str, Any] = {
         "step": worker_result.get("step", 0),
         "worker": str(worker_result.get("worker", worker_result.get("worker_agent", ""))).strip(),
-        "task_prompt": str(worker_result.get("task_prompt", "")).strip(),
-        "final_response": compact_text(worker_result.get("final_response", ""), 1600),
-        "skills_used": list(worker_result.get("skills_used", []) or [])[:12],
+        "task_prompt": str(worker_result.get("task_prompt", "")),
+        "final_response": final_response,
+        "display_summary": compact_text(final_response, 1600),
+        "skills_used": list(worker_result.get("skills_used", []) or []),
         "tool_calls_summary": tool_calls_summary,
         "key_facts": key_facts,
         "success": bool(worker_result.get("success")),
-        "error": compact_text(worker_result.get("error", ""), 500) or None,
+        "error": error,
     }
     if worker_result.get("approval_pending"):
         compact["approval_pending"] = True

@@ -98,7 +98,7 @@ def _resolve_current_tool_call_id(
                     continue
                 matched = True
                 for key, value in expected_args.items():
-                    if str(args.get(key, "")).strip() != value:
+                    if str(args.get(key, "")) != value:
                         matched = False
                         break
                 if not matched:
@@ -226,7 +226,7 @@ def _build_worker_subgraph_tool(
             "step": step_idx,
             "worker": worker_agent_def.name,
             "task_prompt": task_prompt,
-            "final_response": final_text[:3000],
+            "final_response": final_text,
             "skills_used": skills_used,
             "tool_calls_summary": tool_calls_summary,
             "key_facts": extract_key_facts(prior_facts, alert_data, task_prompt, final_text, tool_calls_summary, tool_result_facts),
@@ -289,7 +289,7 @@ def _build_worker_subgraph_tool(
         worker_state["parent_tool_call_id"] = _resolve_current_tool_call_id(
             state,
             tool_name,
-            expected_args={"task_prompt": str(task_prompt or "").strip()},
+            expected_args={"task_prompt": str(task_prompt or "")},
         )
         result = await _execute_worker_subgraph(task_prompt, worker_state, step_idx)
         return json.dumps(result, ensure_ascii=False)
@@ -403,7 +403,7 @@ def build_orchestrator_graph(
             "run_workflow",
             expected_args={
                 "workflow_id": workflow_id,
-                "task_prompt": str(task_prompt or "").strip(),
+                "task_prompt": str(task_prompt or ""),
             },
         )
         execution_context = {
@@ -424,7 +424,7 @@ def build_orchestrator_graph(
             result = await workflow_runner.execute_workflow(
                 workflow,
                 dict(state.get("alert_data", {}) or {}),
-                task_prompt=str(task_prompt or "").strip(),
+                task_prompt=str(task_prompt or ""),
                 execution_context=execution_context,
             )
         except Exception as exc:
@@ -446,8 +446,8 @@ def build_orchestrator_graph(
             if not isinstance(item, dict):
                 continue
             worker_name = str(item.get("worker", "")).strip()
-            task_prompt = str(item.get("task_prompt", "")).strip()
-            if not worker_name or not task_prompt:
+            task_prompt = str(item.get("task_prompt", ""))
+            if not worker_name or not task_prompt.strip():
                 continue
             if worker_name not in worker_runners:
                 normalized_tasks.append(
@@ -471,7 +471,7 @@ def build_orchestrator_graph(
         invalid_results: list[dict[str, Any]] = []
         for task_spec in normalized_tasks[:parallel_limit]:
             worker_name = str(task_spec.get("worker", "")).strip()
-            task_prompt = str(task_spec.get("task_prompt", "")).strip()
+            task_prompt = str(task_spec.get("task_prompt", ""))
             invalid_reason = str(task_spec.get("error", "")).strip()
             if invalid_reason:
                 step_counter[0] += 1
@@ -565,10 +565,10 @@ def build_orchestrator_graph(
         if not current_messages:
             # ── First invocation: seed with conversation history + initial task ──
             seed_messages: list = []
-            for item in (state.get("conversation_history") or [])[-12:]:
+            for item in (state.get("conversation_history") or []):
                 role = str(item.get("role", "")).strip().lower()
-                content = str(item.get("content", "")).strip()
-                if not content:
+                content = str(item.get("content", ""))
+                if not content.strip():
                     continue
                 if role == "user":
                     seed_messages.append(HumanMessage(content=content))
@@ -579,7 +579,7 @@ def build_orchestrator_graph(
             ad = state.get("alert_data", {})
             entry_type = state.get("entry_type", "conversation")
             if entry_type == "conversation" or ad.get("alert_source") == "human_command":
-                payload = str(ad.get("payload", "")).strip()
+                payload = str(ad.get("payload", ""))
                 human_content = f"请处理以下人工指令：{payload}" if payload else "请开始处理当前任务。"
             else:
                 alert_json = json.dumps(ad, ensure_ascii=False, indent=2)
