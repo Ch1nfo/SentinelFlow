@@ -34,6 +34,7 @@ type ToolCallLike = {
 
 type WorkerStepLike = {
   step?: number
+  worker?: string
   worker_agent?: string
   agent_name?: string
   task_prompt?: string
@@ -277,7 +278,6 @@ function ConversationResponseDetails({
   const toolCalls = collectToolCalls(data)
   const workflowRuns = asArray(data.workflow_runs)
   const approval = approvalCard ?? data.approval_request
-  const finalResponse = firstText(data.final_response, getString(dataRecord, 'response'), getString(dataRecord, 'summary'), response.error)
   const contextRecords = collectContextRecords(data)
 
   return (
@@ -297,14 +297,6 @@ function ConversationResponseDetails({
           ]}
         />
       </DetailSection>
-
-      {finalResponse ? (
-        <DetailSection title="执行结果">
-          <div className={response.error ? 'sentinelflow-detail-text sentinelflow-detail-text-error' : 'sentinelflow-detail-text'}>
-            <MarkdownContent content={finalResponse} />
-          </div>
-        </DetailSection>
-      ) : null}
 
       {approval?.skill_name ? (
         <DetailSection title="审批" icon={<Wrench className="h-4 w-4" />}>
@@ -473,6 +465,17 @@ export default function SentinelFlowConversationPage() {
     ))
   }
 
+  function isExpandedPanel(itemId: string, panel: string): boolean {
+    return expandedToolSummaryIds.includes(`${itemId}:${panel}`)
+  }
+
+  function toggleExpandedPanel(itemId: string, panel: string) {
+    const key = `${itemId}:${panel}`
+    setExpandedToolSummaryIds((current) => (
+      current.includes(key) ? current.filter((id) => id !== key) : [...current, key]
+    ))
+  }
+
   async function handleStopCurrentRun() {
     await stopConversationRun()
   }
@@ -592,6 +595,7 @@ export default function SentinelFlowConversationPage() {
                 const showApprovalCard = Boolean(approvalCard?.skill_name)
                 const hideExecutionSummary = isApprovalPending
                 const toolSummaryExpanded = expandedToolSummaryIds.includes(item.id)
+                const workerChainExpanded = isExpandedPanel(item.id, 'workers')
                 const hasAnyToolSummary = toolCalls.length > 0 || workerToolCalls.length > 0
 
                 return (
@@ -695,17 +699,25 @@ export default function SentinelFlowConversationPage() {
                       ) : null}
                       {!hideExecutionSummary && workerResults.length > 1 ? (
                         <div className="sentinelflow-chat-details">
-                          <div className="sentinelflow-tool-call-summary">子 Agent 串联步骤</div>
-                          <div className="sentinelflow-tool-call-list">
-                            {workerResults.map((step, index) => (
-                              <div key={`${item.id}-worker-step-${index}`} className="sentinelflow-tool-call-card">
-                                <div className="sentinelflow-response-row">
-                                  <StatusBadge tone="warn">{`步骤 ${step.step ?? index + 1}`}</StatusBadge>
-                                  <strong>{step.worker_agent || `worker-${index + 1}`}</strong>
+                          <button
+                            type="button"
+                            className="sentinelflow-tool-call-summary text-left text-gray-500 transition-colors hover:text-gray-700"
+                            onClick={() => toggleExpandedPanel(item.id, 'workers')}
+                          >
+                            {workerChainExpanded ? '收起子 Agent 串联步骤' : `子 Agent 串联步骤 ${workerResults.length} 步`}
+                          </button>
+                          {workerChainExpanded ? (
+                            <div className="sentinelflow-tool-call-list">
+                              {workerResults.map((step, index) => (
+                                <div key={`${item.id}-worker-step-${index}`} className="sentinelflow-tool-call-card">
+                                  <div className="sentinelflow-response-row">
+                                    <StatusBadge tone="warn">{`步骤 ${index + 1}`}</StatusBadge>
+                                    <strong>{step.worker || step.worker_agent || step.agent_name || `worker-${index + 1}`}</strong>
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
-                          </div>
+                              ))}
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
                       {item.response.error && !isApprovalPending ? <div className="sentinelflow-message-block sentinelflow-message-error">{item.response.error}</div> : null}
