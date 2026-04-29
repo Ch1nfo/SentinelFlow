@@ -698,7 +698,7 @@ export default function SentinelFlowConversationPage() {
                         </>
                       ) : null}
                       {!hideExecutionSummary && workerResults.length > 1 ? (
-                        <>
+                        <div className="mt-2">
                           <button
                             type="button"
                             className="sentinelflow-tool-call-summary text-left text-gray-500 transition-colors hover:text-gray-700"
@@ -718,7 +718,7 @@ export default function SentinelFlowConversationPage() {
                               ))}
                             </div>
                           ) : null}
-                        </>
+                        </div>
                       ) : null}
                       {item.response.error && !isApprovalPending ? <div className="sentinelflow-message-block sentinelflow-message-error">{item.response.error}</div> : null}
                       <div className="sentinelflow-chat-actions">
