@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { MessageSquareText, Plus, RotateCcw, Send, Square, Trash2 } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { Bot, CheckCircle2, FileJson, MessageSquareText, Plus, RotateCcw, Send, Square, Trash2, Workflow, Wrench } from 'lucide-react'
 import type { ApprovalRequest, CommandDispatchResponse } from '@/api/sentinelflow'
 import JsonPreview from '@/components/sentinelflow/JsonPreview'
 import MarkdownContent from '@/components/sentinelflow/MarkdownContent'
@@ -25,15 +26,24 @@ import {
 type ToolCallLike = {
   name?: string
   args?: unknown
+  id?: string
+  type?: string
+  key_facts?: unknown
 }
 
 type WorkerStepLike = {
   step?: number
   worker_agent?: string
+  agent_name?: string
   task_prompt?: string
   delegation_reason?: string
   tool_calls?: ToolCallLike[]
+  tool_calls_summary?: ToolCallLike[]
   final_response?: string
+  display_summary?: string
+  short_summary?: string
+  success?: boolean
+  error?: string
 }
 
 type CommandDataLike = {
@@ -42,26 +52,288 @@ type CommandDataLike = {
   primary_agent?: string
   worker_agent?: string
   delegation_reason?: string
-  approval_request?: {
-    approval_id?: string
-    skill_name?: string
-    arguments_summary?: string
-    message?: string
-  }
+  approval_request?: ApprovalRequest
   worker_results?: WorkerStepLike[]
   worker_result?: {
     tool_calls?: ToolCallLike[]
+    tool_calls_summary?: ToolCallLike[]
     agent_name?: string
   }
+  workflow_runs?: unknown[]
+  tool_calls_summary?: ToolCallLike[]
+}
+
+type DetailField = {
+  label: string
+  value: unknown
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {}
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+function asToolCalls(value: unknown): ToolCallLike[] {
+  return Array.isArray(value) ? value.filter(isRecord) as ToolCallLike[] : []
+}
+
+function getString(record: Record<string, unknown>, key: string): string {
+  const value = record[key]
+  return typeof value === 'string' ? value : ''
+}
+
+function getBooleanLabel(value: unknown): string {
+  if (value === true) return '成功'
+  if (value === false) return '失败'
+  return ''
+}
+
+function formatDetailValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  if (typeof value === 'number') return String(value)
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value
+    }
+  }
+  return ''
+}
+
+function collectWorkerResults(data: CommandDataLike): WorkerStepLike[] {
+  const directResults = Array.isArray(data.worker_results) ? data.worker_results as WorkerStepLike[] : []
+  if (directResults.length) return directResults
+
+  const workflowRuns = asArray(data.workflow_runs)
+  return workflowRuns.flatMap((run) => {
+    const runRecord = asRecord(run)
+    return asArray(runRecord.worker_results).filter(isRecord) as WorkerStepLike[]
+  })
+}
+
+function collectToolCalls(data: CommandDataLike): ToolCallLike[] {
+  const calls: ToolCallLike[] = []
+  calls.push(...asToolCalls(data.tool_calls))
+  calls.push(...asToolCalls(data.tool_calls_summary))
+  calls.push(...asToolCalls(data.worker_result?.tool_calls))
+  calls.push(...asToolCalls(data.worker_result?.tool_calls_summary))
+  collectWorkerResults(data).forEach((worker) => {
+    calls.push(...asToolCalls(worker.tool_calls))
+    calls.push(...asToolCalls(worker.tool_calls_summary))
+  })
+  asArray(data.workflow_runs).forEach((run) => {
+    const runRecord = asRecord(run)
+    calls.push(...asToolCalls(runRecord.tool_calls))
+    calls.push(...asToolCalls(runRecord.tool_calls_summary))
+    asArray(runRecord.actions_summary).forEach((action) => {
+      const actionRecord = asRecord(action)
+      calls.push(...asToolCalls(actionRecord.tool_calls))
+      calls.push(...asToolCalls(actionRecord.tool_calls_summary))
+    })
+  })
+  return calls.filter((call) => call.name || call.args)
+}
+
+function DetailSection({ title, icon, children }: { title: string; icon?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="sentinelflow-detail-section">
+      <div className="sentinelflow-detail-section-title">
+        {icon}
+        <span>{title}</span>
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function DetailFields({ fields }: { fields: DetailField[] }) {
+  const visibleFields = fields.filter((field) => field.value !== undefined && field.value !== null && field.value !== '')
+  if (!visibleFields.length) return null
+  return (
+    <div className="sentinelflow-detail-field-grid">
+      {visibleFields.map((field) => (
+        <div key={field.label} className="sentinelflow-detail-field">
+          <span>{field.label}</span>
+          <strong title={formatDetailValue(field.value)}>{formatDetailValue(field.value)}</strong>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ToolCallDetailList({ toolCalls }: { toolCalls: ToolCallLike[] }) {
+  if (!toolCalls.length) return null
+  return (
+    <div className="sentinelflow-detail-list">
+      {toolCalls.map((toolCall, index) => (
+        <details key={`${toolCall.name || 'tool'}-${toolCall.id || index}`} className="sentinelflow-detail-disclosure">
+          <summary>
+            <span className="sentinelflow-detail-summary-main">{toolCall.name || `tool-${index + 1}`}</span>
+            <span className="sentinelflow-detail-summary-meta">{formatToolArguments(toolCall.args)}</span>
+          </summary>
+          <JsonPreview value={{ args: toolCall.args ?? {}, key_facts: toolCall.key_facts, id: toolCall.id, type: toolCall.type }} />
+        </details>
+      ))}
+    </div>
+  )
+}
+
+function ConversationResponseDetails({
+  response,
+  resultTone,
+  resultCode,
+  approvalCard,
+}: {
+  response: CommandDispatchResponse
+  resultTone: 'warn' | 'success' | 'danger' | 'neutral'
+  resultCode: string
+  approvalCard?: ApprovalRequest
+}) {
+  const data = extractCommandData(response.data)
+  const dataRecord = asRecord(response.data)
+  const workerResults = collectWorkerResults(data)
+  const toolCalls = collectToolCalls(data)
+  const workflowRuns = asArray(data.workflow_runs)
+  const approval = approvalCard ?? data.approval_request
+  const finalResponse = firstText(data.final_response, getString(dataRecord, 'response'), getString(dataRecord, 'summary'), response.error)
+
+  return (
+    <div className="sentinelflow-chat-details sentinelflow-chat-details-structured">
+      <DetailSection title="运行概览" icon={<CheckCircle2 className="h-4 w-4" />}>
+        <div className="sentinelflow-response-row">
+          <StatusBadge tone={resultTone}>{resultCode}</StatusBadge>
+          <span className="sentinelflow-detail-route">route: {response.route || 'unknown'}</span>
+        </div>
+        <DetailFields
+          fields={[
+            { label: '主 Agent', value: data.primary_agent },
+            { label: '子 Agent', value: data.worker_agent || data.worker_result?.agent_name },
+            { label: 'Workflow', value: getString(dataRecord, 'workflow_name') || getString(dataRecord, 'workflow_id') },
+            { label: '任务', value: getString(dataRecord, 'task_id') || getString(dataRecord, 'event_ids') },
+            { label: '成功', value: getBooleanLabel(response.success) },
+          ]}
+        />
+      </DetailSection>
+
+      {finalResponse ? (
+        <DetailSection title="执行结果">
+          <div className={response.error ? 'sentinelflow-detail-text sentinelflow-detail-text-error' : 'sentinelflow-detail-text'}>
+            <MarkdownContent content={finalResponse} />
+          </div>
+        </DetailSection>
+      ) : null}
+
+      {approval?.skill_name ? (
+        <DetailSection title="审批" icon={<Wrench className="h-4 w-4" />}>
+          <DetailFields
+            fields={[
+              { label: 'Skill', value: approval.skill_name },
+              { label: '状态', value: approval.status || 'pending' },
+              { label: '审批 ID', value: approval.approval_id },
+              { label: '参数摘要', value: approval.arguments_summary },
+            ]}
+          />
+          {approval.message ? <div className="sentinelflow-detail-note">{approval.message}</div> : null}
+          {approval.arguments ? (
+            <details className="sentinelflow-detail-disclosure">
+              <summary>
+                <span className="sentinelflow-detail-summary-main">审批参数</span>
+                <span className="sentinelflow-detail-summary-meta">{formatToolArguments(approval.arguments)}</span>
+              </summary>
+              <JsonPreview value={approval.arguments} />
+            </details>
+          ) : null}
+        </DetailSection>
+      ) : null}
+
+      {workflowRuns.length ? (
+        <DetailSection title="Workflow" icon={<Workflow className="h-4 w-4" />}>
+          <div className="sentinelflow-detail-list">
+            {workflowRuns.map((run, index) => {
+              const runRecord = asRecord(run)
+              return (
+                <details key={`workflow-${index}`} className="sentinelflow-detail-disclosure">
+                  <summary>
+                    <span className="sentinelflow-detail-summary-main">{getString(runRecord, 'workflow_name') || getString(runRecord, 'workflow_id') || `Workflow ${index + 1}`}</span>
+                    <span className="sentinelflow-detail-summary-meta">{getBooleanLabel(runRecord.success) || getString(runRecord, 'status') || '已记录'}</span>
+                  </summary>
+                  <JsonPreview value={run} />
+                </details>
+              )
+            })}
+          </div>
+        </DetailSection>
+      ) : null}
+
+      {workerResults.length ? (
+        <DetailSection title="子 Agent" icon={<Bot className="h-4 w-4" />}>
+          <div className="sentinelflow-detail-list">
+            {workerResults.map((worker, index) => {
+              const title = worker.worker_agent || worker.agent_name || `worker-${index + 1}`
+              const summary = firstText(worker.display_summary, worker.short_summary, worker.final_response, worker.error)
+              return (
+                <details key={`${title}-${index}`} className="sentinelflow-detail-disclosure">
+                  <summary>
+                    <span className="sentinelflow-detail-summary-main">{worker.step ? `步骤 ${worker.step} · ${title}` : title}</span>
+                    <span className="sentinelflow-detail-summary-meta">{getBooleanLabel(worker.success) || `${asToolCalls(worker.tool_calls).length + asToolCalls(worker.tool_calls_summary).length} 次技能`}</span>
+                  </summary>
+                  <DetailFields fields={[
+                    { label: '分派原因', value: worker.delegation_reason },
+                    { label: '任务指令', value: worker.task_prompt },
+                  ]} />
+                  {summary ? <div className="sentinelflow-detail-text"><MarkdownContent content={summary} /></div> : null}
+                </details>
+              )
+            })}
+          </div>
+        </DetailSection>
+      ) : null}
+
+      {toolCalls.length ? (
+        <DetailSection title={`技能调用 ${toolCalls.length} 次`} icon={<Wrench className="h-4 w-4" />}>
+          <ToolCallDetailList toolCalls={toolCalls} />
+        </DetailSection>
+      ) : null}
+
+      <DetailSection title="原始数据" icon={<FileJson className="h-4 w-4" />}>
+        <details className="sentinelflow-detail-disclosure">
+          <summary>
+            <span className="sentinelflow-detail-summary-main">完整响应 data</span>
+            <span className="sentinelflow-detail-summary-meta">用于排障和审计</span>
+          </summary>
+          <JsonPreview value={response.data} />
+        </details>
+      </DetailSection>
+    </div>
+  )
 }
 
 function formatToolArguments(args: unknown): string {
   if (!args || typeof args !== 'object') return '无参数'
-  const entries = Object.entries(args as Record<string, unknown>).slice(0, 3)
+  const allEntries = Object.entries(args as Record<string, unknown>)
+  const entries = allEntries.slice(0, 5)
   if (!entries.length) return '无参数'
-  return entries
+  const summary = entries
     .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
     .join(' | ')
+  const remaining = allEntries.length - entries.length
+  return remaining > 0 ? `${summary} | 还有 ${remaining} 个` : summary
 }
 
 function extractCommandData(data: unknown): CommandDataLike {
@@ -375,13 +647,12 @@ export default function SentinelFlowConversationPage() {
                         </button>
                       </div>
                       {isExpanded ? (
-                        <div className="sentinelflow-chat-details">
-                          <div className="sentinelflow-response-row">
-                            <StatusBadge tone={resultTone}>{resultCode}</StatusBadge>
-                            <span>route: {item.response.route}</span>
-                          </div>
-                          <JsonPreview value={item.response.data} />
-                        </div>
+                        <ConversationResponseDetails
+                          response={item.response}
+                          resultTone={resultTone}
+                          resultCode={resultCode}
+                          approvalCard={approvalCard}
+                        />
                       ) : null}
                     </div>
                   </div>
