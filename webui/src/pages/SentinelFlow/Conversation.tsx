@@ -169,8 +169,8 @@ function collectContextRecords(data: CommandDataLike): Array<{ source: string; m
   collectWorkerResults(data).forEach((worker, index) => {
     const manifest = asRecord(worker.context_manifest)
     if (Object.keys(manifest).length) {
-      const workerName = worker.worker_agent || worker.agent_name || `worker-${index + 1}`
-      records.push({ source: worker.step ? `步骤 ${worker.step} · ${workerName}` : workerName, manifest })
+      const workerName = worker.worker || worker.worker_agent || worker.agent_name || `worker-${index + 1}`
+      records.push({ source: `步骤 ${index + 1} · ${workerName}`, manifest })
     }
   })
   asArray(data.workflow_runs).forEach((run, index) => {
@@ -346,12 +346,12 @@ function ConversationResponseDetails({
         <DetailSection title="子 Agent" icon={<Bot className="h-4 w-4" />}>
           <div className="sentinelflow-detail-list">
             {workerResults.map((worker, index) => {
-              const title = worker.worker_agent || worker.agent_name || `worker-${index + 1}`
+              const title = worker.worker || worker.worker_agent || worker.agent_name || `worker-${index + 1}`
               const summary = firstText(worker.display_summary, worker.short_summary, worker.final_response, worker.error)
               return (
                 <details key={`${title}-${index}`} className="sentinelflow-detail-disclosure">
                   <summary>
-                    <span className="sentinelflow-detail-summary-main">{worker.step ? `步骤 ${worker.step} · ${title}` : title}</span>
+                    <span className="sentinelflow-detail-summary-main">{`步骤 ${index + 1} · ${title}`}</span>
                     <span className="sentinelflow-detail-summary-meta">{getBooleanLabel(worker.success) || `${asToolCalls(worker.tool_calls).length + asToolCalls(worker.tool_calls_summary).length} 次技能`}</span>
                   </summary>
                   <DetailFields fields={[
@@ -698,7 +698,7 @@ export default function SentinelFlowConversationPage() {
                         </>
                       ) : null}
                       {!hideExecutionSummary && workerResults.length > 1 ? (
-                        <div className="sentinelflow-chat-details">
+                        <>
                           <button
                             type="button"
                             className="sentinelflow-tool-call-summary text-left text-gray-500 transition-colors hover:text-gray-700"
@@ -718,7 +718,7 @@ export default function SentinelFlowConversationPage() {
                               ))}
                             </div>
                           ) : null}
-                        </div>
+                        </>
                       ) : null}
                       {item.response.error && !isApprovalPending ? <div className="sentinelflow-message-block sentinelflow-message-error">{item.response.error}</div> : null}
                       <div className="sentinelflow-chat-actions">
