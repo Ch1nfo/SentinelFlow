@@ -95,6 +95,7 @@ class SkillRunAnalyzerMixin:
             computed_success = self._compute_skill_run_success(
                 tool_payload=tool_payload,
                 business_payload=business_payload,
+                inferred_from_summary=False,
             )
             runs.append(
                 {
@@ -187,6 +188,7 @@ class SkillRunAnalyzerMixin:
             computed_success = self._compute_skill_run_success(
                 tool_payload=tool_payload,
                 business_payload=business_payload,
+                inferred_from_summary=True,
             )
             tool_success = tool_payload.get("success")
             run = {
@@ -214,9 +216,20 @@ class SkillRunAnalyzerMixin:
         *,
         tool_payload: dict[str, Any],
         business_payload: dict[str, Any],
+        inferred_from_summary: bool = False,
     ) -> bool:
-        tool_error = tool_payload.get("error")
-        if bool(tool_error):
+        """Determine whether a skill run succeeded.
+
+        Callers from real ToolMessage payloads (``inferred_from_summary=False``)
+        treat absence of explicit signals as *success* (old-format skills that
+        return only business data with no ``success`` key should not be penalised).
+
+        Callers reconstructed from ``tool_calls_summary`` entries
+        (``inferred_from_summary=True``) apply the same logic — no error means
+        success — but will NOT promote the run to closure success without an
+        explicit positive signal (that guard lives in ``_is_successful_closure_run``).
+        """
+        if bool(tool_payload.get("error")):
             return False
         tool_success = tool_payload.get("success")
         if isinstance(tool_success, bool) and not tool_success:
@@ -226,8 +239,11 @@ class SkillRunAnalyzerMixin:
         business_success = business_payload.get("success")
         if isinstance(business_success, bool):
             return business_success
-        if tool_success is None and "success" not in business_payload:
+        if inferred_from_summary and tool_success is None and not business_payload:
             return False
+        # No explicit success/error signals → assume success.
+        # This preserves backward compatibility with old-format skills that
+        # return plain business data without a top-level ``success`` field.
         return True
 
     # ── Run classification ────────────────────────────────────────────────────
@@ -245,6 +261,20 @@ class SkillRunAnalyzerMixin:
         return bool(policy.get("enabled")) and str(policy.get("completion_effect", "")).strip() == "closure"
 
     def _is_closure_run(self, run: dict[str, Any]) -> bool:
+        """Classify a skill run as a closure (结单) run.
+
+        Priority order:
+        1. completion_policy.closure explicitly set on the skill.
+        2. Skill name matches well-known closure keywords.
+        3. Payload / arguments contain the *full* canonical closure field set
+           ({status, memo, detailMsg} or {status, memo, detail_msg}).
+
+        Single-field heuristics (e.g. just `status`) are intentionally NOT used
+        here to avoid mis-classifying query/enrichment skills that happen to
+        return a `status` field.  Looser fallback matching is available via
+        ``_looks_like_closure_fallback`` which is only consulted by
+        ``_select_closure_run`` when action_hint demands a closure attempt.
+        """
         skill_name = str(run.get("skill_name", "")).strip().lower()
         if skill_name and self._completion_policy_marks_closure(skill_name):
             return True
@@ -255,12 +285,13 @@ class SkillRunAnalyzerMixin:
         payload = payload if isinstance(payload, dict) else {}
         arguments = arguments if isinstance(arguments, dict) else {}
         combined_keys = set(payload.keys()) | set(arguments.keys())
+        # Require the full canonical 3-field set to avoid false positives on
+        # query skills that incidentally carry a `status` or `memo` field.
         if {"status", "memo", "detailMsg"}.issubset(combined_keys):
             return True
-        closure_markers = {"status", "memo", "detailMsg", "detail_msg", "closeStatus", "close_status"}
-        return bool(combined_keys & closure_markers) and (
-            "memo" in combined_keys or "detailMsg" in combined_keys or "detail_msg" in combined_keys or "status" in combined_keys
-        )
+        if {"status", "memo", "detail_msg"}.issubset(combined_keys):
+            return True
+        return bool({"closeStatus", "close_status"} & combined_keys)
 
     def _is_closure_skill_name(self, skill_name: str) -> bool:
         normalized = skill_name.strip().lower()

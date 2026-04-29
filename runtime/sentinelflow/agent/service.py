@@ -1190,7 +1190,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         # Worker results surfaced from ToolMessages
         worker_results: list[dict[str, Any]] = []
         workflow_runs: list[dict[str, Any]] = []
-        for msg in messages:
+        for msg_index, msg in enumerate(messages):
             try:
                 from langchain_core.messages import ToolMessage
                 if not isinstance(msg, ToolMessage):
@@ -1203,13 +1203,13 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             try:
                 result = json.loads(content)
                 if isinstance(result, dict) and "worker" in result:
-                    worker_results.append(result)
+                    worker_results.append({**result, "_message_index": msg_index})
                 elif isinstance(result, dict) and result.get("workflow_id"):
-                    workflow_runs.append(result)
+                    workflow_runs.append({**result, "_message_index": msg_index})
                 elif isinstance(result, dict) and result.get("mode") == "parallel" and isinstance(result.get("results"), list):
                     for item in result["results"]:
                         if isinstance(item, dict) and "worker" in item:
-                            worker_results.append(item)
+                            worker_results.append({**item, "_message_index": msg_index})
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -1777,9 +1777,21 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
 
         from collections import Counter
 
-        executed_workers = Counter(name.strip().lower() for name in self._collect_executed_worker_names(worker_results) if name.strip())
+        def message_index(item: dict[str, Any]) -> int | None:
+            try:
+                return int(item.get("_message_index"))
+            except (TypeError, ValueError):
+                return None
+
         annotated: list[dict[str, Any]] = []
         all_issues: list[dict[str, Any]] = []
+        workflow_indexes = [
+            idx
+            for item in workflow_runs
+            if isinstance(item, dict)
+            for idx in [message_index(item)]
+            if idx is not None
+        ]
         for workflow_run in workflow_runs:
             if not isinstance(workflow_run, dict):
                 continue
@@ -1792,6 +1804,39 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                 annotated.append(run)
                 continue
 
+            # Prefer the inline worker_results embedded in the workflow_run by
+            # the orchestrator — these are scoped to this specific workflow
+            # invocation.  Fall back to the caller-supplied global list only
+            # when no inline results are present (e.g. legacy paths).
+            # Using the global list risks counting workers invoked by the
+            # supervisor *before* run_workflow (e.g. IP queries) as if they
+            # were workflow step executions, producing false "step executed"
+            # verdicts.
+            inline_worker_results = run.get("worker_results")
+            if isinstance(inline_worker_results, list) and inline_worker_results:
+                scoped_workers = inline_worker_results
+            else:
+                workflow_message_index = message_index(run)
+                if workflow_message_index is None:
+                    scoped_workers = worker_results
+                else:
+                    next_workflow_index = min(
+                        (idx for idx in workflow_indexes if idx > workflow_message_index),
+                        default=None,
+                    )
+                    scoped_workers = [
+                        item
+                        for item in worker_results
+                        if isinstance(item, dict)
+                        and (message_index(item) is None or message_index(item) > workflow_message_index)
+                        and (next_workflow_index is None or message_index(item) is None or message_index(item) < next_workflow_index)
+                    ]
+
+            executed_workers = Counter(
+                name.strip().lower()
+                for name in self._collect_executed_worker_names(scoped_workers)
+                if name.strip()
+            )
             remaining_workers = Counter(executed_workers)
             issues: list[dict[str, Any]] = []
             for step in run.get("steps", []) if isinstance(run.get("steps", []), list) else []:
