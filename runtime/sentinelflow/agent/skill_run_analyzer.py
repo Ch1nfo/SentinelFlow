@@ -109,6 +109,74 @@ class SkillRunAnalyzerMixin:
                     "success": computed_success,
                 }
             )
+        existing_ids = {str(run.get("tool_call_id", "")).strip() for run in runs if str(run.get("tool_call_id", "")).strip()}
+        for run in self._extract_skill_runs_from_tool_summaries(graph_result, existing_ids):
+            runs.append(run)
+        return runs
+
+    def _extract_skill_runs_from_tool_summaries(
+        self,
+        graph_result: dict[str, Any],
+        existing_ids: set[str],
+    ) -> list[dict[str, Any]]:
+        summaries = graph_result.get("tool_calls_summary", [])
+        if not isinstance(summaries, list):
+            return []
+        runs: list[dict[str, Any]] = []
+        for item in summaries:
+            if not isinstance(item, dict):
+                continue
+            tool_name = str(item.get("name", "")).strip()
+            if tool_name not in {"execute_skill", "execute_skill_no_args"}:
+                continue
+            tool_call_id = str(item.get("id", "")).strip()
+            if tool_call_id and tool_call_id in existing_ids:
+                continue
+            args = item.get("args", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {}
+            if not isinstance(args, dict):
+                args = {}
+            skill_name = str(args.get("skill_name", "")).strip()
+            arguments = args.get("arguments", {})
+            if not isinstance(arguments, dict):
+                arguments = {}
+            if tool_name == "execute_skill_no_args":
+                arguments = {}
+
+            business_payload = item.get("payload", item.get("result", item.get("data", {})))
+            if not isinstance(business_payload, dict):
+                business_payload = {"result": business_payload} if business_payload not in (None, "") else {}
+            tool_payload = item.get("tool_payload", {})
+            if not isinstance(tool_payload, dict):
+                tool_payload = {}
+            if not tool_payload:
+                tool_payload = {
+                    "success": bool(graph_result.get("success", True)),
+                    "data": business_payload,
+                    "error": graph_result.get("error"),
+                }
+
+            computed_success = self._compute_skill_run_success(
+                tool_payload=tool_payload,
+                business_payload=business_payload,
+            )
+            runs.append(
+                {
+                    "skill_name": skill_name,
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "tool_success": bool(tool_payload.get("success")) if isinstance(tool_payload.get("success"), bool) else not bool(tool_payload.get("error")),
+                    "tool_error": tool_payload.get("error"),
+                    "tool_payload": tool_payload,
+                    "arguments": arguments,
+                    "payload": dict(business_payload),
+                    "success": computed_success,
+                }
+            )
         return runs
 
     def _compute_skill_run_success(
@@ -132,8 +200,22 @@ class SkillRunAnalyzerMixin:
 
     # ── Run classification ────────────────────────────────────────────────────
 
+    def _completion_policy_marks_closure(self, skill_name: str) -> bool:
+        resolver = getattr(self, "_completion_policy_for_skill", None)
+        if not callable(resolver):
+            return False
+        try:
+            policy = resolver(skill_name)
+        except Exception:
+            return False
+        if not isinstance(policy, dict):
+            return False
+        return bool(policy.get("enabled")) and str(policy.get("completion_effect", "")).strip() == "closure"
+
     def _is_closure_run(self, run: dict[str, Any]) -> bool:
         skill_name = str(run.get("skill_name", "")).strip().lower()
+        if skill_name and self._completion_policy_marks_closure(skill_name):
+            return True
         if self._is_closure_skill_name(skill_name):
             return True
         payload = run.get("payload", {})
