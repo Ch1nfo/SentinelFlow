@@ -454,6 +454,10 @@ def _build_stream_text(response: dict[str, Any]) -> str:
     final_response = str(data.get("final_response", "")).strip()
     if final_response:
         return re.sub(r"\n{3,}", "\n\n", re.sub(r"<think\b[^>]*>.*?</think>", "", final_response, flags=re.IGNORECASE | re.DOTALL)).strip()
+    approval_request = data.get("approval_request", {})
+    has_approval_request = isinstance(approval_request, dict) and bool(str(approval_request.get("approval_id", "")).strip())
+    if bool(data.get("approval_pending")) or has_approval_request:
+        return "当前命中了需要审批的 Skill，请在下方确认后继续。"
     error = str(response.get("error", "")).strip()
     if error: return error
     return "命令已执行完成。"
@@ -549,6 +553,16 @@ def _build_approval_resolution_response(
     }
 
 
+def _select_current_approval(payload: dict[str, Any], fallback_approval: dict[str, Any]) -> dict[str, Any]:
+    approval_request = payload.get("approval_request", {})
+    if isinstance(approval_request, dict):
+        status = str(approval_request.get("status", "")).strip()
+        approval_id = str(approval_request.get("approval_id", "")).strip()
+        if approval_id and (status == "pending" or bool(payload.get("approval_pending"))):
+            return approval_request
+    return fallback_approval
+
+
 async def _resolve_approval_json(
     approval_id: str,
     decision: str,
@@ -583,20 +597,21 @@ async def _resolve_approval_json(
     payload = result.get("data", {})
     payload = payload if isinstance(payload, dict) else {}
     serialized_approval = skill_approval_service.serialize_approval(skill_approval_service.get_by_id(approval_id) or approval)
+    current_approval = _select_current_approval(payload, serialized_approval)
     if approval.scope_type == "alert_task":
         finalized = task_runner_service.finalize_after_approval(approval.scope_ref, payload)
         return _build_approval_resolution_response(
             success=bool(finalized.get("success", False)),
             route=str(result.get("route", "")).strip(),
-            approval=serialized_approval,
+            approval=current_approval,
             data=finalized.get("data", {}),
             task=_serialize(finalized.get("task")),
-            error=finalized.get("error"),
+            error=None if bool(payload.get("approval_pending")) else finalized.get("error"),
         )
     return _build_approval_resolution_response(
         success=bool(result.get("success", False)),
         route=str(result.get("route", "")).strip(),
-        approval=serialized_approval,
+        approval=current_approval,
         data=payload,
         task=None,
         error=result.get("error"),

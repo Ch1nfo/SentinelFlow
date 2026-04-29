@@ -216,25 +216,35 @@ export default function SentinelFlowConversationPage() {
                 const primaryAgent = typeof commandData.primary_agent === 'string' ? commandData.primary_agent : ''
                 const workerAgent = typeof commandData.worker_agent === 'string' ? commandData.worker_agent : (typeof commandData.worker_result?.agent_name === 'string' ? commandData.worker_result.agent_name : '')
                 const delegationReason = typeof commandData.delegation_reason === 'string' ? commandData.delegation_reason : ''
-                const approvalRequest = commandData.approval_request as { approval_id?: string; skill_name?: string; arguments_summary?: string; message?: string } | undefined
-                const approvalCard = storedApproval ?? (approvalRequest ? {
+                const approvalRequest = commandData.approval_request as ApprovalRequest | undefined
+                const normalizedApprovalRequest = approvalRequest ? {
                   approval_id: approvalRequest.approval_id || '',
-                  run_id: '',
-                  scope_type: 'conversation',
-                  scope_ref: '',
-                  status: 'pending',
+                  run_id: approvalRequest.run_id || '',
+                  scope_type: approvalRequest.scope_type || 'conversation',
+                  scope_ref: approvalRequest.scope_ref || '',
+                  status: approvalRequest.status || 'pending',
                   skill_name: approvalRequest.skill_name || '',
-                  arguments: {},
-                  arguments_fingerprint: '',
-                  approval_required: true,
-                  checkpoint_thread_id: '',
-                  checkpoint_ns: '',
-                  created_at: '',
+                  arguments: approvalRequest.arguments || {},
+                  arguments_fingerprint: approvalRequest.arguments_fingerprint || '',
+                  approval_required: approvalRequest.approval_required ?? true,
+                  checkpoint_thread_id: approvalRequest.checkpoint_thread_id || '',
+                  checkpoint_ns: approvalRequest.checkpoint_ns || '',
+                  parent_checkpoint_thread_id: approvalRequest.parent_checkpoint_thread_id,
+                  parent_checkpoint_ns: approvalRequest.parent_checkpoint_ns,
+                  tool_call_id: approvalRequest.tool_call_id,
+                  parent_tool_call_id: approvalRequest.parent_tool_call_id,
+                  created_at: approvalRequest.created_at || '',
+                  decided_at: approvalRequest.decided_at,
                   arguments_summary: approvalRequest.arguments_summary || '无参数',
                   message: approvalRequest.message || '',
-                } satisfies ApprovalRequest : undefined)
+                } satisfies ApprovalRequest : undefined
+                const shouldUseCurrentApprovalRequest = Boolean(
+                  normalizedApprovalRequest?.approval_id &&
+                  (item.response.route === 'approval_required' || normalizedApprovalRequest.status === 'pending')
+                )
+                const approvalCard = shouldUseCurrentApprovalRequest ? normalizedApprovalRequest : (storedApproval ?? normalizedApprovalRequest)
                 const approvalStatus = String(approvalCard?.status || '')
-                const isApprovalPending = approvalStatus ? approvalStatus === 'pending' : item.response.route === 'approval_required'
+                const isApprovalPending = approvalStatus === 'pending' || (!approvalStatus && item.response.route === 'approval_required')
                 const resultTone = isApprovalPending ? 'warn' : (item.response.success ? 'success' : 'warn')
                 const resultLabel = isApprovalPending ? '待审批' : (item.response.success ? '已完成' : '失败')
                 const resultCode = isApprovalPending ? 'pending_approval' : (item.response.success ? 'success' : 'error')

@@ -169,6 +169,7 @@ export type CommandDispatchResponse = {
   success: boolean
   data: Record<string, unknown> & {
     approval_request?: ApprovalRequest
+    resolved_approval?: ApprovalRequest
   }
   approval?: ApprovalRequest
   task?: AlertTask | null

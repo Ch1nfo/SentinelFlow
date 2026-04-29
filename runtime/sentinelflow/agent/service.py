@@ -871,6 +871,24 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             }
         return await self.workflow_runner.resume_checkpoint(checkpoint, step_result, approval)
 
+    def _build_approval_resolution_result(self, result: dict[str, Any], approval_record) -> dict[str, Any]:
+        payload = dict(result) if isinstance(result, dict) else {}
+        resolved_approval = self.approval_service.serialize_approval(approval_record)
+        approval_pending = bool(payload.get("approval_pending"))
+        route = str(payload.get("route", "")).strip() or ("approval_required" if approval_pending else "approval_resolved")
+        data = {
+            **payload,
+            "resolved_approval": resolved_approval,
+        }
+        if not approval_pending:
+            data["approval"] = resolved_approval
+        return {
+            "success": not approval_pending and bool(payload.get("success", True)),
+            "route": route,
+            "data": data,
+            "error": None if approval_pending else payload.get("error"),
+        }
+
     async def _resume_saved_checkpoint(self, checkpoint: dict[str, Any]) -> dict[str, Any]:
         state = self._normalize_graph_state_keys(deserialize_graph_state(checkpoint.get("state", {})))
         checkpoint_kind = str(checkpoint.get("checkpoint_kind", "")).strip()
@@ -1089,16 +1107,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                     if resume_error is not None:
                         return resume_error
                     result = await self._resume_saved_checkpoint(workflow_parent_checkpoint)
-                approval_payload = self.approval_service.serialize_approval(approval_record)
-                return {
-                    "success": not result.get("approval_pending") and bool(result.get("success", True)),
-                    "route": str(result.get("route", "")).strip() or ("approval_required" if result.get("approval_pending") else "approval_resolved"),
-                    "data": {
-                        **(result if isinstance(result, dict) else {}),
-                        "approval": approval_payload,
-                    },
-                    "error": result.get("error") if isinstance(result, dict) else None,
-                }
+                return self._build_approval_resolution_result(result, approval_record)
             parent_state = deserialize_graph_state(parent_checkpoint.get("state", {}))
             wrapped_result = result
             if current_checkpoint.get("checkpoint_kind") == "agent_graph":
@@ -1142,16 +1151,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
 
         if status_callback:
             status_callback("正在整理审批恢复结果...")
-        approval_payload = self.approval_service.serialize_approval(approval_record)
-        return {
-            "success": not result.get("approval_pending") and bool(result.get("success", True)),
-            "route": str(result.get("route", "")).strip() or ("approval_required" if result.get("approval_pending") else "approval_resolved"),
-            "data": {
-                **(result if isinstance(result, dict) else {}),
-                "approval": approval_payload,
-            },
-            "error": result.get("error") if isinstance(result, dict) else None,
-        }
+        return self._build_approval_resolution_result(result, approval_record)
 
     def _serialize_orchestrator_result(
         self,
