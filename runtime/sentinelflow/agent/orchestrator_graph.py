@@ -28,7 +28,13 @@ from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from sentinelflow.agent.checkpoint_state import serialize_graph_state
-from sentinelflow.agent.context_utils import compact_worker_result_for_llm, extract_key_facts, summarize_tool_calls
+from sentinelflow.agent.context_utils import (
+    build_context_manifest,
+    compact_worker_result_for_llm,
+    extract_key_facts,
+    format_context_manifest_header,
+    summarize_tool_calls,
+)
 from sentinelflow.agent.graph import build_agent_graph
 from sentinelflow.agent.orchestrator_state import OrchestratorState
 from sentinelflow.agent.policy import can_agent_execute_skill, can_agent_read_skill
@@ -123,6 +129,28 @@ def _extract_prior_facts_from_messages(messages: list[Any]) -> dict[str, Any]:
     return facts
 
 
+def _context_warnings_from_manifest(manifest: dict[str, Any]) -> list[str]:
+    warnings = manifest.get("context_warnings", []) if isinstance(manifest, dict) else []
+    return [str(item) for item in warnings if str(item).strip()] if isinstance(warnings, list) else []
+
+
+def _tool_payloads_from_messages(messages: list[Any]) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        content = getattr(msg, "content", "")
+        if not isinstance(content, str) or not content.strip().startswith("{"):
+            continue
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            payloads.append(parsed)
+    return payloads
+
+
 # ── Worker SubGraph Tool Builder ──────────────────────────────────────────────
 
 def _build_worker_subgraph_tool(
@@ -148,11 +176,22 @@ def _build_worker_subgraph_tool(
     async def _execute_worker_subgraph(task_prompt: str, state: OrchestratorState, step_idx: int) -> dict[str, Any]:
         child_checkpoint_thread_id = f"{str(state.get('checkpoint_thread_id', '')).strip() or uuid4().hex}:worker:{worker_agent_def.name}:{step_idx}"
         prior_facts = _extract_prior_facts_from_messages(list(state.get("messages", [])))
+        context_manifest = build_context_manifest(
+            current_goal=task_prompt,
+            entry_type=str(state.get("entry_type", "")).strip(),
+            current_step={"step": step_idx, "worker": worker_agent_def.name},
+            original_input=alert_data,
+            current_task_prompt=task_prompt,
+            prior_step_results=_tool_payloads_from_messages(list(state.get("messages", []))),
+            model_summary=prior_facts,
+        )
         child_state = {
             "alert_data": {
                 **copy.deepcopy(alert_data),
                 "delegated_task_prompt": task_prompt,
                 "prior_facts": prior_facts,
+                "context_manifest": context_manifest,
+                "context_warnings": _context_warnings_from_manifest(context_manifest),
             },
             "messages": [],
             "event_id_ref": str(alert_data.get("eventIds", "")).strip(),
@@ -195,6 +234,8 @@ def _build_worker_subgraph_tool(
                 "skills_used": [],
                 "tool_calls_summary": [],
                 "key_facts": {},
+                "context_manifest": context_manifest,
+                "context_warnings": _context_warnings_from_manifest(context_manifest),
                 "success": False,
                 "error": str(exc),
             }
@@ -233,6 +274,8 @@ def _build_worker_subgraph_tool(
             "skills_used": skills_used,
             "tool_calls_summary": tool_calls_summary,
             "key_facts": extract_key_facts(prior_facts, alert_data, task_prompt, final_text, tool_calls_summary, tool_result_facts),
+            "context_manifest": context_manifest,
+            "context_warnings": _context_warnings_from_manifest(context_manifest),
             "success": bool(final_text),
             "approval_pending": bool(worker_state.get("approval_pending")),
             "approval_request": worker_state.get("approval_request", {}),
@@ -414,8 +457,24 @@ def build_orchestrator_graph(
                     "agent_available": agent_name in worker_runners,
                     "task_prompt": step.task_prompt,
                     "step_goal": step.task_prompt or f"请根据 Workflow 目标完成第 {index} 步《{step.name}》。",
+                    "depends_on": [item.id for item in workflow.steps[: index - 1]],
+                    "visible_prior_steps": [item.id for item in workflow.steps[: index - 1]],
                 }
             )
+        context_manifest = build_context_manifest(
+            current_goal=str(task_prompt or workflow.description or workflow.name),
+            entry_type=str(state.get("entry_type", "")).strip(),
+            current_step={"workflow_id": workflow.id, "workflow_name": workflow.name},
+            original_input=alert_data,
+            current_task_prompt=str(task_prompt or ""),
+            workflow_definition={
+                "id": workflow.id,
+                "name": workflow.name,
+                "description": workflow.description,
+                "steps": steps,
+            },
+            conversation_history=state.get("conversation_history", []),
+        )
         result = {
             "success": True,
             "workflow_id": workflow.id,
@@ -426,6 +485,8 @@ def build_orchestrator_graph(
             "requires_supervisor_execution": True,
             "task_prompt": str(task_prompt or ""),
             "steps": steps,
+            "context_manifest": context_manifest,
+            "context_warnings": _context_warnings_from_manifest(context_manifest),
             "summary": f"Workflow《{workflow.name}》计划已载入，等待主 Agent 按步骤调用子 Agent。",
             "instructions": [
                 "run_workflow 只返回固定步骤计划，没有执行任何子 Agent。",
@@ -497,11 +558,20 @@ def build_orchestrator_graph(
                 continue
             step_counter[0] += 1
             step_idx = step_counter[0]
+            context_manifest = build_context_manifest(
+                current_goal=task_prompt,
+                entry_type=str(state.get("entry_type", "")).strip(),
+                current_step={"step": step_idx, "worker": worker_name, "mode": "parallel"},
+                original_input=alert_data,
+                current_task_prompt=task_prompt,
+                model_summary=_extract_prior_facts_from_messages(list(state.get("messages", []))),
+            )
             coroutine_meta.append(
                 {
                     "step": step_idx,
                     "worker": worker_name,
                     "task_prompt": task_prompt,
+                    "context_manifest": context_manifest,
                 }
             )
             run_coroutines.append(worker_runners[worker_name](task_prompt, state, step_idx))
@@ -517,6 +587,8 @@ def build_orchestrator_graph(
                         "task_prompt": meta["task_prompt"],
                         "final_response": "",
                         "skills_used": [],
+                        "context_manifest": meta.get("context_manifest", {}),
+                        "context_warnings": _context_warnings_from_manifest(meta.get("context_manifest", {})),
                         "success": False,
                         "error": f"子 Agent 执行异常：{item}",
                     }
@@ -573,6 +645,7 @@ def build_orchestrator_graph(
         if not current_messages:
             # ── First invocation: seed with conversation history + initial task ──
             seed_messages: list = []
+            context_messages: list = []
             for item in (state.get("conversation_history") or []):
                 role = str(item.get("role", "")).strip().lower()
                 content = str(item.get("content", ""))
@@ -609,10 +682,20 @@ def build_orchestrator_graph(
                 if forced_workflow_description:
                     human_content += f"\n- Workflow 描述：{forced_workflow_description}"
 
+            context_manifest = build_context_manifest(
+                current_goal=str(ad.get("payload", "") or state.get("action_hint", "") or "处理当前告警/任务"),
+                entry_type=str(entry_type),
+                current_step={"agent": str(getattr(primary_agent, "name", "")).strip(), "role": "primary"},
+                original_input=ad,
+                current_task_prompt=str(ad.get("payload", "") or state.get("action_hint", "")),
+                conversation_history=state.get("conversation_history") or [],
+            )
+            context_messages.append(HumanMessage(content=format_context_manifest_header(context_manifest)))
+
             initial_msg = HumanMessage(content=human_content)
-            messages_to_send = [system_msg] + seed_messages + [initial_msg]
+            messages_to_send = [system_msg] + seed_messages + context_messages + [initial_msg]
             # Persist seed + initial into state so subsequent loops see them
-            new_messages = seed_messages + [initial_msg]
+            new_messages = seed_messages + context_messages + [initial_msg]
         else:
             # ── Subsequent invocation: full message history already in state ──
             messages_to_send = [system_msg] + current_messages

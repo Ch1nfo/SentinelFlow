@@ -4,7 +4,7 @@ import json
 from typing import Literal
 
 from sentinelflow.agent.catalog import load_skill_catalog
-from sentinelflow.agent.context_utils import build_context_envelope
+from sentinelflow.agent.context_utils import build_context_envelope, build_context_manifest, format_context_manifest_header
 from sentinelflow.agent.prompt_builder import PromptBuildContext, build_prompt
 from sentinelflow.agent.state import SentinelFlowAgentState
 
@@ -39,6 +39,13 @@ async def agent_node(state: SentinelFlowAgentState, llm, skill_root) -> dict:
         delegated_task_prompt = str(alert_data.get("delegated_task_prompt", ""))
         if delegated_task_prompt.strip():
             prior_facts = alert_data.get("prior_facts", {}) if isinstance(alert_data.get("prior_facts"), dict) else {}
+            manifest = build_context_manifest(
+                current_goal=delegated_task_prompt,
+                entry_type="conversation",
+                original_input=payload,
+                current_task_prompt=delegated_task_prompt,
+                model_summary=prior_facts,
+            )
             envelope = build_context_envelope(
                 original_input=payload,
                 delegated_task=delegated_task_prompt,
@@ -51,6 +58,7 @@ async def agent_node(state: SentinelFlowAgentState, llm, skill_root) -> dict:
             )
             initial_msg = HumanMessage(
                 content=(
+                    f"{format_context_manifest_header(manifest)}\n"
                     "请执行以下主 Agent 分派任务。当前执行目标以 delegated_task 为准，"
                     "original_input 只作为背景：\n\n"
                     f"```json\n{json.dumps(envelope, ensure_ascii=False, indent=2)}\n```"
@@ -74,6 +82,13 @@ async def agent_node(state: SentinelFlowAgentState, llm, skill_root) -> dict:
         delegated_task_prompt = str(alert_data.get("delegated_task_prompt", ""))
         if delegated_task_prompt.strip():
             prior_facts = alert_data.get("prior_facts", {}) if isinstance(alert_data.get("prior_facts"), dict) else {}
+            manifest = build_context_manifest(
+                current_goal=delegated_task_prompt,
+                entry_type="alert",
+                original_input=alert_data,
+                current_task_prompt=delegated_task_prompt,
+                model_summary=prior_facts,
+            )
             envelope = build_context_envelope(
                 original_input=alert_data,
                 delegated_task=delegated_task_prompt,
@@ -86,6 +101,7 @@ async def agent_node(state: SentinelFlowAgentState, llm, skill_root) -> dict:
             )
             initial_msg = HumanMessage(
                 content=(
+                    f"{format_context_manifest_header(manifest)}\n"
                     "请分析并处置以下上下文。当前执行目标以 delegated_task 为准，"
                     "original_input 只作为背景：\n\n"
                     f"```json\n{json.dumps(envelope, ensure_ascii=False, indent=2)}\n```"

@@ -29,6 +29,7 @@ type ToolCallLike = {
   id?: string
   type?: string
   key_facts?: unknown
+  tool_payload?: unknown
 }
 
 type WorkerStepLike = {
@@ -44,6 +45,9 @@ type WorkerStepLike = {
   short_summary?: string
   success?: boolean
   error?: string
+  context_manifest?: unknown
+  context_warnings?: unknown
+  missing_required_inputs?: unknown
 }
 
 type CommandDataLike = {
@@ -61,6 +65,11 @@ type CommandDataLike = {
   }
   workflow_runs?: unknown[]
   tool_calls_summary?: ToolCallLike[]
+  context_manifest?: unknown
+  context_warnings?: unknown
+  missing_required_inputs?: unknown
+  input_contract?: unknown
+  authority_trace?: unknown
 }
 
 type DetailField = {
@@ -150,6 +159,63 @@ function collectToolCalls(data: CommandDataLike): ToolCallLike[] {
   return calls.filter((call) => call.name || call.args)
 }
 
+function collectContextRecords(data: CommandDataLike): Array<{ source: string; manifest: Record<string, unknown> }> {
+  const records: Array<{ source: string; manifest: Record<string, unknown> }> = []
+  const rootManifest = asRecord(data.context_manifest)
+  if (Object.keys(rootManifest).length) {
+    records.push({ source: '当前响应', manifest: rootManifest })
+  }
+  collectWorkerResults(data).forEach((worker, index) => {
+    const manifest = asRecord(worker.context_manifest)
+    if (Object.keys(manifest).length) {
+      const workerName = worker.worker_agent || worker.agent_name || `worker-${index + 1}`
+      records.push({ source: worker.step ? `步骤 ${worker.step} · ${workerName}` : workerName, manifest })
+    }
+  })
+  asArray(data.workflow_runs).forEach((run, index) => {
+    const runRecord = asRecord(run)
+    const manifest = asRecord(runRecord.context_manifest)
+    if (Object.keys(manifest).length) {
+      records.push({ source: getString(runRecord, 'workflow_name') || getString(runRecord, 'workflow_id') || `Workflow ${index + 1}`, manifest })
+    }
+  })
+  return records
+}
+
+function ContextControlDetails({ records }: { records: Array<{ source: string; manifest: Record<string, unknown> }> }) {
+  if (!records.length) return null
+  return (
+    <DetailSection title="执行上下文" icon={<FileJson className="h-4 w-4" />}>
+      <div className="sentinelflow-detail-list">
+        {records.map((record, index) => {
+          const warnings = asArray(record.manifest.context_warnings).map(String).filter(Boolean)
+          const missing = asArray(record.manifest.missing_required_inputs)
+          const facts = asRecord(record.manifest.available_facts)
+          return (
+            <details key={`${record.source}-${index}`} className="sentinelflow-detail-disclosure">
+              <summary>
+                <span className="sentinelflow-detail-summary-main">{record.source}</span>
+                <span className="sentinelflow-detail-summary-meta">
+                  {missing.length ? `缺少 ${missing.length} 项` : warnings.length ? `${warnings.length} 个提示` : '上下文正常'}
+                </span>
+              </summary>
+              <DetailFields fields={[
+                { label: '当前目标', value: record.manifest.current_goal },
+                { label: '入口', value: record.manifest.entry_type },
+                { label: '必需对象', value: asArray(record.manifest.required_objects).join(', ') },
+                { label: '上下文大小', value: formatDetailValue(record.manifest.context_size) },
+                { label: '提示', value: warnings.join(', ') },
+              ]} />
+              {missing.length ? <JsonPreview value={{ missing_required_inputs: missing }} /> : null}
+              {Object.keys(facts).length ? <JsonPreview value={{ available_facts: facts, authority_trace: record.manifest.authority_trace }} /> : null}
+            </details>
+          )
+        })}
+      </div>
+    </DetailSection>
+  )
+}
+
 function DetailSection({ title, icon, children }: { title: string; icon?: ReactNode; children: ReactNode }) {
   return (
     <section className="sentinelflow-detail-section">
@@ -212,6 +278,7 @@ function ConversationResponseDetails({
   const workflowRuns = asArray(data.workflow_runs)
   const approval = approvalCard ?? data.approval_request
   const finalResponse = firstText(data.final_response, getString(dataRecord, 'response'), getString(dataRecord, 'summary'), response.error)
+  const contextRecords = collectContextRecords(data)
 
   return (
     <div className="sentinelflow-chat-details sentinelflow-chat-details-structured">
@@ -261,6 +328,8 @@ function ConversationResponseDetails({
           ) : null}
         </DetailSection>
       ) : null}
+
+      <ContextControlDetails records={contextRecords} />
 
       {workflowRuns.length ? (
         <DetailSection title="Workflow" icon={<Workflow className="h-4 w-4" />}>

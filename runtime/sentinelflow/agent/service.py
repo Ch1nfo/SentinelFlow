@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from sentinelflow.agent.checkpoint_state import deserialize_graph_state, serialize_graph_state
 from sentinelflow.agent.catalog import load_skill_catalog
-from sentinelflow.agent.context_utils import compact_worker_result_for_llm, extract_key_facts, summarize_tool_calls
+from sentinelflow.agent.context_utils import build_context_manifest, compact_worker_result_for_llm, extract_key_facts, summarize_tool_calls
 from sentinelflow.agent.graph import build_agent_graph
 from sentinelflow.agent.policy import can_agent_delegate_to_worker, can_agent_execute_skill, can_agent_read_skill
 from sentinelflow.agent.prompt_builder import PromptBuildContext, build_prompt
@@ -119,6 +119,19 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         effective_config = agent_definition.resolve_runtime_config(config) if agent_definition else config
         readable_skills, executable_skills = self._resolve_skill_permissions(agent_definition)
         prompt_mode = "agent_command" if alert_data.get("alert_source") == "human_command" else "agent_alert"
+        alert_data = dict(alert_data)
+        if not isinstance(alert_data.get("context_manifest"), dict):
+            current_goal = str(alert_data.get("delegated_task_prompt") or alert_data.get("payload") or alert_data.get("handling_intent") or alert_data.get("eventIds") or "")
+            context_manifest = build_context_manifest(
+                current_goal=current_goal,
+                entry_type=str((execution_context or {}).get("execution_entry", "")).strip() or prompt_mode,
+                current_step={"agent": agent_definition.name if agent_definition else "", "mode": prompt_mode},
+                original_input=alert_data,
+                current_task_prompt=current_goal,
+                conversation_history=list(history or []),
+            )
+            alert_data["context_manifest"] = context_manifest
+            alert_data["context_warnings"] = list(context_manifest.get("context_warnings", []) or [])
         graph = build_agent_graph(
             self.project_root,
             self.skill_runtime,
@@ -811,6 +824,16 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                 step_idx = 0
         final_text = str(graph_result.get("final_response", ""))
         success, error = self.evaluate_worker_result(graph_result)
+        alert_data = state.get("alert_data", {}) if isinstance(state.get("alert_data", {}), dict) else {}
+        context_manifest = graph_result.get("context_manifest") if isinstance(graph_result.get("context_manifest"), dict) else alert_data.get("context_manifest", {})
+        if not isinstance(context_manifest, dict):
+            context_manifest = build_context_manifest(
+                current_goal=delegated_task_prompt,
+                entry_type=str(state.get("execution_entry", "")).strip(),
+                original_input=alert_data,
+                current_task_prompt=delegated_task_prompt,
+                model_summary=graph_result.get("key_facts", {}),
+            )
         tool_result_facts: dict[str, Any] = {}
         for message in graph_result.get("messages", []) or []:
             if not isinstance(message, dict) or str(message.get("type", "")).strip() != "tool":
@@ -832,6 +855,8 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                 tool_messages=list(graph_result.get("messages", []) or []),
             ),
             "key_facts": extract_key_facts(graph_result.get("key_facts", {}), tool_calls, final_text, tool_result_facts),
+            "context_manifest": context_manifest,
+            "context_warnings": list(context_manifest.get("context_warnings", []) or []),
             "success": success,
             "error": error,
         }
@@ -1250,6 +1275,8 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             "worker_results": worker_results,
             "workflow_runs": workflow_runs,
             "worker_agent": worker_results[-1]["worker"] if worker_results else "",
+            "context_manifest": alert_data.get("context_manifest", {}) if isinstance(alert_data.get("context_manifest", {}), dict) else {},
+            "context_warnings": list(alert_data.get("context_warnings", []) or []),
             "success": bool(final_text),
         }
 
@@ -1279,6 +1306,16 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             "_primary_executable_skills": executable_skills,
             "_primary_worker_parallel_limit": parallel_limit,
         }
+        context_manifest = build_context_manifest(
+            current_goal=command_text,
+            entry_type="conversation",
+            current_step={"agent": primary_agent.name, "role": "primary"},
+            original_input=alert_data,
+            current_task_prompt=command_text,
+            conversation_history=list(history or []),
+        )
+        alert_data["context_manifest"] = context_manifest
+        alert_data["context_warnings"] = list(context_manifest.get("context_warnings", []) or [])
         system_prompt = self._build_primary_prompt(
             primary_agent, PRIMARY_COMMAND_ORCHESTRATION_APPENDIX, workers
         )
@@ -1364,6 +1401,15 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         alert_data["_primary_readable_skills"] = readable_skills
         alert_data["_primary_executable_skills"] = executable_skills
         alert_data["_primary_worker_parallel_limit"] = parallel_limit
+        context_manifest = build_context_manifest(
+            current_goal=str(action_hint or alert_data.get("alert_name", "") or alert_data.get("eventIds", "")),
+            entry_type="alert",
+            current_step={"agent": primary_agent.name, "role": "primary", "action_hint": action_hint or ""},
+            original_input=alert_data,
+            current_task_prompt=str(action_hint or ""),
+        )
+        alert_data["context_manifest"] = context_manifest
+        alert_data["context_warnings"] = list(context_manifest.get("context_warnings", []) or [])
 
         system_prompt = self._build_primary_prompt(
             primary_agent, PRIMARY_ALERT_ORCHESTRATION_APPENDIX, workers
@@ -1563,6 +1609,16 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             "event_id_ref": state.get("event_id_ref", ""),
             # Pass through structured judgment produced by synthesis_node (may be None)
             "structured_judgment": state.get("structured_judgment"),
+            "context_manifest": (
+                (state.get("alert_data", {}) or {}).get("context_manifest", {})
+                if isinstance(state.get("alert_data", {}), dict)
+                else {}
+            ),
+            "context_warnings": (
+                list((state.get("alert_data", {}) or {}).get("context_warnings", []) or [])
+                if isinstance(state.get("alert_data", {}), dict)
+                else []
+            ),
         }
 
     def _serialize_alert_result(
@@ -1969,6 +2025,69 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                     "success": False,
                     "data": {
                         "issues": workflow_execution_issues,
+                    },
+                }
+            )
+        context_records: list[dict[str, Any]] = []
+        root_manifest = graph_result.get("context_manifest", {})
+        if isinstance(root_manifest, dict) and root_manifest:
+            context_records.append({"source_type": "primary", "source_name": "primary", "context_manifest": root_manifest})
+        for worker_result in graph_result.get("worker_results", []) or []:
+            if not isinstance(worker_result, dict):
+                continue
+            manifest = worker_result.get("context_manifest", {})
+            if isinstance(manifest, dict) and manifest:
+                context_records.append(
+                    {
+                        "source_type": "worker",
+                        "source_name": str(worker_result.get("worker", worker_result.get("worker_agent", ""))).strip(),
+                        "step": worker_result.get("step"),
+                        "context_manifest": manifest,
+                    }
+                )
+        for workflow_run in workflow_runs:
+            if not isinstance(workflow_run, dict):
+                continue
+            manifest = workflow_run.get("context_manifest", {})
+            if isinstance(manifest, dict) and manifest:
+                context_records.append(
+                    {
+                        "source_type": "workflow",
+                        "source_name": str(workflow_run.get("workflow_name", workflow_run.get("workflow_id", ""))).strip(),
+                        "context_manifest": manifest,
+                    }
+                )
+        if context_records:
+            warnings = [
+                warning
+                for record in context_records
+                for warning in (
+                    (record.get("context_manifest", {}) or {}).get("context_warnings", [])
+                    if isinstance(record.get("context_manifest", {}), dict)
+                    else []
+                )
+                if str(warning).strip()
+            ]
+            missing = [
+                item
+                for record in context_records
+                for item in (
+                    (record.get("context_manifest", {}) or {}).get("missing_required_inputs", [])
+                    if isinstance(record.get("context_manifest", {}), dict)
+                    else []
+                )
+                if isinstance(item, dict)
+            ]
+            trace.append(
+                {
+                    "phase": "context_control",
+                    "title": "执行上下文控制",
+                    "summary": "已记录当前任务目标、权威事实来源和上下文健康信息。",
+                    "success": not missing,
+                    "data": {
+                        "records": context_records,
+                        "context_warnings": warnings,
+                        "missing_required_inputs": missing,
                     },
                 }
             )

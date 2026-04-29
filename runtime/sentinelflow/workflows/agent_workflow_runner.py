@@ -5,7 +5,14 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
-from sentinelflow.agent.context_utils import build_context_envelope, compact_text, extract_key_facts, summarize_tool_calls
+from sentinelflow.agent.context_utils import (
+    build_context_envelope,
+    build_context_manifest,
+    compact_text,
+    extract_key_facts,
+    format_context_manifest_header,
+    summarize_tool_calls,
+)
 from sentinelflow.services.skill_approval_service import SkillApprovalService
 from sentinelflow.workflows.agent_workflow_registry import AgentWorkflowDefinition
 
@@ -129,6 +136,9 @@ class SentinelFlowAgentWorkflowRunner:
         if not tool_calls_summary:
             tool_calls_summary = summarize_tool_calls(worker_result.get("tool_calls", []))
         key_facts = extract_key_facts(worker_result.get("key_facts", {}), tool_calls_summary, final_response, tool_result_facts)
+        context_manifest = worker_result.get("context_manifest", {})
+        if not isinstance(context_manifest, dict):
+            context_manifest = {}
         return {
             "step": step_index,
             "step_id": step.id,
@@ -151,6 +161,10 @@ class SentinelFlowAgentWorkflowRunner:
                 if isinstance(item, dict) and str(item.get("name", "")).strip()
             ],
             "key_facts": key_facts,
+            "context_manifest": context_manifest,
+            "context_warnings": list(worker_result.get("context_warnings", []) or []),
+            "authority_trace": context_manifest.get("authority_trace", []),
+            "missing_required_inputs": list(worker_result.get("missing_required_inputs", []) or []),
             "error": worker_result.get("error"),
             "success": success,
         }
@@ -516,6 +530,21 @@ class SentinelFlowAgentWorkflowRunner:
                 for item in prior_step_results
             ]
         )
+        context_manifest = build_context_manifest(
+            current_goal=effective_task_prompt,
+            entry_type="workflow_step",
+            current_step={
+                "workflow_id": workflow.id,
+                "workflow_name": workflow.name,
+                "step_index": step_index,
+                "step_name": step_name,
+            },
+            original_input=workflow_input,
+            current_task_prompt=effective_task_prompt,
+            workflow_definition=workflow_definition,
+            prior_step_results=prior_step_results,
+            model_summary=prior_facts,
+        )
         envelope = build_context_envelope(
             original_input=workflow_input,
             delegated_task=delegated_task_prompt,
@@ -530,6 +559,7 @@ class SentinelFlowAgentWorkflowRunner:
                 "prior_step_results": prior_step_results,
                 "prior_step_summaries": prior_step_summaries,
                 "prior_steps": prior_step_summaries,
+                "context_manifest": context_manifest,
             },
             prior_facts=prior_facts,
             authoritative_inputs={
@@ -546,6 +576,7 @@ class SentinelFlowAgentWorkflowRunner:
         )
         return (
             f"你当前处于 Agent Workflow《{workflow.name}》的第 {step_index}/{len(workflow.steps)} 步：{step_name}\n\n"
+            f"{format_context_manifest_header(context_manifest)}\n"
             "请只依据以下上下文执行当前步骤；workflow_definition.description 是固定流程目标和对象依据，prior_step_results 是完整前置步骤结果，prior_step_summaries 只是阅读辅助：\n"
             f"```json\n{json.dumps(envelope, ensure_ascii=False, indent=2)}\n```\n\n"
             f"本步骤固定任务：\n{effective_task_prompt}\n\n"

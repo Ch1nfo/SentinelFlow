@@ -46,6 +46,18 @@ KEY_FACT_ALIASES = {
 }
 
 DEFAULT_KEY_FACT_MAX_DEPTH = 20
+DEFAULT_CONTEXT_WARNING_TOKEN_THRESHOLD = 24000
+
+AUTHORITY_PRIORITY = [
+    "current_skill_args",
+    "current_task_prompt",
+    "current_workflow_step",
+    "workflow_definition",
+    "prior_step_results",
+    "original_input",
+    "conversation_history",
+    "model_summary",
+]
 
 
 def compact_text(value: Any, limit: int = 800) -> str:
@@ -152,6 +164,197 @@ def extract_key_facts(*values: Any, max_depth: int = DEFAULT_KEY_FACT_MAX_DEPTH)
     return facts
 
 
+def estimate_context_size(value: Any) -> dict[str, int]:
+    """Return a small, deterministic size estimate for observability only."""
+    try:
+        text = json.dumps(_json_safe(value), ensure_ascii=False, sort_keys=True)
+    except Exception:
+        text = str(value)
+    chars = len(text)
+    return {
+        "chars": chars,
+        "estimated_tokens": max(1, chars // 4) if chars else 0,
+    }
+
+
+def _fact_values(value: Any) -> list[Any]:
+    if value in ("", None, [], {}):
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def resolve_authoritative_facts(**sources: Any) -> dict[str, Any]:
+    """Build a fact index with source priority without replacing raw inputs."""
+    ordered_sources: list[tuple[str, Any]] = []
+    for name in AUTHORITY_PRIORITY:
+        if name in sources:
+            ordered_sources.append((name, sources.get(name)))
+    for name, value in sources.items():
+        if name not in AUTHORITY_PRIORITY:
+            ordered_sources.append((name, value))
+
+    facts: dict[str, Any] = {}
+    trace: list[dict[str, Any]] = []
+    conflicts: dict[str, list[dict[str, Any]]] = {}
+    for priority, (source_name, source_value) in enumerate(ordered_sources, start=1):
+        source_facts = extract_key_facts(source_value)
+        if not source_facts:
+            continue
+        for key, value in source_facts.items():
+            values = _fact_values(value)
+            if not values:
+                continue
+            if key not in facts:
+                facts[key] = value
+                trace.append({"fact": key, "source": source_name, "priority": priority})
+                continue
+            existing_values = {
+                json.dumps(_json_safe(item), ensure_ascii=False, sort_keys=True)
+                for item in _fact_values(facts[key])
+            }
+            new_values = {
+                json.dumps(_json_safe(item), ensure_ascii=False, sort_keys=True)
+                for item in values
+            }
+            if new_values - existing_values:
+                conflicts.setdefault(key, []).append(
+                    {"source": source_name, "priority": priority, "value": _json_safe(value)}
+                )
+    return {
+        "facts": facts,
+        "authority_trace": trace,
+        "conflicts": conflicts,
+        "priority_order": AUTHORITY_PRIORITY,
+    }
+
+
+def _has_any(data: dict[str, Any], keys: tuple[str, ...]) -> bool:
+    for key in keys:
+        value = data.get(key)
+        if value not in ("", None, [], {}):
+            return True
+    return False
+
+
+def _missing_field(field: str, reason: str, source: str = "arguments") -> dict[str, str]:
+    return {"field": field, "source": source, "reason": reason}
+
+
+def validate_execution_inputs(
+    *,
+    skill_name: str = "",
+    arguments: dict[str, Any] | None = None,
+    task_prompt: str = "",
+) -> dict[str, Any]:
+    """Check only hard execution parameters; never mutate or infer args."""
+    normalized_name = str(skill_name or "").strip().lower()
+    compact_name = normalized_name.replace("-", "").replace("_", "").replace(" ", "")
+    args = arguments if isinstance(arguments, dict) else {}
+    prompt_text = str(task_prompt or "")
+    missing: list[dict[str, str]] = []
+    contract = {"skill_name": skill_name, "action_type": "generic", "required": []}
+
+    is_contact = any(marker in compact_name for marker in ("contact", "hiklink", "sendhiklink"))
+    is_ban = any(marker in compact_name for marker in ("ban", "block", "sgpban", "封禁"))
+    is_closure_like = compact_name in {"exec", "calling", "close", "soccalling"} or any(
+        marker in compact_name for marker in ("close", "closure", "ticketclose", "结单", "闭环")
+    )
+
+    if is_contact:
+        contract = {"skill_name": skill_name, "action_type": "contact", "required": ["to", "body"]}
+        if not _has_any(args, ("to",)):
+            missing.append(_missing_field("to", "联系/通知类 Skill 执行前必须有明确收信人。"))
+        if not _has_any(args, ("body",)):
+            missing.append(_missing_field("body", "联系/通知类 Skill 执行前必须有明确消息内容。"))
+    elif is_ban:
+        contract = {"skill_name": skill_name, "action_type": "containment", "required": ["ip"]}
+        if not _has_any(args, ("ip", "target_ip", "source_ip", "sip", "ban_ip", "blocked_ip")):
+            missing.append(_missing_field("ip", "封禁/阻断类 Skill 执行前必须有明确目标 IP。"))
+    elif is_closure_like:
+        contract = {"skill_name": skill_name, "action_type": "closure_or_status_update", "required": ["eventIds", "status"]}
+        if not _has_any(args, ("eventIds", "event_id", "alert_id")):
+            missing.append(_missing_field("eventIds", "告警状态更新/结单类 Skill 执行前必须有明确告警 ID。"))
+        if not _has_any(args, ("status", "closeStatus", "close_status")):
+            missing.append(_missing_field("status", "告警状态更新/结单类 Skill 执行前必须有明确目标状态。"))
+
+    if missing and prompt_text:
+        contract["task_prompt_size"] = estimate_context_size(prompt_text)
+    return {
+        "valid": not missing,
+        "input_contract": contract,
+        "missing_required_inputs": missing,
+    }
+
+
+def build_context_manifest(
+    *,
+    current_goal: str = "",
+    entry_type: str = "",
+    current_step: Any = None,
+    original_input: Any = None,
+    current_task_prompt: str = "",
+    current_skill_args: dict[str, Any] | None = None,
+    workflow_definition: Any = None,
+    prior_step_results: Any = None,
+    conversation_history: Any = None,
+    model_summary: Any = None,
+    input_contract: dict[str, Any] | None = None,
+    missing_required_inputs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    authority = resolve_authoritative_facts(
+        current_skill_args=current_skill_args or {},
+        current_task_prompt=current_task_prompt,
+        current_workflow_step=current_step or {},
+        workflow_definition=workflow_definition or {},
+        prior_step_results=prior_step_results or [],
+        original_input=original_input or {},
+        conversation_history=conversation_history or [],
+        model_summary=model_summary or "",
+    )
+    payload_for_size = {
+        "current_goal": current_goal,
+        "current_step": current_step,
+        "original_input": original_input,
+        "current_task_prompt": current_task_prompt,
+        "current_skill_args": current_skill_args or {},
+        "workflow_definition": workflow_definition or {},
+        "prior_step_results": prior_step_results or [],
+        "conversation_history": conversation_history or [],
+        "model_summary": model_summary or "",
+    }
+    size = estimate_context_size(payload_for_size)
+    warnings: list[str] = []
+    if size.get("estimated_tokens", 0) >= DEFAULT_CONTEXT_WARNING_TOKEN_THRESHOLD:
+        warnings.append("context_size_large")
+    conflicts = authority.get("conflicts", {})
+    if isinstance(conflicts, dict) and conflicts:
+        warnings.append("authority_fact_conflict")
+    return {
+        "current_goal": str(current_goal or current_task_prompt or "").strip(),
+        "entry_type": str(entry_type or "").strip(),
+        "current_step": _json_safe(current_step or {}),
+        "required_objects": list((input_contract or {}).get("required", []) or []),
+        "available_facts": authority.get("facts", {}),
+        "authoritative_sources": AUTHORITY_PRIORITY,
+        "authority_trace": authority.get("authority_trace", []),
+        "fact_conflicts": conflicts,
+        "input_contract": input_contract or {},
+        "missing_required_inputs": missing_required_inputs or [],
+        "context_size": size,
+        "context_warnings": warnings,
+    }
+
+
+def format_context_manifest_header(manifest: dict[str, Any]) -> str:
+    return (
+        "SOC 执行上下文控制器（导航信息，不替代原始执行数据）：\n"
+        f"```json\n{json.dumps(_json_safe(manifest), ensure_ascii=False, indent=2)}\n```\n\n"
+        "执行依据优先级：当前 skill args > 当前子 Agent task_prompt > 当前 workflow step > "
+        "workflow description/task > 前置步骤真实结果 > 告警原始字段 > 对话历史 > 模型摘要。\n"
+        "如果对象冲突，使用最高优先级来源；如果关键对象缺失，先查询或明确说明缺失，不要编造。\n"
+    )
+
+
 def _parse_tool_message_payload(content: Any) -> Any:
     if isinstance(content, str):
         try:
@@ -242,6 +445,15 @@ def compact_worker_result_for_llm(worker_result: dict[str, Any]) -> dict[str, An
         "skills_used": list(worker_result.get("skills_used", []) or []),
         "tool_calls_summary": tool_calls_summary,
         "key_facts": key_facts,
+        "context_manifest": worker_result.get("context_manifest", {}),
+        "context_warnings": list(worker_result.get("context_warnings", []) or []),
+        "input_contract": worker_result.get("input_contract", {}),
+        "missing_required_inputs": list(worker_result.get("missing_required_inputs", []) or []),
+        "authority_trace": (
+            (worker_result.get("context_manifest", {}) or {}).get("authority_trace", [])
+            if isinstance(worker_result.get("context_manifest", {}), dict)
+            else []
+        ),
         "success": bool(worker_result.get("success")),
         "error": error,
     }

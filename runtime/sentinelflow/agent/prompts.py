@@ -116,6 +116,8 @@ PRIMARY_COMMAND_ORCHESTRATION_APPENDIX = """\
 - 如果输入上下文指定了必须使用某个 Workflow，你必须先调用 `run_workflow` 读取该 Workflow 计划
 - 对无入参技能，优先使用 `execute_skill_no_args`
 - 给子 Agent 的 task_prompt 必须具体、可操作，不要笼统
+- 执行依据优先级：当前 skill args > 当前子 Agent task_prompt > 当前 workflow step > workflow description/task > 前置步骤真实结果 > 原始输入 > 对话历史 > 模型摘要
+- context_manifest 只是导航和校验信息，不替代原始 task_prompt、Skill 参数或工具返回
 - 当信息足够时，停止调用任何工具，直接输出最终回复给用户
 - 回复语言必须是中文
 - 不要把内部调度过程展示给用户
@@ -149,6 +151,8 @@ PRIMARY_ALERT_ORCHESTRATION_APPENDIX = """\
 - 如果告警上下文指定了必须使用某个 Workflow，你必须先调用 `run_workflow` 读取该 Workflow 计划
 - 对无入参技能，优先使用 `execute_skill_no_args`
 - 给子 Agent 的 task_prompt 必须具体、可操作
+- 执行依据优先级：当前 skill args > 当前子 Agent task_prompt > 当前 workflow step > workflow description/task > 前置步骤真实结果 > 告警原始字段 > 对话历史 > 模型摘要
+- context_manifest 只是导航和校验信息，不替代原始告警、task_prompt、Skill 参数或工具返回
 - 最终结论必须包含：最终分类、简短理由、关键依据、执行结果
 - 当信息足够时，停止调用任何工具，直接输出最终中文结论
 - 不要把内部调度过程展示给值班人员
