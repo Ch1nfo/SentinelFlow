@@ -192,15 +192,19 @@ class AlertTaskRunnerService:
             self.audit_service.record("agent_workflow_task_failed", f"Workflow failed during {selected_action}.", {"error": str(exc)})
             return self._finalize_failure(task, selected_action, f"Workflow 加载失败：{exc}")
 
+        guided_alert = dict(alert)
+        guided_alert["_forced_workflow_id"] = workflow_definition.id
+        guided_alert["_forced_workflow_name"] = workflow_definition.name
+        guided_alert["_forced_workflow_description"] = workflow_definition.description
         try:
-            agent_result = await self.agent_workflow_runner.execute_workflow(
-                workflow_definition,
-                alert,
+            agent_result = await self.agent_service.run_alert(
+                guided_alert,
+                selected_action,
                 execution_context=execution_context,
             )
         except Exception as exc:
-            self.audit_service.record("agent_workflow_task_failed", f"Workflow failed during {selected_action}.", {"error": str(exc)})
-            return self._finalize_failure(task, selected_action, f"Workflow 执行失败：{exc}")
+            self.audit_service.record("agent_workflow_task_failed", f"Guided workflow failed during {selected_action}.", {"error": str(exc)})
+            return self._finalize_failure(task, selected_action, f"主 Agent 引导式 Workflow 执行失败：{exc}")
 
         if agent_result.get("approval_pending"):
             pending_payload = dict(agent_result)

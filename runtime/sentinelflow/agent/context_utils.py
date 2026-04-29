@@ -45,7 +45,6 @@ KEY_FACT_ALIASES = {
     "receiver_id": ("receiver_id", "recipient", "to"),
 }
 
-
 def compact_text(value: Any, limit: int = 800) -> str:
     text = str(value or "").strip()
     text = re.sub(r"\s+", " ", text)

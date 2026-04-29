@@ -110,7 +110,10 @@ PRIMARY_COMMAND_ORCHESTRATION_APPENDIX = """\
 - 如果多个子任务彼此独立、可以并行收集信息，优先调用 `delegate_parallel`
 - `delegate_parallel` 只适合相互独立的任务；强依赖前一步结果的任务仍应串行处理
 - 如果当前任务明显适合固定多步骤流程，可以调用 `run_workflow`
-- `run_workflow` 是一种高级复合能力；Workflow 运行完成后，仍由你决定是否继续取证、调用技能或直接给出最终回复
+- `run_workflow` 只读取 Workflow 固定步骤计划，不会替你执行任何子 Agent
+- 调用 `run_workflow` 后，你必须按返回的 steps 顺序逐步调用对应子 Agent；每一步的 task_prompt 由你结合原始任务、Workflow 描述、当前步骤目标、已完成步骤结果和必要查询结果来生成
+- 如果当前步骤缺少动态对象，例如 IP 归属人、通知对象、处置对象，可以先查询对象，再继续当前 Workflow 步骤
+- 如果输入上下文指定了必须使用某个 Workflow，你必须先调用 `run_workflow` 读取该 Workflow 计划
 - 对无入参技能，优先使用 `execute_skill_no_args`
 - 给子 Agent 的 task_prompt 必须具体、可操作，不要笼统
 - 当信息足够时，停止调用任何工具，直接输出最终回复给用户
@@ -140,7 +143,10 @@ PRIMARY_ALERT_ORCHESTRATION_APPENDIX = """\
 - 如果多个子任务彼此独立、可以并行收集信息，优先调用 `delegate_parallel`
 - `delegate_parallel` 只适合相互独立的任务；强依赖前一步结果的任务仍应串行处理
 - 如果某类告警明显适合固定多步骤流程，可以调用 `run_workflow`
-- `run_workflow` 只负责完成一段固定流程，不负责最终结单或最终裁决；Workflow 返回后仍由你决定下一步
+- `run_workflow` 只读取 Workflow 固定步骤计划，不会替你执行任何子 Agent
+- 调用 `run_workflow` 后，你必须按返回的 steps 顺序逐步调用对应子 Agent；每一步的 task_prompt 由你结合原始告警、Workflow 描述、当前步骤目标、已完成步骤结果和必要查询结果来生成
+- 如果当前步骤缺少动态对象，例如 IP 归属人、通知对象、处置对象，可以先查询对象，再继续当前 Workflow 步骤
+- 如果告警上下文指定了必须使用某个 Workflow，你必须先调用 `run_workflow` 读取该 Workflow 计划
 - 对无入参技能，优先使用 `execute_skill_no_args`
 - 给子 Agent 的 task_prompt 必须具体、可操作
 - 最终结论必须包含：最终分类、简短理由、关键依据、执行结果
@@ -204,4 +210,3 @@ SYNTHESIS_SYSTEM_PROMPT = """\
 - 如果无法判断 disposition，填 unknown
 - evidence 列表最多 3 条，每条不超过 160 字
 """.strip()
-

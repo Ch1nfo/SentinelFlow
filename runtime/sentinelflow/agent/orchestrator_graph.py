@@ -380,14 +380,14 @@ def build_orchestrator_graph(
         task_prompt: str,
         state: Annotated[OrchestratorState, InjectedState()],  # type: ignore[misc]
     ) -> str:
-        """调用一个已配置的 Agent Workflow 执行固定多步骤流程，并返回结构化结果。"""
+        """读取一个已配置的 Agent Workflow 执行计划。该工具只返回固定步骤顺序；每一步仍必须由主 Agent 亲自调用对应子 Agent。"""
         cancel = state.get("cancel_event")
         if cancel is not None and getattr(cancel, "is_set", lambda: False)():
             return json.dumps({"success": False, "workflow_id": workflow_id, "error": "用户已停止当前任务。"}, ensure_ascii=False)
         workflow_id = str(workflow_id or "").strip()
         if not workflow_id:
             return json.dumps({"success": False, "workflow_id": "", "error": "必须提供 workflow_id。"}, ensure_ascii=False)
-        if workflow_runner is None or workflow_root is None:
+        if workflow_root is None:
             return json.dumps({"success": False, "workflow_id": workflow_id, "error": "当前未启用 Workflow 运行时。"}, ensure_ascii=False)
         workflow = workflow_catalog.get(workflow_id)
         if workflow is None:
@@ -397,38 +397,43 @@ def build_orchestrator_graph(
                 return json.dumps({"success": False, "workflow_id": workflow_id, "error": f"Workflow 不存在或无法加载：{exc}"}, ensure_ascii=False)
         if not workflow.enabled:
             return json.dumps({"success": False, "workflow_id": workflow_id, "error": "该 Workflow 当前未启用。"}, ensure_ascii=False)
-        workflow_checkpoint_thread_id = f"{str(state.get('checkpoint_thread_id', '')).strip() or uuid4().hex}:workflow:{workflow.id}"
-        parent_tool_call_id = _resolve_current_tool_call_id(
-            state,
-            "run_workflow",
-            expected_args={
-                "workflow_id": workflow_id,
-                "task_prompt": str(task_prompt or ""),
-            },
-        )
-        execution_context = {
-            "run_id": str(state.get("run_id", "")).strip(),
-            "execution_entry": str(state.get("execution_entry", "")).strip(),
-            "scope_type": str(state.get("scope_type", "")).strip(),
-            "scope_ref": str(state.get("scope_ref", "")).strip(),
-            "checkpoint_thread_id": workflow_checkpoint_thread_id,
-            "checkpoint_ns": "workflow_runner",
-            "parent_checkpoint_thread_id": str(state.get("checkpoint_thread_id", "")).strip(),
-            "parent_checkpoint_ns": str(state.get("graph_checkpoint_ns", state.get("checkpoint_ns", "orchestrator_graph"))).strip(),
-            "parent_tool_call_id": parent_tool_call_id,
-            "approved_fingerprints": list(state.get("approved_fingerprints") or []),
-            "rejected_fingerprints": list(state.get("rejected_fingerprints") or []),
-            "executed_skill_cache": dict(state.get("executed_skill_cache", {}) or {}),
-        }
-        try:
-            result = await workflow_runner.execute_workflow(
-                workflow,
-                dict(state.get("alert_data", {}) or {}),
-                task_prompt=str(task_prompt or ""),
-                execution_context=execution_context,
+        steps: list[dict[str, Any]] = []
+        for index, step in enumerate(workflow.steps, start=1):
+            agent_name = str(step.agent or "").strip()
+            tool_name = _worker_tool_name(agent_name)
+            steps.append(
+                {
+                    "index": index,
+                    "id": step.id,
+                    "name": step.name,
+                    "agent": agent_name,
+                    "tool_name": tool_name,
+                    "agent_available": agent_name in worker_runners,
+                    "task_prompt": step.task_prompt,
+                    "step_goal": step.task_prompt or f"请根据 Workflow 目标完成第 {index} 步《{step.name}》。",
+                }
             )
-        except Exception as exc:
-            return json.dumps({"success": False, "workflow_id": workflow_id, "error": f"Workflow 执行失败：{exc}"}, ensure_ascii=False)
+        result = {
+            "success": True,
+            "workflow_id": workflow.id,
+            "workflow_name": workflow.name,
+            "workflow_description": workflow.description,
+            "execution_mode": "supervisor_guided_workflow",
+            "execution_status": "plan_ready",
+            "requires_supervisor_execution": True,
+            "task_prompt": str(task_prompt or ""),
+            "steps": steps,
+            "summary": f"Workflow《{workflow.name}》计划已载入，等待主 Agent 按步骤调用子 Agent。",
+            "instructions": [
+                "run_workflow 只返回固定步骤计划，没有执行任何子 Agent。",
+                "你必须按 steps 顺序逐步调用对应 tool_name。",
+                "每次调用子 Agent 时，由你结合原始任务、workflow_description、当前 step_goal、已完成步骤结果和必要查询结果生成完整 task_prompt。",
+                "如果当前步骤缺少动态对象，例如 IP 归属人或通知对象，可以先调用合适的查询能力获得对象，再继续当前步骤。",
+                "强依赖前后顺序的 Workflow 步骤不要并行执行。",
+            ],
+            "next_step": steps[0] if steps else {},
+            "used_agent_workflow": True,
+        }
         return json.dumps(result, ensure_ascii=False)
 
     @tool
@@ -586,6 +591,20 @@ def build_orchestrator_graph(
                 action_hint = state.get("action_hint", "")
                 hint_text = f"\n\n处置意图：{action_hint}" if action_hint else ""
                 human_content = f"请分析并处置以下告警：\n\n```json\n{alert_json}\n```{hint_text}"
+            forced_workflow_id = str(ad.get("_forced_workflow_id", "")).strip()
+            if forced_workflow_id:
+                forced_workflow_name = str(ad.get("_forced_workflow_name", "")).strip()
+                forced_workflow_description = str(ad.get("_forced_workflow_description", "")).strip()
+                human_content += (
+                    "\n\nWorkflow 约束："
+                    f"\n- 必须先调用 run_workflow 读取 workflow_id={forced_workflow_id} 的固定步骤计划。"
+                    "\n- run_workflow 返回后，由你按步骤亲自调用对应子 Agent，并为每一步生成完整 task_prompt。"
+                    "\n- 如果某一步缺少动态对象，先查询对象，再继续当前步骤。"
+                )
+                if forced_workflow_name:
+                    human_content += f"\n- Workflow 名称：{forced_workflow_name}"
+                if forced_workflow_description:
+                    human_content += f"\n- Workflow 描述：{forced_workflow_description}"
 
             initial_msg = HumanMessage(content=human_content)
             messages_to_send = [system_msg] + seed_messages + [initial_msg]

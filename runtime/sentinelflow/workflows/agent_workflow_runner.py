@@ -479,6 +479,20 @@ class SentinelFlowAgentWorkflowRunner:
         step_results: list[dict[str, Any]],
     ) -> str:
         effective_task_prompt = task_prompt if task_prompt.strip() else f"请作为流程中的子 Agent 完成第 {step_index} 步《{step_name}》需要承担的工作，并输出你的阶段性结果。"
+        workflow_definition = {
+            "id": workflow.id,
+            "name": workflow.name,
+            "description": workflow.description,
+            "steps": [
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "agent": item.agent,
+                    "task_prompt": item.task_prompt,
+                }
+                for item in workflow.steps
+            ],
+        }
         prior_step_results = [item for item in step_results if isinstance(item, dict)]
         prior_step_summaries = [
             {
@@ -493,6 +507,7 @@ class SentinelFlowAgentWorkflowRunner:
         ]
         prior_facts = extract_key_facts(
             workflow_input,
+            workflow_definition,
             delegated_task_prompt,
             effective_task_prompt,
             prior_step_results,
@@ -505,7 +520,9 @@ class SentinelFlowAgentWorkflowRunner:
             original_input=workflow_input,
             delegated_task=delegated_task_prompt,
             workflow_step={
+                "workflow_definition": workflow_definition,
                 "workflow_name": workflow.name,
+                "workflow_description": workflow.description,
                 "step_index": step_index,
                 "steps_count": len(workflow.steps),
                 "step_name": step_name,
@@ -515,16 +532,29 @@ class SentinelFlowAgentWorkflowRunner:
                 "prior_steps": prior_step_summaries,
             },
             prior_facts=prior_facts,
+            authoritative_inputs={
+                "workflow_definition": workflow_definition,
+                "workflow_input": workflow_input,
+                "workflow_task_prompt": delegated_task_prompt,
+                "current_step_task_prompt": effective_task_prompt,
+                "prior_step_results": prior_step_results,
+            },
+            constraints=[
+                "当前任务以 workflow_step.task_prompt 为准，workflow_definition.description 是固定流程目标和对象依据。",
+                "不得从历史噪声中猜测发送对象、处置对象或结单对象。",
+                "关键对象只能来自当前步骤、workflow_definition、authoritative_inputs、原始输入中的明确字段或 prior_facts。",
+                "如果关键对象缺失，必须说明缺失，不要编造。",
+            ],
         )
         return (
             f"你当前处于 Agent Workflow《{workflow.name}》的第 {step_index}/{len(workflow.steps)} 步：{step_name}\n\n"
-            "请只依据以下上下文执行当前步骤；prior_step_results 是完整前置步骤结果，prior_step_summaries 只是阅读辅助：\n"
+            "请只依据以下上下文执行当前步骤；workflow_definition.description 是固定流程目标和对象依据，prior_step_results 是完整前置步骤结果，prior_step_summaries 只是阅读辅助：\n"
             f"```json\n{json.dumps(envelope, ensure_ascii=False, indent=2)}\n```\n\n"
             f"本步骤固定任务：\n{effective_task_prompt}\n\n"
             "要求：\n"
             "- 只完成当前步骤，不要尝试规划整个流程\n"
             "- 不要假设自己能调度其他 Agent\n"
-            "- 发送对象、处置对象、结单对象只能来自当前步骤、prior_step_results、原始上下文或 prior_facts\n"
+            "- 发送对象、处置对象、结单对象只能来自当前步骤、workflow_definition、authoritative_inputs、prior_step_results、原始上下文或 prior_facts\n"
             "- 如果关键对象缺失，明确说明缺失，不要编造\n"
             "- 输出简洁中文结果，必要时调用你已授权的 Skill\n"
         )

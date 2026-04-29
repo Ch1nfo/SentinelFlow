@@ -965,7 +965,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             )
             resumed_state = await orchestrator.ainvoke(
                 state,
-                {"recursion_limit": max(10, self._resolve_worker_max_steps(agent_definition) * 4 + 4)},
+                {"recursion_limit": max(18, self._resolve_worker_max_steps(agent_definition) * 6 + 10)},
             )
             graph_result = self._serialize_orchestrator_result(
                 resumed_state,
@@ -1322,7 +1322,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             status_callback("主 Agent 正在分析任务并调度子 Agent...")
         final_state = await orchestrator.ainvoke(
             initial_state,
-            {"recursion_limit": max(10, max_steps * 4 + 4)},
+            {"recursion_limit": max(18, max_steps * 6 + 10)},
         )
         serialized = self._serialize_orchestrator_result(final_state, alert_data, primary_agent, action_hint=None)
         if final_state.get("approval_pending"):
@@ -1405,7 +1405,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             status_callback("主 Agent 正在分析告警并调度子 Agent...")
         final_state = await orchestrator.ainvoke(
             initial_state,
-            {"recursion_limit": max(10, max_steps * 4 + 4)},
+            {"recursion_limit": max(18, max_steps * 6 + 10)},
         )
         graph_result = self._serialize_orchestrator_result(final_state, alert, primary_agent, action_hint)
         if final_state.get("approval_pending"):
