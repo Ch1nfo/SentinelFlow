@@ -4,6 +4,7 @@ import json
 from typing import Literal
 
 from sentinelflow.agent.catalog import load_skill_catalog
+from sentinelflow.agent.context_utils import build_context_envelope
 from sentinelflow.agent.prompt_builder import PromptBuildContext, build_prompt
 from sentinelflow.agent.state import SentinelFlowAgentState
 
@@ -35,7 +36,22 @@ async def agent_node(state: SentinelFlowAgentState, llm, skill_root) -> dict:
         )
         system_msg = SystemMessage(content=prompt)
         payload = str(alert_data.get("payload", "")).strip()
-        initial_msg = HumanMessage(content=f"请执行以下人工指令：{payload}")
+        delegated_task_prompt = str(alert_data.get("delegated_task_prompt", "")).strip()
+        if delegated_task_prompt:
+            envelope = build_context_envelope(
+                original_input=payload,
+                delegated_task=delegated_task_prompt,
+                prior_facts=alert_data.get("prior_facts", {}) if isinstance(alert_data.get("prior_facts"), dict) else {},
+            )
+            initial_msg = HumanMessage(
+                content=(
+                    "请执行以下主 Agent 分派任务。当前执行目标以 delegated_task 为准，"
+                    "original_input 只作为背景：\n\n"
+                    f"```json\n{json.dumps(envelope, ensure_ascii=False, indent=2)}\n```"
+                )
+            )
+        else:
+            initial_msg = HumanMessage(content=f"请执行以下人工指令：{payload}")
     else:
         handling_intent = str(alert_data.get("handling_intent", "")).strip()
         prompt = build_prompt(
@@ -50,8 +66,21 @@ async def agent_node(state: SentinelFlowAgentState, llm, skill_root) -> dict:
         system_msg = SystemMessage(content=prompt)
         alert_json = json.dumps(alert_data, ensure_ascii=False, indent=2)
         delegated_task_prompt = str(alert_data.get("delegated_task_prompt", "")).strip()
-        task_block = f"\n\n主 Agent 分派要求：\n{delegated_task_prompt}" if delegated_task_prompt else ""
-        initial_msg = HumanMessage(content=f"请分析并处置以下告警：\n\n```json\n{alert_json}\n```{task_block}")
+        if delegated_task_prompt:
+            envelope = build_context_envelope(
+                original_input=alert_data,
+                delegated_task=delegated_task_prompt,
+                prior_facts=alert_data.get("prior_facts", {}) if isinstance(alert_data.get("prior_facts"), dict) else {},
+            )
+            initial_msg = HumanMessage(
+                content=(
+                    "请分析并处置以下上下文。当前执行目标以 delegated_task 为准，"
+                    "original_input 只作为背景：\n\n"
+                    f"```json\n{json.dumps(envelope, ensure_ascii=False, indent=2)}\n```"
+                )
+            )
+        else:
+            initial_msg = HumanMessage(content=f"请分析并处置以下告警：\n\n```json\n{alert_json}\n```")
 
     current_messages = list(state.get("messages", []))
     input_seeded = bool(state.get("input_seeded"))

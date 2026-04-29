@@ -28,6 +28,7 @@ from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from sentinelflow.agent.checkpoint_state import serialize_graph_state
+from sentinelflow.agent.context_utils import compact_worker_result_for_llm, extract_key_facts, summarize_tool_calls
 from sentinelflow.agent.graph import build_agent_graph
 from sentinelflow.agent.orchestrator_state import OrchestratorState
 from sentinelflow.agent.policy import can_agent_execute_skill, can_agent_read_skill
@@ -106,6 +107,22 @@ def _resolve_current_tool_call_id(
     return ""
 
 
+def _extract_prior_facts_from_messages(messages: list[Any]) -> dict[str, Any]:
+    facts: dict[str, Any] = {}
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        content = getattr(msg, "content", "")
+        if not isinstance(content, str):
+            continue
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        facts = extract_key_facts(facts, payload.get("key_facts", {}), payload.get("tool_calls_summary", []), payload)
+    return facts
+
+
 # ── Worker SubGraph Tool Builder ──────────────────────────────────────────────
 
 def _build_worker_subgraph_tool(
@@ -130,10 +147,12 @@ def _build_worker_subgraph_tool(
 
     async def _execute_worker_subgraph(task_prompt: str, state: OrchestratorState, step_idx: int) -> dict[str, Any]:
         child_checkpoint_thread_id = f"{str(state.get('checkpoint_thread_id', '')).strip() or uuid4().hex}:worker:{worker_agent_def.name}:{step_idx}"
+        prior_facts = _extract_prior_facts_from_messages(list(state.get("messages", [])))
         child_state = {
             "alert_data": {
                 **copy.deepcopy(alert_data),
                 "delegated_task_prompt": task_prompt,
+                "prior_facts": prior_facts,
             },
             "messages": [],
             "event_id_ref": str(alert_data.get("eventIds", "")).strip(),
@@ -174,42 +193,43 @@ def _build_worker_subgraph_tool(
                 "task_prompt": task_prompt,
                 "final_response": "",
                 "skills_used": [],
+                "tool_calls_summary": [],
+                "key_facts": {},
                 "success": False,
                 "error": str(exc),
             }
 
         final_text = ""
         skills_used: list[str] = []
-        serialized_messages: list[dict[str, Any]] = []
         tool_calls: list[dict[str, Any]] = []
+        tool_result_facts: dict[str, Any] = {}
         for msg in worker_state.get("messages", []):
             msg_type = getattr(msg, "type", "")
             if msg_type == "ai" and getattr(msg, "content", ""):
                 final_text = msg.content
-            item: dict[str, Any] = {
-                "type": msg_type or getattr(msg, "__class__", type(msg)).__name__.lower(),
-                "content": getattr(msg, "content", ""),
-            }
             if getattr(msg, "tool_calls", None):
-                item["tool_calls"] = msg.tool_calls
                 tool_calls.extend(msg.tool_calls)
-            if getattr(msg, "name", None):
-                item["name"] = msg.name
-            if getattr(msg, "tool_call_id", None):
-                item["tool_call_id"] = msg.tool_call_id
-            serialized_messages.append(item)
             for tc in (getattr(msg, "tool_calls", None) or []):
                 if isinstance(tc, dict) and tc.get("name"):
                     skills_used.append(tc["name"])
+            if msg_type == "tool":
+                content = getattr(msg, "content", "")
+                if isinstance(content, str):
+                    try:
+                        parsed_content = json.loads(content)
+                    except json.JSONDecodeError:
+                        parsed_content = content
+                    tool_result_facts = extract_key_facts(tool_result_facts, parsed_content)
 
+        tool_calls_summary = summarize_tool_calls(tool_calls)
         result = {
             "step": step_idx,
             "worker": worker_agent_def.name,
             "task_prompt": task_prompt,
             "final_response": final_text[:3000],
             "skills_used": skills_used,
-            "messages": serialized_messages,
-            "tool_calls": tool_calls,
+            "tool_calls_summary": tool_calls_summary,
+            "key_facts": extract_key_facts(prior_facts, alert_data, task_prompt, final_text, tool_calls_summary, tool_result_facts),
             "success": bool(final_text),
             "approval_pending": bool(worker_state.get("approval_pending")),
             "approval_request": worker_state.get("approval_request", {}),
@@ -248,7 +268,7 @@ def _build_worker_subgraph_tool(
                 result["approval_request"] = approval_service.serialize_approval(record)
                 result["error"] = "子 Agent 等待技能审批。"
                 result["success"] = False
-        return result
+        return compact_worker_result_for_llm(result)
 
     tool_name = _worker_tool_name(worker_agent_def.name)
     worker_desc = (worker_agent_def.description or worker_agent_def.name).strip()

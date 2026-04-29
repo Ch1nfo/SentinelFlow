@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from sentinelflow.agent.checkpoint_state import deserialize_graph_state, serialize_graph_state
 from sentinelflow.agent.catalog import load_skill_catalog
+from sentinelflow.agent.context_utils import compact_worker_result_for_llm, extract_key_facts, summarize_tool_calls
 from sentinelflow.agent.graph import build_agent_graph
 from sentinelflow.agent.policy import can_agent_delegate_to_worker, can_agent_execute_skill, can_agent_read_skill
 from sentinelflow.agent.prompt_builder import PromptBuildContext, build_prompt
@@ -810,17 +811,31 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                 step_idx = 0
         final_text = str(graph_result.get("final_response", "")).strip()
         success, error = self.evaluate_worker_result(graph_result)
-        return {
+        tool_result_facts: dict[str, Any] = {}
+        for message in graph_result.get("messages", []) or []:
+            if not isinstance(message, dict) or str(message.get("type", "")).strip() != "tool":
+                continue
+            content = str(message.get("content", "")).strip()
+            try:
+                parsed_content = json.loads(content)
+            except json.JSONDecodeError:
+                parsed_content = content
+            tool_result_facts = extract_key_facts(tool_result_facts, parsed_content)
+        wrapped = {
             "step": step_idx or 1,
             "worker": str(checkpoint.get("agent_name", "")).strip() or str(graph_result.get("agent_name", "")).strip(),
             "task_prompt": delegated_task_prompt,
             "final_response": final_text[:3000],
             "skills_used": skills_used,
-            "messages": graph_result.get("messages", []),
-            "tool_calls": tool_calls,
+            "tool_calls_summary": summarize_tool_calls(tool_calls),
+            "key_facts": extract_key_facts(graph_result.get("key_facts", {}), tool_calls, final_text, tool_result_facts),
             "success": success,
             "error": error,
         }
+        if graph_result.get("approval_pending"):
+            wrapped["approval_pending"] = True
+            wrapped["approval_request"] = graph_result.get("approval_request", {})
+        return compact_worker_result_for_llm(wrapped)
 
     def _approval_resume_failed_result(self, error: str, approval) -> dict[str, Any]:
         return {
