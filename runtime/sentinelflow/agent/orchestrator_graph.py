@@ -221,7 +221,10 @@ def _build_worker_subgraph_tool(
                         parsed_content = content
                     tool_result_facts = extract_key_facts(tool_result_facts, parsed_content)
 
-        tool_calls_summary = summarize_tool_calls(tool_calls)
+        tool_calls_summary = summarize_tool_calls(
+            tool_calls,
+            tool_messages=list(worker_state.get("messages", [])),
+        )
         result = {
             "step": step_idx,
             "worker": worker_agent_def.name,

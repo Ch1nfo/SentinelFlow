@@ -171,12 +171,14 @@ class SkillRunAnalyzerMixin:
             if tool_name == "execute_skill_no_args":
                 arguments = {}
 
-            business_payload = item.get("payload", item.get("result", item.get("data", {})))
-            if not isinstance(business_payload, dict):
-                business_payload = {"result": business_payload} if business_payload not in (None, "") else {}
             tool_payload = item.get("tool_payload", {})
             if not isinstance(tool_payload, dict):
                 tool_payload = {}
+            business_payload = item.get("payload", item.get("result", item.get("data", {})))
+            if not isinstance(business_payload, dict):
+                business_payload = {"result": business_payload} if business_payload not in (None, "") else {}
+            if not business_payload and isinstance(tool_payload.get("data"), dict):
+                business_payload = tool_payload.get("data", {})
             if not tool_payload:
                 tool_payload = {"data": business_payload}
                 explicit_success = item.get("success", item.get("tool_success"))

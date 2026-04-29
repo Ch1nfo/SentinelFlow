@@ -827,7 +827,10 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             "task_prompt": delegated_task_prompt,
             "final_response": final_text,
             "skills_used": skills_used,
-            "tool_calls_summary": summarize_tool_calls(tool_calls),
+            "tool_calls_summary": summarize_tool_calls(
+                tool_calls,
+                tool_messages=list(graph_result.get("messages", []) or []),
+            ),
             "key_facts": extract_key_facts(graph_result.get("key_facts", {}), tool_calls, final_text, tool_result_facts),
             "success": success,
             "error": error,

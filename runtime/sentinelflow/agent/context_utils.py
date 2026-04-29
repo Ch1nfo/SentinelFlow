@@ -152,11 +152,49 @@ def extract_key_facts(*values: Any, max_depth: int = DEFAULT_KEY_FACT_MAX_DEPTH)
     return facts
 
 
-def summarize_tool_calls(tool_calls: Any, *, limit: int | None = None) -> list[dict[str, Any]]:
+def _parse_tool_message_payload(content: Any) -> Any:
+    if isinstance(content, str):
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            return {"raw": content}
+    if isinstance(content, dict):
+        return content
+    return {"result": content}
+
+
+def _tool_payloads_by_id(tool_messages: Any) -> dict[str, dict[str, Any]]:
+    payloads: dict[str, dict[str, Any]] = {}
+    if not isinstance(tool_messages, list):
+        return payloads
+    for message in tool_messages:
+        if isinstance(message, dict):
+            msg_type = str(message.get("type", "")).strip()
+            tool_call_id = str(message.get("tool_call_id", "")).strip()
+            content = message.get("content", "")
+        else:
+            msg_type = str(getattr(message, "type", "")).strip()
+            tool_call_id = str(getattr(message, "tool_call_id", "")).strip()
+            content = getattr(message, "content", "")
+        if msg_type != "tool" or not tool_call_id:
+            continue
+        payload = _parse_tool_message_payload(content)
+        if isinstance(payload, dict):
+            payloads[tool_call_id] = _json_safe(payload)
+    return payloads
+
+
+def summarize_tool_calls(
+    tool_calls: Any,
+    *,
+    limit: int | None = None,
+    tool_messages: Any = None,
+) -> list[dict[str, Any]]:
     if not isinstance(tool_calls, list):
         return []
     summaries: list[dict[str, Any]] = []
     selected_calls = tool_calls if limit is None else tool_calls[:limit]
+    payloads_by_id = _tool_payloads_by_id(tool_messages)
     for call in selected_calls:
         if not isinstance(call, dict):
             continue
@@ -172,6 +210,14 @@ def summarize_tool_calls(tool_calls: Any, *, limit: int | None = None) -> list[d
             item["id"] = str(call.get("id", "")).strip()
         if call.get("type"):
             item["type"] = str(call.get("type", "")).strip()
+        tool_payload = payloads_by_id.get(str(call.get("id", "")).strip())
+        if isinstance(tool_payload, dict):
+            item["tool_payload"] = tool_payload
+            data = tool_payload.get("data", {})
+            if isinstance(data, dict):
+                item["payload"] = data
+            elif data not in (None, ""):
+                item["payload"] = {"result": data}
         summaries.append(item)
     return [item for item in summaries if item.get("name")]
 
