@@ -1606,6 +1606,10 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         worker_results = graph_result.get("worker_results", [])
         if not isinstance(worker_results, list):
             worker_results = []
+        workflow_runs, workflow_execution_issues = self._annotate_guided_workflow_execution(
+            workflow_runs=workflow_runs,
+            worker_results=worker_results,
+        )
         aggregated_action_steps, aggregated_actions = self._aggregate_action_side_effects(
             primary_action_steps=action_steps,
             primary_actions=actions,
@@ -1636,6 +1640,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             closure_result=closure_result,
             action_steps=action_steps,
             workflow_runs=workflow_runs,
+            workflow_execution_issues=workflow_execution_issues,
             success=False,
         )
         task_outcome = final_facts.get("task_outcome", {}) if isinstance(final_facts, dict) else {}
@@ -1702,6 +1707,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             "enrichment": enrichment,
             "workflow_selection": workflow_selection,
             "workflow_runs": workflow_runs,
+            "workflow_execution_issues": workflow_execution_issues,
             "primary_action_steps": primary_action_steps,
             "primary_closure_step": primary_closure_step,
             "aggregated_action_steps": aggregated_action_steps,
@@ -1743,6 +1749,81 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                 if isinstance(candidate, dict):
                     return dict(candidate)
         return {}
+
+    def _collect_executed_worker_names(self, worker_results: list[dict[str, Any]]) -> list[str]:
+        names: list[str] = []
+        for worker_result in worker_results:
+            if not isinstance(worker_result, dict):
+                continue
+            worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip()
+            if worker_name:
+                names.append(worker_name)
+            nested_worker_results = worker_result.get("worker_results", [])
+            if isinstance(nested_worker_results, list):
+                names.extend(self._collect_executed_worker_names(nested_worker_results))
+            parallel_results = worker_result.get("results", [])
+            if isinstance(parallel_results, list):
+                names.extend(self._collect_executed_worker_names(parallel_results))
+        return names
+
+    def _annotate_guided_workflow_execution(
+        self,
+        *,
+        workflow_runs: list[dict[str, Any]],
+        worker_results: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        if not workflow_runs:
+            return workflow_runs, []
+
+        from collections import Counter
+
+        executed_workers = Counter(name.strip().lower() for name in self._collect_executed_worker_names(worker_results) if name.strip())
+        annotated: list[dict[str, Any]] = []
+        all_issues: list[dict[str, Any]] = []
+        for workflow_run in workflow_runs:
+            if not isinstance(workflow_run, dict):
+                continue
+            run = dict(workflow_run)
+            is_guided = (
+                str(run.get("execution_mode", "")).strip() == "supervisor_guided_workflow"
+                or bool(run.get("requires_supervisor_execution"))
+            )
+            if not is_guided:
+                annotated.append(run)
+                continue
+
+            remaining_workers = Counter(executed_workers)
+            issues: list[dict[str, Any]] = []
+            for step in run.get("steps", []) if isinstance(run.get("steps", []), list) else []:
+                if not isinstance(step, dict):
+                    continue
+                agent_name = str(step.get("agent", "")).strip()
+                if not agent_name:
+                    continue
+                marker = agent_name.lower()
+                if remaining_workers[marker] > 0:
+                    remaining_workers[marker] -= 1
+                    continue
+                issue = {
+                    "workflow_id": str(run.get("workflow_id", "")).strip(),
+                    "step_index": step.get("index"),
+                    "step_id": step.get("id", ""),
+                    "step_name": step.get("name", ""),
+                    "agent": agent_name,
+                    "issue": "missing_worker_execution",
+                }
+                issues.append(issue)
+                all_issues.append(issue)
+
+            run["execution_confirmed"] = not bool(issues)
+            run["workflow_execution_issues"] = issues
+            if issues:
+                run["success"] = False
+                run["execution_status"] = "incomplete"
+            elif str(run.get("execution_status", "")).strip() == "plan_ready":
+                run["execution_status"] = "executed"
+            annotated.append(run)
+        return annotated, all_issues
 
     def _build_execution_trace(
         self,
@@ -1824,6 +1905,25 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                             "data": nested_item.get("data", nested_item),
                         }
                     )
+        workflow_execution_issues = [
+            issue
+            for workflow_run in workflow_runs
+            if isinstance(workflow_run, dict)
+            for issue in (workflow_run.get("workflow_execution_issues", []) if isinstance(workflow_run.get("workflow_execution_issues", []), list) else [])
+            if isinstance(issue, dict)
+        ]
+        if workflow_execution_issues:
+            trace.append(
+                {
+                    "phase": "workflow_execution_check",
+                    "title": "Workflow 执行校验",
+                    "summary": f"检测到 {len(workflow_execution_issues)} 个 Workflow 步骤未确认执行。",
+                    "success": False,
+                    "data": {
+                        "issues": workflow_execution_issues,
+                    },
+                }
+            )
         trace.append(
             {
                 "phase": "agent_analysis",
@@ -2007,18 +2107,36 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             return "collect_context"
         return "other"
 
+    def _is_substantive_disposal_action(self, action: dict[str, Any]) -> bool:
+        action_kind = str(action.get("kind", "")).strip()
+        completion_effect = str(action.get("completion_effect", "none")).strip() or "none"
+        if bool(action.get("completion_policy_enabled")) and completion_effect != "none":
+            return True
+        return action_kind in {"ban_ip", "notify", "isolate_host", "closure"}
+
     def _completion_policy_for_skill(self, skill_name: str) -> dict[str, Any]:
+        cache_key = str(skill_name or "").strip()
+        cache = getattr(self, "_completion_policy_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            setattr(self, "_completion_policy_cache", cache)
+        if cache_key in cache:
+            return dict(cache[cache_key])
         try:
-            policy = self.skill_runtime.read_skill(skill_name).completion_policy
+            policy = self.skill_runtime.read_skill(cache_key).completion_policy
         except Exception:
             policy = {}
         if not isinstance(policy, dict):
-            return {"enabled": False, "action_kind": "other", "completion_effect": "none"}
-        return {
+            result = {"enabled": False, "action_kind": "other", "completion_effect": "none"}
+            cache[cache_key] = result
+            return dict(result)
+        result = {
             "enabled": bool(policy.get("enabled")),
             "action_kind": str(policy.get("action_kind", "other")).strip() or "other",
             "completion_effect": str(policy.get("completion_effect", "none")).strip() or "none",
         }
+        cache[cache_key] = result
+        return dict(result)
 
     def _build_final_facts(
         self,
@@ -2028,7 +2146,8 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
         closure_result: dict[str, Any],
         action_steps: list[dict[str, Any]],
         workflow_runs: list[dict[str, Any]],
-        success: bool,
+        workflow_execution_issues: list[dict[str, Any]] | None = None,
+        success: bool = False,
     ) -> dict[str, Any]:
         closure_step = closure_step if isinstance(closure_step, dict) else {}
         closure_result = closure_result if isinstance(closure_result, dict) else {}
@@ -2084,7 +2203,12 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                 }
             )
 
-        successful_disposal_actions = [item for item in disposal_actions if isinstance(item, dict) and bool(item.get("success"))]
+        substantive_disposal_actions = [
+            item
+            for item in disposal_actions
+            if isinstance(item, dict) and self._is_substantive_disposal_action(item)
+        ]
+        successful_disposal_actions = [item for item in substantive_disposal_actions if bool(item.get("success"))]
         successful_terminal_notification = any(
             bool(item.get("success"))
             and bool(item.get("completion_policy_enabled"))
@@ -2096,12 +2220,18 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             and successful_terminal_notification
         )
         consistency_issues: list[str] = []
+        workflow_execution_issues = [item for item in (workflow_execution_issues or []) if isinstance(item, dict)]
+        if workflow_execution_issues:
+            consistency_issues.append("workflow_steps_missing_execution")
         if successful_disposal_actions and not closure_attempted and not terminal_action_complete:
             consistency_issues.append("disposal_executed_but_closure_not_attempted")
         elif closure_attempted and not closure_success:
             consistency_issues.append("closure_attempted_but_not_successful")
 
-        if closure_success:
+        if workflow_execution_issues:
+            outcome_status = "workflow_incomplete"
+            outcome_success = False
+        elif closure_success:
             outcome_status = "succeeded"
             outcome_success = True
         elif closure_attempted:
@@ -2130,7 +2260,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                 "source_name": str(closure_step.get("source_name", "")).strip(),
             },
             "disposal": {
-                "attempted": bool(action_steps),
+                "attempted": bool(substantive_disposal_actions),
                 "success": bool(successful_disposal_actions),
                 "actions": disposal_actions,
             },
@@ -2142,6 +2272,7 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                     for item in workflow_runs
                     if isinstance(item, dict) and str(item.get("workflow_id", "")).strip()
                 ] if isinstance(workflow_runs, list) else [],
+                "execution_issues": workflow_execution_issues,
             },
             "task_outcome": {
                 "success": outcome_success,
@@ -2153,235 +2284,6 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                 "issues": consistency_issues,
             },
         }
-
-    def _build_closure_step(
-        self,
-        skill_runs: list[dict[str, Any]],
-        closure_run: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        if closure_run is not None:
-            skill_name = str(closure_run.get("skill_name", "")).strip()
-            payload = closure_run.get("payload", {})
-            arguments = closure_run.get("arguments", {})
-            payload = payload if isinstance(payload, dict) else {}
-            arguments = arguments if isinstance(arguments, dict) else {}
-            success = self._is_successful_closure_run(closure_run)
-            summary = str(
-                payload.get("detailMsg")
-                or payload.get("detail_msg")
-                or payload.get("result")
-                or payload.get("message")
-                or ("结单执行成功。" if success else "结单执行失败。")
-            ).strip()
-            return {
-                "attempted": True,
-                "success": success,
-                "skill_name": skill_name,
-                "tool_name": closure_run.get("tool_name", ""),
-                "tool_call_id": closure_run.get("tool_call_id", ""),
-                "tool_success": closure_run.get("tool_success"),
-                "tool_error": closure_run.get("tool_error"),
-                "arguments": arguments,
-                "result": payload,
-                "error": payload.get("error"),
-                "summary": summary,
-            }
-        return {
-            "attempted": False,
-            "success": False,
-            "skill_name": "",
-            "tool_name": "",
-            "tool_call_id": "",
-            "tool_success": False,
-            "tool_error": None,
-            "arguments": {},
-            "result": {},
-            "error": None,
-            "summary": "",
-        }
-
-    def _extract_nested_side_effects(
-        self,
-        nested_result: dict[str, Any],
-        *,
-        action_hint: str | None,
-        source_type: str,
-        source_name: str,
-    ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any] | None]:
-        skill_runs = self._extract_skill_runs(nested_result)
-        closure_run = self._select_closure_run(skill_runs, action_hint)
-        actions = self._build_actions(skill_runs, closure_run)
-        action_steps = self._build_action_steps(skill_runs, closure_run)
-        closure_step = self._build_closure_step(skill_runs, closure_run)
-        if action_steps:
-            for step in action_steps:
-                if not isinstance(step, dict):
-                    continue
-                step["source_type"] = source_type
-                step["source_name"] = source_name
-        if bool(closure_step.get("attempted")):
-            closure_step = {
-                **closure_step,
-                "source_type": source_type,
-                "source_name": source_name,
-            }
-        return action_steps, actions, closure_step if bool(closure_step.get("attempted")) else None
-
-    def _aggregate_action_side_effects(
-        self,
-        *,
-        primary_action_steps: list[dict[str, Any]],
-        primary_actions: dict[str, Any],
-        worker_results: list[dict[str, Any]],
-        workflow_runs: list[dict[str, Any]],
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        aggregated_steps: list[dict[str, Any]] = []
-        aggregated_actions: dict[str, Any] = {}
-
-        for step in primary_action_steps:
-            if not isinstance(step, dict):
-                continue
-            aggregated_steps.append({**step, "source_type": "primary", "source_name": "primary"})
-        for action_name, payload in primary_actions.items():
-            aggregated_actions[action_name] = payload
-
-        for worker_result in worker_results:
-            if not isinstance(worker_result, dict):
-                continue
-            worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
-            nested_steps, nested_actions, _ = self._extract_nested_side_effects(
-                worker_result,
-                action_hint=None,
-                source_type="worker",
-                source_name=worker_name,
-            )
-            aggregated_steps.extend(nested_steps)
-            for action_name, payload in nested_actions.items():
-                aggregated_actions[f"{worker_name}:{action_name}"] = payload
-
-        for workflow_run in workflow_runs:
-            if not isinstance(workflow_run, dict):
-                continue
-            workflow_name = str(workflow_run.get("workflow_name", workflow_run.get("workflow_id", ""))).strip() or "workflow"
-            workflow_action_steps = workflow_run.get("action_steps", [])
-            if isinstance(workflow_action_steps, list):
-                for step in workflow_action_steps:
-                    if not isinstance(step, dict):
-                        continue
-                    aggregated_steps.append({**step, "source_type": "workflow", "source_name": workflow_name})
-            workflow_actions = workflow_run.get("actions", {})
-            if isinstance(workflow_actions, dict):
-                for action_name, payload in workflow_actions.items():
-                    if action_name == "tool_runs":
-                        continue
-                    aggregated_actions[f"{workflow_name}:{action_name}"] = payload
-            nested_worker_results = workflow_run.get("worker_results", [])
-            if isinstance(nested_worker_results, list):
-                for worker_result in nested_worker_results:
-                    if not isinstance(worker_result, dict):
-                        continue
-                    worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
-                    nested_steps, nested_actions, _ = self._extract_nested_side_effects(
-                        worker_result,
-                        action_hint=None,
-                        source_type="workflow_worker",
-                        source_name=f"{workflow_name}/{worker_name}",
-                    )
-                    aggregated_steps.extend(nested_steps)
-                    for action_name, payload in nested_actions.items():
-                        aggregated_actions[f"{workflow_name}/{worker_name}:{action_name}"] = payload
-
-        return aggregated_steps, aggregated_actions
-
-    def _aggregate_closure_steps(
-        self,
-        *,
-        primary_closure_step: dict[str, Any],
-        worker_results: list[dict[str, Any]],
-        workflow_runs: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        aggregated: list[dict[str, Any]] = []
-        if bool(primary_closure_step.get("attempted")):
-            aggregated.append({**primary_closure_step, "source_type": "primary", "source_name": "primary"})
-
-        for worker_result in worker_results:
-            if not isinstance(worker_result, dict):
-                continue
-            worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
-            _, _, nested_closure = self._extract_nested_side_effects(
-                worker_result,
-                action_hint=None,
-                source_type="worker",
-                source_name=worker_name,
-            )
-            if nested_closure:
-                aggregated.append(nested_closure)
-
-        for workflow_run in workflow_runs:
-            if not isinstance(workflow_run, dict):
-                continue
-            workflow_name = str(workflow_run.get("workflow_name", workflow_run.get("workflow_id", ""))).strip() or "workflow"
-            workflow_closure = workflow_run.get("closure_step", {})
-            if isinstance(workflow_closure, dict) and bool(workflow_closure.get("attempted")):
-                aggregated.append({**workflow_closure, "source_type": "workflow", "source_name": workflow_name})
-            nested_worker_results = workflow_run.get("worker_results", [])
-            if isinstance(nested_worker_results, list):
-                for worker_result in nested_worker_results:
-                    if not isinstance(worker_result, dict):
-                        continue
-                    worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
-                    _, _, nested_closure = self._extract_nested_side_effects(
-                        worker_result,
-                        action_hint=None,
-                        source_type="workflow_worker",
-                        source_name=f"{workflow_name}/{worker_name}",
-                    )
-                    if nested_closure:
-                        aggregated.append(nested_closure)
-        return aggregated
-
-    def _resolve_effective_closure_step(
-        self,
-        *,
-        primary_closure_step: dict[str, Any],
-        aggregated_closure_steps: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        if bool(primary_closure_step.get("attempted")) and bool(primary_closure_step.get("success")):
-            return {**primary_closure_step, "source_type": "primary", "source_name": "primary"}
-        for closure_step in aggregated_closure_steps:
-            if isinstance(closure_step, dict) and bool(closure_step.get("attempted")) and bool(closure_step.get("success")):
-                return closure_step
-        if bool(primary_closure_step.get("attempted")):
-            return {**primary_closure_step, "source_type": "primary", "source_name": "primary"}
-        for closure_step in aggregated_closure_steps:
-            if isinstance(closure_step, dict) and bool(closure_step.get("attempted")):
-                return closure_step
-        return {
-            "attempted": False,
-            "success": False,
-            "skill_name": "",
-            "tool_name": "",
-            "tool_call_id": "",
-            "tool_success": False,
-            "tool_error": None,
-            "arguments": {},
-            "result": {},
-            "error": None,
-            "summary": "",
-            "source_type": "",
-            "source_name": "",
-        }
-
-    def _compute_alert_task_success(
-        self,
-        *,
-        action_hint: str | None,
-        closure_step: dict[str, Any],
-        action_steps: list[dict[str, Any]],
-        skill_runs: list[dict[str, Any]],
-        actions: dict[str, Any],
-    ) -> bool:
-        return bool(closure_step.get("attempted")) and bool(closure_step.get("success"))
 
     # NOTE: _extract_skill_runs … _default_closure_status are provided by
     # SkillRunAnalyzerMixin and TextExtractorMixin (see agent/skill_run_analyzer.py

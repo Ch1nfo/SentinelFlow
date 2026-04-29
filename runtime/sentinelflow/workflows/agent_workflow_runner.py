@@ -533,11 +533,9 @@ class SentinelFlowAgentWorkflowRunner:
             },
             prior_facts=prior_facts,
             authoritative_inputs={
-                "workflow_definition": workflow_definition,
                 "workflow_input": workflow_input,
                 "workflow_task_prompt": delegated_task_prompt,
                 "current_step_task_prompt": effective_task_prompt,
-                "prior_step_results": prior_step_results,
             },
             constraints=[
                 "当前任务以 workflow_step.task_prompt 为准，workflow_definition.description 是固定流程目标和对象依据。",
