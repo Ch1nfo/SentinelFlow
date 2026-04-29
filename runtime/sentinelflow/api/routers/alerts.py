@@ -102,7 +102,15 @@ def _run_coroutine_in_new_loop(coro):
 
 def _is_successful_ban_action(action_name: str, payload: dict[str, Any]) -> bool:
     normalized_name = action_name.lower().strip()
-    if "ban" not in normalized_name:
+    combined_text = " ".join(
+        [
+            normalized_name,
+            str(payload.get("action", "")).strip().lower(),
+            str(payload.get("result", "")).strip().lower(),
+            str(payload.get("message", "")).strip().lower(),
+        ]
+    )
+    if "ban" not in normalized_name and "block" not in normalized_name and "封禁" not in combined_text and "阻断" not in combined_text:
         return False
     if bool(payload.get("error")):
         return False
@@ -116,11 +124,73 @@ def _is_successful_ban_action(action_name: str, payload: dict[str, Any]) -> bool
 
 
 def _extract_ban_ip(payload: dict[str, Any]) -> str:
-    for candidate in ("ban_ip", "banned_ip", "blocked_ip", "ip", "source_ip", "sip"):
+    for candidate in ("ban_ip", "banned_ip", "blocked_ip", "ip", "source_ip", "sip", "target", "target_ip"):
         value = str(payload.get(candidate, "")).strip()
         if value:
             return value
     return ""
+
+
+def _collect_ip_values(payload: Any) -> set[str]:
+    values: set[str] = set()
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if str(key).strip() in {"ban_ip", "banned_ip", "blocked_ip", "ip", "source_ip", "sip", "target", "target_ip"}:
+                if isinstance(value, list):
+                    for item in value:
+                        text = str(item).strip()
+                        if text:
+                            values.add(text)
+                else:
+                    text = str(value).strip()
+                    if text:
+                        values.add(text)
+            elif isinstance(value, (dict, list)):
+                values.update(_collect_ip_values(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            values.update(_collect_ip_values(item))
+    return values
+
+
+def _collect_banned_ips_from_tool_summaries(tool_summaries: Any, *, step_success: bool = True) -> set[str]:
+    banned_ips: set[str] = set()
+    if not step_success or not isinstance(tool_summaries, list):
+        return banned_ips
+    for item in tool_summaries:
+        if not isinstance(item, dict):
+            continue
+        args = item.get("args", {})
+        if not isinstance(args, dict):
+            args = {}
+        skill_name = str(args.get("skill_name") or item.get("skill_name") or item.get("name") or "").strip()
+        arguments = args.get("arguments", {})
+        if not isinstance(arguments, dict):
+            arguments = {}
+        payload: dict[str, Any] = {
+            **arguments,
+            **(item.get("key_facts", {}) if isinstance(item.get("key_facts"), dict) else {}),
+        }
+        if not _is_successful_ban_action(skill_name, payload):
+            continue
+        banned_ips.update(_collect_ip_values(payload))
+    return banned_ips
+
+
+def _collect_banned_ips_from_workflow_tool_runs(tool_runs: Any) -> set[str]:
+    banned_ips: set[str] = set()
+    if not isinstance(tool_runs, list):
+        return banned_ips
+    for item in tool_runs:
+        if not isinstance(item, dict):
+            continue
+        banned_ips.update(
+            _collect_banned_ips_from_tool_summaries(
+                item.get("tool_calls_summary", []),
+                step_success=bool(item.get("success", True)),
+            )
+        )
+    return banned_ips
 
 
 def _collect_banned_ips_from_result(result: dict[str, Any]) -> set[str]:
@@ -160,6 +230,9 @@ def _collect_banned_ips_from_result(result: dict[str, Any]) -> set[str]:
     actions = result.get("actions")
     if isinstance(actions, dict):
         for action_name, item in actions.items():
+            if action_name == "tool_runs":
+                banned_ips.update(_collect_banned_ips_from_workflow_tool_runs(item))
+                continue
             if not isinstance(item, dict):
                 continue
             if not _is_successful_ban_action(str(action_name), item):
@@ -167,6 +240,27 @@ def _collect_banned_ips_from_result(result: dict[str, Any]) -> set[str]:
             banned_ip = _extract_ban_ip(item)
             if banned_ip:
                 banned_ips.add(banned_ip)
+        if banned_ips:
+            return banned_ips
+    worker_results = result.get("worker_results")
+    if isinstance(worker_results, list):
+        for worker_result in worker_results:
+            if not isinstance(worker_result, dict):
+                continue
+            banned_ips.update(
+                _collect_banned_ips_from_tool_summaries(
+                    worker_result.get("tool_calls_summary", []),
+                    step_success=bool(worker_result.get("success", True)),
+                )
+            )
+        if banned_ips:
+            return banned_ips
+    workflow_runs = result.get("workflow_runs")
+    if isinstance(workflow_runs, list):
+        for workflow_run in workflow_runs:
+            if not isinstance(workflow_run, dict):
+                continue
+            banned_ips.update(_collect_banned_ips_from_result(workflow_run))
     return banned_ips
 
 
