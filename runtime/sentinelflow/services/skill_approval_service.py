@@ -406,7 +406,11 @@ class SkillApprovalService:
         if not arguments:
             return "无参数"
         parts: list[str] = []
-        for key, value in list(arguments.items())[:3]:
+        items = list(arguments.items())
+        for key, value in items[:5]:
             rendered = value if isinstance(value, (str, int, float, bool)) or value is None else json.dumps(_json_safe(value), ensure_ascii=False)
             parts.append(f"{key}: {rendered}")
+        remaining_count = max(len(items) - 5, 0)
+        if remaining_count:
+            parts.append(f"还有 {remaining_count} 个")
         return " | ".join(parts) if parts else "无参数"
