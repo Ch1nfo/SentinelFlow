@@ -4,7 +4,7 @@
 
 ### AI-Native SecOps Control Plane — Multi-Agent SOC Automation
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/Ch1nfo/SentinelFlow/releases)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/Ch1nfo/SentinelFlow/releases)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#)
@@ -22,15 +22,16 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 
 **SentinelFlow** is a full-stack SOC automation platform that combines a **LangGraph-powered multi-agent orchestration runtime** with a **React WebUI** for alert management and operator collaboration. Instead of rigid playbooks, you get a flexible, extensible agent system where a Primary Supervisor Agent coordinates specialized Worker Sub-Agents — each equipped with pluggable Skills that can call external APIs, run enrichment scripts, close tickets, and more.
 
-- **Multi-Agent Orchestration** — Supervisor + Worker SubGraph pattern via LangGraph, with sequential and parallel worker delegation plus workflow fallback
+- **Multi-Agent Orchestration** — Supervisor + Worker SubGraph pattern via LangGraph, with sequential and parallel worker delegation plus supervisor-guided workflows
 - **Full Operator Console** — Unified WebUI for Overview, Alert Workbench, Task Center, Conversation Console, Skills, Agents, Workflows, and Settings
 - **Pluggable Skill System** — Drop a `SKILL.md` + `main.py` into the local plugin workspace; agents discover and invoke them automatically with granular per-agent permission control
 - **Dual Entry Points** — Accepts both raw security alerts (JSON payloads from SIEM/SOAR) and free-form human commands via the WebUI conversation console
-- **Agent Workflow Engine** — Define reusable multi-step workflows for high-frequency scenarios; the Primary Agent selects the best workflow or falls back to free ReAct
-- **Flexible Alert Ingestion** — Connect to upstream APIs (REST/HTTP) or drive custom data sources through a Python script entrypoint
+- **Agent Workflow Engine** — Define reusable multi-step workflows for high-frequency scenarios; the Primary Agent loads the plan, then calls each worker with concrete step prompts
+- **Multi-Source Alert Ingestion** — Configure multiple named alert sources, each using REST/HTTP polling or a Python script entrypoint with its own parser and schedule
 - **AI-Assisted Parser Generation** — Paste a sample alert payload and let the LLM auto-generate the field-mapping parser rule, with preview and one-click apply
-- **Continuous Auto-Execution & Retry** — Enable the background executor to process queued alerts automatically and retry failed tasks after a configurable delay
+- **Source-Scoped Async Auto-Execution & Retry** — Enable the background executor per alert source, process queued alerts asynchronously, and retry failed tasks after source-specific delays
 - **Approval & Resume Flow** — `approval_required` skills pause the graph in conversation mode and manual single-alert handling, surface approval cards in the UI, then resume from checkpoint after approve/reject
+- **SOC Execution Context Control** — Context manifests, authority traces, and pre-execution input checks help agents keep target IPs, recipients, event IDs, and closure facts precise without compressing execution inputs
 - **Fine-Grained Governance** — Per-agent skill permissions, mode-aware worker allowlists, execution approval gates, audit logging, and agent-level model overrides
 
 ## Screenshots
@@ -53,7 +54,8 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 
 - **Supervisor + Worker SubGraph** — Primary Agent uses LangGraph's `ToolNode` to delegate tasks to Worker Sub-Agents, each compiled as an isolated ReAct SubGraph wrapped as a `@tool`
 - **Parallel Delegation** — Primary Agent can dispatch multiple independent sub-tasks to different workers simultaneously via `delegate_parallel`
-- **Agent Workflow Engine** — Define reusable workflows for common scenarios (e.g., phishing triage, IP enrichment + block); Primary Agent selects the best workflow via LLM reasoning and falls back to free ReAct when no workflow matches
+- **Agent Workflow Engine** — Define reusable workflows for common scenarios (e.g., phishing triage, IP enrichment + block); `run_workflow` loads the fixed plan, while the Primary Agent remains responsible for calling each Worker with a complete task prompt
+- **SOC Execution Context Controller** — Each agent handoff can carry a `context_manifest` with current goal, available facts, authority trace, missing inputs, and context warnings while preserving original execution data losslessly
 - **Mode-Aware Worker Permissions** — The Primary Agent can use different worker allowlists for conversation-style execution and alert-handling execution
 - **Prompt Variants & Synthesis** — Primary Agents can define base, command, alert, and synthesis prompts, while Worker Agents keep a single execution prompt
 - **Cancellation & Step Limits** — All graphs respect a `cancel_event` threading flag; `worker_max_steps` caps orchestration recursion depth
@@ -68,31 +70,33 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 
 ### Alert Ingestion Pipeline
 
+- **Multiple named alert sources** — Manage more than one upstream source from Settings; each source carries its own name, enablement state, parser, poll interval, retry interval, auto-execution flag, and optional source-specific analysis prompt
 - **Dual alert source types** — `api` mode polls any REST endpoint (configurable method, headers, query, body); `script` mode runs a custom Python script and reads its stdout as the alert payload
 - **AI-powered parser generation** — Paste a raw sample payload; the LLM auto-generates a `field_mapping` parser rule with live preview and one-click apply
 - **Fetch / Parse Validation** — Test upstream fetches, import parser JSON, and preview parsed alert records before saving settings
 - **Flexible field mapping** — Point-path-based rules map arbitrary JSON structures to SentinelFlow's canonical alert schema (`eventIds`, `alert_name`, `sip`, `dip`, `alert_time`, etc.)
-- **Deduplication & idempotency** — SQLite-backed dedup store prevents re-queueing already-active alerts; concurrent dispatch is guarded at the DB layer
-- **Polling scheduler** — Configurable poll interval; supports immediate manual poll trigger from the UI
-- **Fallback & retry** — Failed tasks can be retried manually or automatically after a configurable retry interval
+- **Source-aware deduplication & idempotency** — SQLite-backed dedup store prevents re-queueing already-active alerts while keeping identical event IDs from different sources isolated
+- **Per-source polling scheduler** — Each enabled source can poll on its own interval; the UI can trigger immediate polling for the selected source, while the API also supports all-source polling
+- **Fallback & retry** — Failed tasks can be retried manually or automatically after the retry interval configured for the matching alert source
 
 ### Task Queue & Execution
 
-- **SQLite-backed task queue** — Alert handling tasks and approval records are persisted to `.sentinelflow/sys_queue.db` by default; survives process restarts
-- **Continuous auto-execution** — Enable the auto-executor loop to process all queued tasks sequentially without human action
-- **Automatic retry for failed tasks** — Configure a failed-task retry interval to let SentinelFlow retry eligible failed alerts in the background
+- **SQLite-backed source-aware task queue** — Alert handling tasks, source IDs, source names, and approval records are persisted to `.sentinelflow/sys_queue.db` by default; survives process restarts
+- **Continuous source-scoped auto-execution** — Enable the auto-executor loop per source to process queued tasks asynchronously without human action
+- **Automatic retry for failed tasks** — Configure failed-task retry intervals per source to let SentinelFlow retry eligible failed alerts in the background
 - **Manual handling** — Trigger single-task execution from the alert workbench at any time
 - **Task lifecycle** — `queued → running → awaiting_approval / pending_closure / succeeded / failed / completed`; manual approval can pause a task without losing checkpoint state
 - **Full execution trace** — Every task stores a structured `execution_trace` covering alert receipt, workflow usage, agent analysis, skill calls, approval state, closure result, and final status
 - **Fact-based result convergence** — Final status, judgment, disposal outcome, closure state, and workflow usage are converged into structured `final_facts`
+- **Completion Policy Semantics** — Skill-level `completion_policy` distinguishes enrichment, containment, notification, and closure effects so task state follows real execution facts rather than loose text summaries
 
 ### Security Operations WebUI
 
 - **Overview Dashboard** — Unified platform summary for runtime health, task counts, agent/skill availability, judgment distribution, disposal outcomes, and recent activity
-- **Alert Workbench** — Browse, filter, and manually trigger alert tasks; inspect full alert context, approval state, and execution traces
+- **Alert Workbench** — Switch between alert sources, browse source-scoped task queues, start/stop automatic execution, manually trigger alert tasks, and inspect full alert context, approval state, and execution traces
 - **Task Center** — Review queue state, retry failed work, approve pending skills, and inspect full-process execution details from a task-first view
-- **Conversation Console** — Free-form command interface with multi-session history, streaming replies, delegated worker summaries, and inline approval cards
-- **Configuration Center** — Unified settings page for LLM credentials, alert source connection, parser rules, polling schedule, retry interval, and auto-execution toggle — all persisted without restarting the server
+- **Conversation Console** — Free-form command interface with multi-session history, streaming replies, collapsible worker/skill summaries, execution context details, and inline approval cards
+- **Configuration Center** — Unified settings page for LLM credentials plus multi-source alert connection, parser rules, polling schedules, retry intervals, and auto-execution toggles — all persisted without restarting the server
 - **Skill Management** — Create, view, edit, and delete skills; run debug executions with custom arguments
 - **Agent Management** — Configure Primary Agent and Worker Sub-Agents: prompts (default / alert / command / synthesis variants), LLM overrides, skill permissions, and mode-aware worker delegation
 - **Workflow Management** — Create and edit Agent Workflows; run test executions from the UI
@@ -140,8 +144,8 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 │  └────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │              Alert Ingestion & Task Queue                  │  │
-│  │  API/Script Poller → Parser → Dedup → SQLite Task Queue    │  │
-│  │  Auto-Executor Loop → Task Runner → Agent/Workflow         │  │
+│  │  Multi-Source API/Script Poller → Parser → Dedup → Queue   │  │
+│  │  Source-Scoped Auto-Executor → Task Runner → Agent/Workflow│  │
 │  └────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -149,9 +153,10 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 **Core Design Patterns**
 
 - **Supervisor + Worker SubGraph** — Workers are compiled ReAct SubGraphs, wrapped as `@tool` functions; only `final_response` surfaces back to the Supervisor as a `ToolMessage`
+- **SOC execution context control** — `context_manifest` provides LLM-visible navigation, authority trace, missing inputs, and context warnings while runtime state, approvals, and audit records stay outside the execution prompt unless explicitly needed
 - **SKILL.md discovery** — Skills are file-system plugins; no code changes needed to add new capabilities
 - **Dual entry types** — `alert` (JSON from SIEM) and `conversation` (human command); both routed through the same agent runtime
-- **SQLite task persistence** — Alert tasks survive restarts; atomic status transitions prevent duplicate execution
+- **Source-aware SQLite task persistence** — Alert tasks survive restarts; source-scoped event IDs and atomic status transitions prevent duplicate execution
 - **Atomic result serialization** — All graph results pass through `_serialize_alert_result` for a consistent, structured execution trace
 
 **Key Components**
@@ -159,8 +164,10 @@ Modern Security Operations Centers face an overwhelming volume of alerts — mos
 - **`SentinelFlowAgentService`** — Top-level service; routes to orchestrator or single-agent graph; serializes results
 - **`build_orchestrator_graph()`** — Compiles the Supervisor + Worker multi-agent LangGraph
 - **`build_agent_graph()`** — Builds a single-agent ReAct SubGraph (used for both workers and standalone agents)
-- **`AlertDispatchService`** — SQLite-backed task queue; handles create, dedup, status transition, and finalization
-- **`AlertAutoExecutionService`** — Asyncio-based continuous executor loop; processes queued tasks without human action
+- **`context_utils`** — Builds context manifests, authority traces, key facts, tool-call summaries, and pre-execution input checks
+- **`AlertDispatchService`** — SQLite-backed source-aware task queue; handles create, dedup, status transition, and finalization
+- **`AlertPollingService`** — Per-source scheduler that polls enabled API/script alert sources and dispatches normalized alerts into the task queue
+- **`AlertAutoExecutionService`** — Asyncio-based source-scoped executor loop; processes queued and retry-eligible tasks without human action
 - **`AlertParserGenerator`** — LLM-assisted + heuristic field-mapping rule generator for arbitrary JSON alert payloads
 - **`SentinelFlowSkillRuntime`** — Manages skill lifecycle; adapts skills as LangChain tools for agent use
 - **`AgentWorkflowRegistry`** — Lists and resolves workflow definitions for multi-step Agent Workflows
@@ -351,7 +358,7 @@ python scripts/dev.py webui-serve
 
 ### 4. Configure via WebUI
 
-Open the WebUI and navigate to **Settings**. Configure your LLM endpoint and connect your alert source — all settings are persisted immediately without a restart.
+Open the WebUI and navigate to **Settings**. Configure your LLM endpoint and one or more alert sources — all settings are persisted immediately without a restart.
 
 Alternatively, create a `.env` file for environment-level defaults:
 
@@ -413,10 +420,12 @@ SENTINELFLOW_LLM_MODEL=model-name
 <details>
 <summary><strong>What alert source types are supported?</strong></summary>
 
-SentinelFlow supports two alert source modes, configurable from the Settings panel:
+SentinelFlow supports multiple named alert sources from the Settings panel. Each source can use one of two modes:
 
 - **API mode** (`api`): Polls any REST/HTTP endpoint. Supports GET/POST, custom headers, query parameters, and request body. Ideal for SIEM/SOAR platforms with a REST API.
 - **Script mode** (`script`): Runs a Python script you write directly in the UI. The script should print a JSON object to stdout containing `count` and `alerts`. Use this for custom data sources, local log files, or any integration that doesn't expose a REST endpoint.
+
+Each source has its own parser rule, polling interval, failed-task retry interval, auto-execution flag, and optional alert-analysis prompt. Tasks are stored with `source_id` / `source_name`, and deduplication is scoped by source plus event ID.
 
 </details>
 
@@ -458,7 +467,7 @@ The Primary Agent (Supervisor) is bound with all available Worker Sub-Graphs as 
 <details>
 <summary><strong>What is auto-execution mode?</strong></summary>
 
-When enabled (via the Settings panel or `SENTINELFLOW_AUTO_EXECUTE_ENABLED=true`), SentinelFlow runs a background asyncio loop that continuously picks up `queued` tasks and executes them through the agent pipeline without requiring any manual intervention. If `failed_retry_interval_seconds` is configured, eligible failed tasks can also be retried automatically after the delay. You can stop the loop at any time from the UI.
+When enabled from the Settings panel, Alert Workbench, or `SENTINELFLOW_AUTO_EXECUTE_ENABLED=true` for the default source, SentinelFlow runs a background asyncio loop that continuously picks up `queued` tasks for enabled sources and executes them through the agent pipeline without requiring manual intervention. If a source has `failed_retry_interval_seconds` configured, eligible failed tasks from that source can also be retried automatically after the delay. You can stop automation per source from the UI.
 
 </details>
 
@@ -486,7 +495,7 @@ In the current project layout, the effective local workspace is the project-root
 <details>
 <summary><strong>How do I define a fixed multi-step Agent Workflow?</strong></summary>
 
-Create a `workflow.json` file under `.sentinelflow/plugins/workflows/<workflow-id>/` (default local workspace), or use the **Workflow Management** page in the WebUI. The Primary Agent uses structured LLM reasoning to select the best workflow for incoming alerts, or falls back to free ReAct if no workflow matches.
+Create a `workflow.json` file under `.sentinelflow/plugins/workflows/<workflow-id>/` (default local workspace), or use the **Workflow Management** page in the WebUI. The Primary Agent uses structured LLM reasoning to select the best workflow for incoming alerts, or falls back to free ReAct if no workflow matches. In v1.1.0, `run_workflow` loads the fixed plan only; the Primary Agent still calls each Worker step itself and must provide a concrete task prompt for every step.
 
 ```json
 {
@@ -505,6 +514,10 @@ Create a `workflow.json` file under `.sentinelflow/plugins/workflows/<workflow-i
 ```
 
 </details>
+
+## Release Notes
+
+- [SentinelFlow v1.1.0 — Execution Context Integrity Milestone](RELEASE_1.1.0.md)
 
 ## Documentation
 
