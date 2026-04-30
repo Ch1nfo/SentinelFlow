@@ -282,7 +282,10 @@ function ProcessTrace({ trace, traceOwnerId }: { trace: ExecutionTraceItem[]; tr
 export default function SentinelFlowTasksPage() {
   const { data: poll, loading, error, reload: reloadPoll, setData: setPollData } = useSentinelFlowAsyncData(fetchAllPollAlerts, [])
   const { data: settings } = useSentinelFlowAsyncData(fetchRuntimeSettings, [])
-  const [activity, setActivity] = useState<RuntimeActivity | null>(() => readRuntimeActivity())
+  const [activity, setActivity] = useState<RuntimeActivity | null>(() => {
+    const current = readRuntimeActivity()
+    return current?.type === 'alert_action' ? current : null
+  })
   const [runningAction, setRunningAction] = useState('')
   const [filter, setFilter] = useState<TaskFilter>(() => readSessionValue<TaskFilter>(TASK_FILTER_KEY, 'all'))
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
@@ -301,6 +304,7 @@ export default function SentinelFlowTasksPage() {
 
   useEffect(() => {
     return subscribeRuntimeActivity((next) => {
+      if (next.type !== 'alert_action') return
       setActivity(next)
       void reloadPoll()
     })
