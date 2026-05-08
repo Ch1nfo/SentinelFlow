@@ -807,9 +807,46 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             "error": "用户拒绝执行需要审批的 Skill。",
         }
 
+    def _extract_tool_calls_from_messages(self, messages: list[Any]) -> list[dict[str, Any]]:
+        tool_calls: list[dict[str, Any]] = []
+        for msg in messages:
+            candidates = []
+            if isinstance(msg, dict):
+                candidates = list(msg.get("tool_calls", []) or [])
+                data = msg.get("data", {})
+                if isinstance(data, dict):
+                    candidates.extend(list(data.get("tool_calls", []) or []))
+            else:
+                candidates = list(getattr(msg, "tool_calls", None) or [])
+            for call in candidates:
+                if isinstance(call, dict):
+                    tool_calls.append(call)
+        return tool_calls
+
+    def _dedupe_tool_calls(self, tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for call in tool_calls:
+            marker = str(call.get("id", "")).strip()
+            if not marker:
+                try:
+                    marker = json.dumps(call, ensure_ascii=False, sort_keys=True, default=str)
+                except TypeError:
+                    marker = str(call)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            deduped.append(call)
+        return deduped
+
     def _build_worker_wrapped_result(self, checkpoint: dict[str, Any], state: dict[str, Any], graph_result: dict[str, Any]) -> dict[str, Any]:
         delegated_task_prompt = str((state.get("alert_data", {}) or {}).get("delegated_task_prompt", ""))
-        tool_calls = graph_result.get("tool_calls", [])
+        graph_messages = list(graph_result.get("messages", []) or [])
+        checkpoint_messages = list(state.get("messages", []) or [])
+        tool_calls = self._dedupe_tool_calls(
+            [item for item in graph_result.get("tool_calls", []) if isinstance(item, dict)]
+            + self._extract_tool_calls_from_messages(checkpoint_messages)
+        )
         skills_used = [
             str(item.get("name", "")).strip()
             for item in tool_calls
@@ -835,25 +872,32 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
                 model_summary=graph_result.get("key_facts", {}),
             )
         tool_result_facts: dict[str, Any] = {}
-        for message in graph_result.get("messages", []) or []:
-            if not isinstance(message, dict) or str(message.get("type", "")).strip() != "tool":
-                continue
-            content = str(message.get("content", "")).strip()
+        source_messages = graph_messages + checkpoint_messages
+        for message in source_messages:
+            if isinstance(message, dict):
+                if str(message.get("type", "")).strip() != "tool":
+                    continue
+                content = str(message.get("content", "")).strip()
+            else:
+                if str(getattr(message, "type", "")).strip() != "tool":
+                    continue
+                content = str(getattr(message, "content", "")).strip()
             try:
                 parsed_content = json.loads(content)
             except json.JSONDecodeError:
                 parsed_content = content
             tool_result_facts = extract_key_facts(tool_result_facts, parsed_content)
+        tool_calls_summary = summarize_tool_calls(
+            tool_calls,
+            tool_messages=source_messages,
+        )
         wrapped = {
             "step": step_idx or 1,
             "worker": str(checkpoint.get("agent_name", "")).strip() or str(graph_result.get("agent_name", "")).strip(),
             "task_prompt": delegated_task_prompt,
             "final_response": final_text,
             "skills_used": skills_used,
-            "tool_calls_summary": summarize_tool_calls(
-                tool_calls,
-                tool_messages=list(graph_result.get("messages", []) or []),
-            ),
+            "tool_calls_summary": tool_calls_summary,
             "key_facts": extract_key_facts(graph_result.get("key_facts", {}), tool_calls, final_text, tool_result_facts),
             "context_manifest": context_manifest,
             "context_warnings": list(context_manifest.get("context_warnings", []) or []),
