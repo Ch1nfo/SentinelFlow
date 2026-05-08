@@ -21,6 +21,18 @@ import { publishRuntimeActivity, readRuntimeActivity, subscribeRuntimeActivity, 
 type TaskFilter = 'all' | 'queued' | 'running' | 'succeeded' | 'completed' | 'failed'
 const TASK_FILTER_KEY = 'sentinelflow:tasks:filter'
 
+type ToolInvocationResult = {
+  key: string
+  skillName: string
+  toolName: string
+  toolCallId: string
+  success: boolean | null
+  source: string
+  input: Record<string, unknown>
+  output: Record<string, unknown>
+  raw: Record<string, unknown>
+}
+
 const TASK_FILTER_LABELS: Record<TaskFilter, string> = {
   all: '全部',
   queued: '排队中',
@@ -188,6 +200,127 @@ function getTaskFlowLabel(task: AlertTask): string {
   return workflowName
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function asRecordArray(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+}
+
+function getToolInvocationOutput(item: Record<string, unknown>): Record<string, unknown> {
+  const payload = asRecord(item.payload)
+  if (Object.keys(payload).length) return payload
+  const result = asRecord(item.result)
+  if (Object.keys(result).length) return result
+  const toolPayload = asRecord(item.tool_payload)
+  const toolPayloadData = asRecord(toolPayload.data)
+  if (Object.keys(toolPayloadData).length) return toolPayloadData
+  return {}
+}
+
+function buildToolInvocation(item: Record<string, unknown>, source: string, fallbackIndex: number): ToolInvocationResult | null {
+  const skillName = String(item.skill_name ?? '').trim()
+  if (!skillName) return null
+  const toolName = String(item.tool_name ?? 'execute_skill').trim() || 'execute_skill'
+  const toolCallId = String(item.tool_call_id ?? '').trim()
+  const input = asRecord(item.arguments)
+  const output = getToolInvocationOutput(item)
+  const successValue = item.success
+  const success = typeof successValue === 'boolean' ? successValue : null
+  const key = toolCallId || `${skillName}-${source}-${fallbackIndex}-${JSON.stringify(input)}-${JSON.stringify(output)}`
+  return {
+    key,
+    skillName,
+    toolName,
+    toolCallId,
+    success,
+    source,
+    input,
+    output,
+    raw: item,
+  }
+}
+
+function collectToolInvocationResults(trace: ExecutionTraceItem[]): ToolInvocationResult[] {
+  const results: ToolInvocationResult[] = []
+  const seen = new Set<string>()
+  const addItem = (item: Record<string, unknown>, source: string) => {
+    const invocation = buildToolInvocation(item, source, results.length)
+    if (!invocation || seen.has(invocation.key)) return
+    seen.add(invocation.key)
+    results.push(invocation)
+  }
+
+  trace.forEach((traceItem) => {
+    const data = asRecord(traceItem.data)
+    asRecordArray(data.runs).forEach((item) => addItem(item, traceItem.title || '技能调用记录'))
+    asRecordArray(data.steps).forEach((item) => addItem(item, traceItem.title || '处置动作'))
+    if (traceItem.phase === 'closure') {
+      addItem(data, traceItem.title || '结单结果')
+    }
+  })
+
+  return results
+}
+
+function ToolInvocationResults({ tools, ownerId }: { tools: ToolInvocationResult[]; ownerId: string }) {
+  const [openKeys, setOpenKeys] = useState<Record<string, boolean>>({})
+
+  useEffect(() => {
+    setOpenKeys({})
+  }, [ownerId])
+
+  if (!tools.length) {
+    return <p className="sentinelflow-muted-text">暂无可展示的工具调用结果。</p>
+  }
+
+  return (
+    <div className="space-y-3">
+      {tools.map((tool, index) => {
+        const open = Boolean(openKeys[tool.key])
+        return (
+          <div key={tool.key} className="rounded-xl border border-gray-200 bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">调用 {index + 1}</span>
+                  <StatusBadge tone={tool.success === false ? 'danger' : tool.success === true ? 'success' : 'info'}>{tool.skillName}</StatusBadge>
+                  <span className="text-xs text-gray-500">{tool.source}</span>
+                </div>
+                <p className="text-sm text-gray-700">
+                  {tool.toolCallId ? `${tool.toolName} / ${tool.toolCallId}` : tool.toolName}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="sentinelflow-ghost-button shrink-0"
+                onClick={() => setOpenKeys((current) => ({ ...current, [tool.key]: !open }))}
+              >
+                {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                {open ? '收起详情' : '展开详情'}
+              </button>
+            </div>
+            {open ? (
+              <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">输入</div>
+                  <JsonPreview value={tool.input} />
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">输出</div>
+                  <JsonPreview value={tool.output} />
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function ProcessTrace({ trace, traceOwnerId }: { trace: ExecutionTraceItem[]; traceOwnerId: string }) {
   const [openKeys, setOpenKeys] = useState<Record<string, boolean>>({})
 
@@ -289,6 +422,7 @@ export default function SentinelFlowTasksPage() {
   const [runningAction, setRunningAction] = useState('')
   const [filter, setFilter] = useState<TaskFilter>(() => readSessionValue<TaskFilter>(TASK_FILTER_KEY, 'all'))
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [toolResultsExpanded, setToolResultsExpanded] = useState(false)
   const [processExpanded, setProcessExpanded] = useState(false)
   const taskListPanelRef = useRef<HTMLDivElement | null>(null)
   const detailPanelRef = useRef<HTMLDivElement | null>(null)
@@ -331,6 +465,7 @@ export default function SentinelFlowTasksPage() {
   }, [filteredTasks])
 
   useEffect(() => {
+    setToolResultsExpanded(false)
     setProcessExpanded(false)
   }, [selectedTaskId])
 
@@ -372,7 +507,7 @@ export default function SentinelFlowTasksPage() {
       setTaskListMaxHeight(null)
       return
     }
-  }, [selectedTaskId, processExpanded, filteredTasks.length, selectedTask?.task_id, selectedTask?.status])
+  }, [selectedTaskId, toolResultsExpanded, processExpanded, filteredTasks.length, selectedTask?.task_id, selectedTask?.status])
 
   const refreshTasks = useCallback(() => {
     void fetchAllPollAlerts().then((next) => {
@@ -473,6 +608,7 @@ export default function SentinelFlowTasksPage() {
   const selectedTrace = Array.isArray(selectedResult.execution_trace) && selectedResult.execution_trace.length
     ? (selectedResult.execution_trace as ExecutionTraceItem[])
     : buildFallbackTrace(selectedTask)
+  const selectedToolResults = collectToolInvocationResults(selectedTrace)
   const dipPreview = formatIpPreview(selectedPayload.dip, 4)
   const workflowDecision = String(
     selectedWorkflowRun?.workflow_name ?? selectedWorkflowRun?.workflow_id ?? selectedTask?.workflow_name ?? '',
@@ -648,6 +784,23 @@ export default function SentinelFlowTasksPage() {
                       ) : null}
                     </div>
                   ) : null}
+
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">工具调用结果</div>
+                        <p className="mt-1 text-sm text-gray-600">
+                          {selectedToolResults.length ? `共调用 ${selectedToolResults.length} 个 Skill，展开后查看调用顺序、输入和输出。` : '暂无可展示的工具调用结果。'}
+                        </p>
+                      </div>
+                      <button type="button" className="sentinelflow-ghost-button" onClick={() => setToolResultsExpanded((current) => !current)}>
+                        {toolResultsExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                        {toolResultsExpanded ? '收起工具调用结果' : '展开工具调用结果'}
+                      </button>
+                    </div>
+                    {toolResultsExpanded ? <div className="mt-4"><ToolInvocationResults tools={selectedToolResults} ownerId={selectedTask.task_id} /></div> : null}
+                  </div>
+
                   {selectedConsistencyIssues.length ? (
                     <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
                       <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">结果收敛提示</div>
