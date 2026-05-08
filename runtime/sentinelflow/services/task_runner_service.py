@@ -51,7 +51,7 @@ class AlertTaskRunnerService:
         return "主 Agent 未返回成功结果。"
 
     def _finalize_success(self, task, selected_action: str, result_data: dict[str, Any]) -> dict[str, Any]:
-        result_payload = dict(result_data)
+        result_payload = self._normalize_success_result_payload(result_data)
         if isinstance(task.payload, dict):
             workflow_selection = task.payload.get("workflow_selection")
             if isinstance(workflow_selection, dict) and "workflow_selection" not in result_payload:
@@ -66,6 +66,35 @@ class AlertTaskRunnerService:
             "task": task,
             "error": None,
         }
+
+    def _normalize_success_result_payload(self, result_data: dict[str, Any]) -> dict[str, Any]:
+        result_payload = dict(result_data)
+        closure_step = result_payload.get("effective_closure_step", result_payload.get("closure_step", {}))
+        if not isinstance(closure_step, dict) or not bool(closure_step.get("attempted")) or not bool(closure_step.get("success")):
+            return result_payload
+
+        final_facts = result_payload.get("final_facts")
+        if not isinstance(final_facts, dict):
+            final_facts = {}
+        task_outcome = final_facts.get("task_outcome")
+        if not isinstance(task_outcome, dict):
+            task_outcome = {}
+
+        normalized_status = str(task_outcome.get("status", "")).strip()
+        if normalized_status == "pending_manual_closure":
+            return result_payload
+        if task_outcome.get("success") is True and normalized_status in {"succeeded", "completed"}:
+            return result_payload
+
+        final_facts["task_outcome"] = {
+            **task_outcome,
+            "success": True,
+            "status": "succeeded",
+            "source": str(task_outcome.get("source", "")).strip() or "task_runner_finalize",
+        }
+        result_payload["final_facts"] = final_facts
+        result_payload["success"] = True
+        return result_payload
 
     def _finalize_failure(self, task, selected_action: str, error: str, result_data: dict[str, Any] | None = None) -> dict[str, Any]:
         workflow_selection = {}

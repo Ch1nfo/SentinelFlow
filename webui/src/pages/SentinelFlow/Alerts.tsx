@@ -18,6 +18,7 @@ import { publishRuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
 import { useSentinelFlowLiveRefresh } from '@/hooks/useSentinelFlowLiveRefresh'
 
 const ALERTS_SELECTED_SOURCE_STORAGE_KEY = 'sentinelflow.alerts.selectedSourceId'
+type AlertTimeRange = 'today' | 'week'
 
 function readStoredSelectedSourceId(): string | null {
   try {
@@ -174,6 +175,35 @@ function formatAlertTime(value: string | undefined): string {
   return text || '未提供'
 }
 
+function parseAlertDate(value: string | undefined): Date | null {
+  const text = String(value ?? '').trim()
+  if (!text) return null
+  const normalized = text.includes('T') ? text : text.replace(' ', 'T')
+  const parsed = new Date(normalized)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function getStartOfDay(value: Date): Date {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate())
+}
+
+function getStartOfWeek(value: Date): Date {
+  const startOfDay = getStartOfDay(value)
+  const day = startOfDay.getDay()
+  const diff = day === 0 ? -6 : 1 - day
+  startOfDay.setDate(startOfDay.getDate() + diff)
+  return startOfDay
+}
+
+function matchesAlertTimeRange(task: AlertTask, range: AlertTimeRange, now: Date): boolean {
+  const alertDate = parseAlertDate(task.alert_time)
+  if (!alertDate) return false
+  if (range === 'today') {
+    return alertDate >= getStartOfDay(now)
+  }
+  return alertDate >= getStartOfWeek(now)
+}
+
 function getSelectedAlertPayload(task: AlertTask | null): Record<string, unknown> {
   return (task?.payload?.alert_data as Record<string, unknown> | undefined) ?? {}
 }
@@ -216,6 +246,7 @@ export default function SentinelFlowAlertsPage() {
   const [error, setError] = useState<string | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(() => readStoredSelectedSourceId())
+  const [timeRange, setTimeRange] = useState<AlertTimeRange>('today')
   const [payloadExpanded, setPayloadExpanded] = useState(false)
   const [actionState, setActionState] = useState<{ action: string; running: boolean }>({ action: '', running: false })
   const [actionResult, setActionResult] = useState<AlertActionResponse | null>(null)
@@ -273,7 +304,9 @@ export default function SentinelFlowAlertsPage() {
     { intervalMs: liveRefreshing ? 2000 : 5000 },
   )
 
-  const tasks = [...(data?.tasks ?? [])].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
+  const allTasks = [...(data?.tasks ?? [])].sort((left, right) => toSortableTime(right.alert_time) - toSortableTime(left.alert_time))
+  const now = new Date()
+  const tasks = allTasks.filter((task) => matchesAlertTimeRange(task, timeRange, now))
   const alertSources = data?.alert_sources ?? []
   const selectedSource = alertSources.find((source) => source.id === (selectedSourceId ?? data?.source_id)) ?? alertSources[0] ?? null
 
@@ -482,17 +515,27 @@ export default function SentinelFlowAlertsPage() {
         </div>
 
         <div className="mb-4 grid gap-4 xl:grid-cols-2 xl:items-start">
-          <div className="sentinelflow-inline-metrics xl:min-h-[42px] xl:items-center">
-            <span>拉取：{data?.fetched_count ?? 0}</span>
-            <span>排队：{data?.queued_count ?? 0}</span>
-            <span>更新：{data?.updated_count ?? 0}</span>
-            <span>完成：{data?.completed_count ?? 0}</span>
-            <span>跳过：{data?.skipped_count ?? 0}</span>
-            <span>失败：{data?.failed_count ?? 0}</span>
-            <span>{selectedSource?.name ?? '当前源'}自动执行：{autoExecuteEnabled ? (autoExecuteRunning ? '自动执行中' : '已开启') : '未开启'}</span>
-            <span>已结单：{summary?.operations.closed_success ?? 0}</span>
-            <span>已处置：{summary?.operations.disposed_success ?? 0}</span>
-            <span>人工处置：{summary?.operations.manual_completed ?? 0}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className={timeRange === 'today' ? 'sentinelflow-primary-button' : 'sentinelflow-ghost-button'}
+              onClick={() => {
+                setTimeRange('today')
+                setSelectedTaskId(null)
+              }}
+            >
+              今日告警
+            </button>
+            <button
+              type="button"
+              className={timeRange === 'week' ? 'sentinelflow-primary-button' : 'sentinelflow-ghost-button'}
+              onClick={() => {
+                setTimeRange('week')
+                setSelectedTaskId(null)
+              }}
+            >
+              本周告警
+            </button>
           </div>
           <div className="sentinelflow-action-bar xl:justify-start">
             <button type="button" className="sentinelflow-ghost-button" onClick={() => void runAction('refresh_poll')} disabled={actionState.running}>重新轮询</button>
@@ -525,7 +568,7 @@ export default function SentinelFlowAlertsPage() {
                 <tbody>
                   {loading ? <tr><td colSpan={4}>正在加载...</td></tr> : null}
                   {error ? <tr><td colSpan={4}>加载失败：{error}</td></tr> : null}
-                  {!loading && !error && tasks.length === 0 ? <tr><td colSpan={4}>当前没有新的待处理告警任务。</td></tr> : null}
+                  {!loading && !error && tasks.length === 0 ? <tr><td colSpan={4}>{timeRange === 'today' ? '今日暂无告警任务。' : '本周暂无告警任务。'}</td></tr> : null}
                   {!loading && !error ? tasks.map((task) => (
                     <tr
                       key={task.task_id}

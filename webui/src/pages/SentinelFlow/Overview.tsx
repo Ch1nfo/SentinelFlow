@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { BarChart3, BookOpen, ChevronRight, LayoutDashboard, ListTodo, MessageSquareText, ShieldAlert, Siren } from 'lucide-react'
+import { ChevronRight, LayoutDashboard, ListTodo, MessageSquareText, Siren } from 'lucide-react'
 import { fetchDashboardSummary, fetchHealth, fetchPollAlerts, fetchSkills } from '@/api/sentinelflow'
 import Surface from '@/components/sentinelflow/Surface'
 import StatusBadge from '@/components/sentinelflow/StatusBadge'
@@ -137,13 +137,6 @@ export default function SentinelFlowOverviewPage() {
                 <span>failed {failedCount}</span>
               </div>
             </div>
-            <div className="sentinelflow-stack-item">
-              <strong>平台能力视图</strong>
-              <div className="sentinelflow-inline-status">
-                <BarChart3 className="h-4 w-4 text-gray-400" />
-                <span>总览、告警、任务、Agent 和 Skills 已统一到同一平台入口。</span>
-              </div>
-            </div>
           </div>
         </Surface>
 
@@ -165,52 +158,6 @@ export default function SentinelFlowOverviewPage() {
         </Surface>
       </div>
 
-      <Surface title="能力地图" subtitle={withProductName('以平台化信息架构概览 SentinelFlow 当前已落地的核心能力。')}>
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-xl border border-gray-200 bg-white p-5">
-            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900">
-              <ShieldAlert className="h-4 w-4 text-red-500" />
-              告警闭环
-            </div>
-            <p className="text-sm leading-6 text-gray-500">支持轮询拉取、研判结单、处置结单与通知值班。</p>
-          </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-5">
-            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900">
-              <BookOpen className="h-4 w-4 text-emerald-500" />
-              技能运行时
-            </div>
-            <p className="text-sm leading-6 text-gray-500">{withProductName('统一支持文档型和可执行型 Skills。')}</p>
-          </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-5">
-            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900">
-              <MessageSquareText className="h-4 w-4 text-sky-500" />
-              自然语言调度
-            </div>
-            <p className="text-sm leading-6 text-gray-500">支持自然语言查询、封禁、通知和处理最新告警等指令。</p>
-          </div>
-        </div>
-      </Surface>
-
-      <Surface title="研判与处置摘要" subtitle="以下统计均按最终事实收敛结果计算，优先以真实执行结果为准。">
-        <div className="grid gap-4 xl:grid-cols-2">
-          <div className="rounded-xl border border-gray-200 bg-white p-5">
-            <h3 className="mb-3 text-sm font-semibold text-gray-900">研判结果分布</h3>
-            <div className="sentinelflow-stack-list">
-              <div className="sentinelflow-stack-item"><strong>业务触发 / 测试</strong><span>{summary?.judgment.business_trigger ?? 0} 条（按最终研判分类）</span></div>
-              <div className="sentinelflow-stack-item"><strong>误报</strong><span>{summary?.judgment.false_positive ?? 0} 条（按最终研判分类）</span></div>
-              <div className="sentinelflow-stack-item"><strong>真实攻击</strong><span>{summary?.judgment.true_attack ?? 0} 条（按最终研判分类）</span></div>
-            </div>
-          </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-5">
-            <h3 className="mb-3 text-sm font-semibold text-gray-900">处置结果</h3>
-            <div className="sentinelflow-stack-list">
-              <div className="sentinelflow-stack-item"><strong>成功结单</strong><span>{summary?.operations.closed_success ?? 0} 条（按最终任务结果）</span></div>
-              <div className="sentinelflow-stack-item"><strong>成功处置</strong><span>{summary?.operations.disposed_success ?? 0} 条（按成功动作收敛）</span></div>
-              <div className="sentinelflow-stack-item"><strong>封禁 IP</strong><span>{(summary?.operations.banned_ips ?? []).join('、') || '暂无'}</span></div>
-            </div>
-          </div>
-        </div>
-      </Surface>
     </div>
   )
 }
