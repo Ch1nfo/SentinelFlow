@@ -511,6 +511,7 @@ class SkillRunAnalyzerMixin:
     def _aggregate_action_side_effects(
         self,
         *,
+        action_hint: str | None,
         primary_action_steps: list[dict[str, Any]],
         primary_actions: dict[str, Any],
         worker_results: list[dict[str, Any]],
@@ -532,7 +533,7 @@ class SkillRunAnalyzerMixin:
             worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
             nested_steps, nested_actions, _ = self._extract_nested_side_effects(
                 worker_result,
-                action_hint=None,
+                action_hint=action_hint,
                 source_type="worker",
                 source_name=worker_name,
             )
@@ -564,7 +565,7 @@ class SkillRunAnalyzerMixin:
                     worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
                     nested_steps, nested_actions, _ = self._extract_nested_side_effects(
                         worker_result,
-                        action_hint=None,
+                        action_hint=action_hint,
                         source_type="workflow_worker",
                         source_name=f"{workflow_name}/{worker_name}",
                     )
@@ -577,6 +578,7 @@ class SkillRunAnalyzerMixin:
     def _aggregate_closure_steps(
         self,
         *,
+        action_hint: str | None,
         primary_closure_step: dict[str, Any],
         worker_results: list[dict[str, Any]],
         workflow_runs: list[dict[str, Any]],
@@ -591,7 +593,7 @@ class SkillRunAnalyzerMixin:
             worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
             _, _, nested_closure = self._extract_nested_side_effects(
                 worker_result,
-                action_hint=None,
+                action_hint=action_hint,
                 source_type="worker",
                 source_name=worker_name,
             )
@@ -613,7 +615,7 @@ class SkillRunAnalyzerMixin:
                     worker_name = str(worker_result.get("worker") or worker_result.get("worker_agent") or "").strip() or "worker"
                     _, _, nested_closure = self._extract_nested_side_effects(
                         worker_result,
-                        action_hint=None,
+                        action_hint=action_hint,
                         source_type="workflow_worker",
                         source_name=f"{workflow_name}/{worker_name}",
                     )

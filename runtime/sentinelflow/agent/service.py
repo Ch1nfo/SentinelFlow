@@ -1670,12 +1670,14 @@ class SentinelFlowAgentService(SkillRunAnalyzerMixin, TextExtractorMixin):
             worker_results=worker_results,
         )
         aggregated_action_steps, aggregated_actions = self._aggregate_action_side_effects(
+            action_hint=action_hint,
             primary_action_steps=action_steps,
             primary_actions=actions,
             worker_results=worker_results,
             workflow_runs=workflow_runs,
         )
         aggregated_closure_steps = self._aggregate_closure_steps(
+            action_hint=action_hint,
             primary_closure_step=closure_step,
             worker_results=worker_results,
             workflow_runs=workflow_runs,
