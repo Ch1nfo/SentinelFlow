@@ -5,6 +5,7 @@ import {
   fetchDashboardSummary,
   fetchPollAlerts,
   handleAlertAction,
+  type AlertActionResponse,
   type AlertTask,
   type PollAlertsResponse,
 } from '@/api/sentinelflow'
@@ -43,6 +44,16 @@ function getDispositionLabel(value: string) {
   if (value === 'business_trigger') return '业务触发'
   if (value === 'false_positive') return '误报'
   return value || '未明确'
+}
+
+function isApprovalPendingAction(result: AlertActionResponse): boolean {
+  const data = result.data ?? {}
+  const approvalRequest = data.approval_request
+  return (
+    result.task?.status === 'awaiting_approval' ||
+    data.approval_pending === true ||
+    (typeof approvalRequest === 'object' && approvalRequest !== null && String((approvalRequest as Record<string, unknown>).approval_id ?? '').trim().length > 0)
+  )
 }
 
 function getTaskTone(task: AlertTask): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
@@ -407,11 +418,13 @@ export default function SentinelFlowAlertsPage() {
           ? await handleAlertAction(action, selectedTask, undefined, selectedSourceId ?? data?.source_id)
           : null
       if (!result) return
+      const isApprovalPending = isApprovalPendingAction(result)
       publishRuntimeActivity({
         type: 'alert_action',
         title: selectedTask ? `${selectedTask.title} / ${action}` : action,
-        detail: result.success ? '动作执行完成。' : result.error ?? '动作执行失败。',
+        detail: isApprovalPending ? '任务已暂停，等待技能审批。' : result.success ? '动作执行完成。' : result.error ?? '动作执行失败。',
         success: result.success,
+        status: isApprovalPending ? 'pending_approval' : result.success ? 'success' : 'failed',
         timestamp: new Date().toISOString(),
       })
       await loadTasks()
@@ -421,6 +434,7 @@ export default function SentinelFlowAlertsPage() {
         title: selectedTask ? `${selectedTask.title} / ${action}` : action,
         detail: runError instanceof Error ? runError.message : 'Unknown error',
         success: false,
+        status: 'failed',
         timestamp: new Date().toISOString(),
       })
     } finally {

@@ -5,6 +5,8 @@ import {
   fetchAllPollAlerts,
   fetchRuntimeSettings,
   handleAlertAction,
+  type ApprovalDecisionResponse,
+  type AlertActionResponse,
   type AlertTask,
   type ExecutionTraceItem,
 } from '@/api/sentinelflow'
@@ -16,7 +18,7 @@ import { withProductName } from '@/config/brand'
 import { useSentinelFlowAsyncData } from '@/hooks/useSentinelFlowAsyncData'
 import { useSentinelFlowLiveRefresh } from '@/hooks/useSentinelFlowLiveRefresh'
 import { readSessionValue, writeSessionValue } from '@/utils/sentinelflowLocalState'
-import { publishRuntimeActivity, readRuntimeActivity, subscribeRuntimeActivity, type RuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
+import { getRuntimeActivityBadgeLabel, getRuntimeActivityStatus, publishRuntimeActivity, readRuntimeActivity, subscribeRuntimeActivity, type RuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
 
 type TaskFilter = 'all' | 'queued' | 'running' | 'succeeded' | 'completed' | 'failed'
 const TASK_FILTER_KEY = 'sentinelflow:tasks:filter'
@@ -52,6 +54,16 @@ function getTaskStatusLabel(status: TaskFilter | AlertTask['status']) {
   if (status === 'completed') return '已被人工处置'
   if (status === 'failed') return '失败'
   return '全部'
+}
+
+function isApprovalPendingAction(result: AlertActionResponse | ApprovalDecisionResponse): boolean {
+  const data = result.data ?? {}
+  const approvalRequest = data.approval_request
+  return (
+    result.task?.status === 'awaiting_approval' ||
+    data.approval_pending === true ||
+    (typeof approvalRequest === 'object' && approvalRequest !== null && String((approvalRequest as Record<string, unknown>).approval_id ?? '').trim().length > 0)
+  )
 }
 
 function getDispositionLabel(value: string) {
@@ -546,8 +558,9 @@ export default function SentinelFlowTasksPage() {
       const next: RuntimeActivity = {
         type: 'alert_action',
         title: `${task.title} / retry`,
-        detail: result.success ? '任务重试完成。' : result.error ?? '任务重试失败。',
+        detail: isApprovalPendingAction(result) ? '任务已暂停，等待技能审批。' : result.success ? '任务重试完成。' : result.error ?? '任务重试失败。',
         success: result.success,
+        status: isApprovalPendingAction(result) ? 'pending_approval' : result.success ? 'success' : 'failed',
         timestamp: new Date().toISOString(),
       }
       setActivity(next)
@@ -567,8 +580,9 @@ export default function SentinelFlowTasksPage() {
       const next: RuntimeActivity = {
         type: 'alert_action',
         title: `${selectedTask?.title ?? '任务'} / ${decision}`,
-        detail: result.success ? '审批决定已处理。' : result.error ?? '审批处理失败。',
+        detail: isApprovalPendingAction(result) ? '任务已暂停，等待后续技能审批。' : result.success ? '审批决定已处理。' : result.error ?? '审批处理失败。',
         success: result.success,
+        status: isApprovalPendingAction(result) ? 'pending_approval' : result.success ? 'success' : 'failed',
         timestamp: new Date().toISOString(),
       }
       setActivity(next)
@@ -689,7 +703,7 @@ export default function SentinelFlowTasksPage() {
         {activity ? (
           <div className="sentinelflow-activity-banner">
             <div className="sentinelflow-activity-banner-header">
-              <StatusBadge tone={activity.success ? 'success' : 'warn'}>{activity.success ? '最新动作成功' : '最新动作失败'}</StatusBadge>
+              <StatusBadge tone={getRuntimeActivityStatus(activity) === 'success' ? 'success' : 'warn'}>{getRuntimeActivityBadgeLabel(activity)}</StatusBadge>
               <span>{new Date(activity.timestamp).toLocaleString()}</span>
             </div>
             <strong>{activity.title}</strong>

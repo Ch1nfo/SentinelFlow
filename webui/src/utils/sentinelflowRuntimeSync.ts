@@ -1,8 +1,11 @@
+export type RuntimeActivityStatus = 'success' | 'failed' | 'pending_approval'
+
 export type RuntimeActivity = {
   type: 'alert_action' | 'command_dispatch'
   title: string
   detail: string
   success: boolean
+  status?: RuntimeActivityStatus
   timestamp: string
 }
 
@@ -36,4 +39,18 @@ export function subscribeRuntimeActivity(handler: (activity: RuntimeActivity) =>
   }
   window.addEventListener(EVENT_NAME, listener)
   return () => window.removeEventListener(EVENT_NAME, listener)
+}
+
+export function getRuntimeActivityStatus(activity: RuntimeActivity): RuntimeActivityStatus {
+  if (activity.status) return activity.status
+  if (!activity.success && (activity.detail.includes('等待技能审批') || activity.detail.includes('待审批'))) {
+    return 'pending_approval'
+  }
+  return activity.success ? 'success' : 'failed'
+}
+
+export function getRuntimeActivityBadgeLabel(activity: RuntimeActivity): string {
+  const status = getRuntimeActivityStatus(activity)
+  if (status === 'pending_approval') return '等待技能审批'
+  return status === 'success' ? '最新动作成功' : '最新动作失败'
 }

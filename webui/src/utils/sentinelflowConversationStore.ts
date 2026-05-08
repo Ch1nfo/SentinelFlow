@@ -30,6 +30,11 @@ export type ConversationRuntimeState = {
   activeRequestId: string
 }
 
+function isCommandWaitingApproval(response: CommandDispatchResponse): boolean {
+  const approvalStatus = String(response.approval?.status || response.data?.approval_request?.status || '').trim().toLowerCase()
+  return response.route === 'approval_required' || approvalStatus === 'pending'
+}
+
 const CONVERSATION_HISTORY_KEY = 'sentinelflow:conversation:history'
 const CONVERSATION_DRAFT_KEY = 'sentinelflow:conversation:draft'
 const CONVERSATION_SESSIONS_KEY = 'sentinelflow:conversation:sessions'
@@ -304,8 +309,9 @@ export async function startConversationRun() {
     publishRuntimeActivity({
       type: 'command_dispatch',
       title: text,
-      detail: result.success ? `命令已通过 ${result.route} 路由处理。` : result.error ?? '命令执行失败。',
+      detail: isCommandWaitingApproval(result) ? '命令已暂停，等待技能审批。' : result.success ? `命令已通过 ${result.route} 路由处理。` : result.error ?? '命令执行失败。',
       success: result.success,
+      status: isCommandWaitingApproval(result) ? 'pending_approval' : result.success ? 'success' : 'failed',
       timestamp: new Date().toISOString(),
     })
   } catch (error) {

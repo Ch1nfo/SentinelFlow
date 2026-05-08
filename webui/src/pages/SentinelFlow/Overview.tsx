@@ -8,7 +8,7 @@ import PageHeader from '@/components/common/PageHeader'
 import { brand, withProductName } from '@/config/brand'
 import { useSentinelFlowAsyncData } from '@/hooks/useSentinelFlowAsyncData'
 import { useSentinelFlowLiveRefresh } from '@/hooks/useSentinelFlowLiveRefresh'
-import { readRuntimeActivity, subscribeRuntimeActivity, type RuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
+import { getRuntimeActivityBadgeLabel, getRuntimeActivityStatus, readRuntimeActivity, subscribeRuntimeActivity, type RuntimeActivity } from '@/utils/sentinelflowRuntimeSync'
 
 function getEffectiveTaskStatus(task: Record<string, unknown>): string {
   const result = (task.last_result_data as Record<string, unknown> | undefined) ?? {}
@@ -144,8 +144,8 @@ export default function SentinelFlowOverviewPage() {
           {activity ? (
             <div className="sentinelflow-activity-banner">
               <div className="sentinelflow-response-row">
-                <StatusBadge tone={activity.success ? 'success' : 'warn'}>
-                  {activity.success ? '最新动作成功' : '最新动作失败'}
+                <StatusBadge tone={getRuntimeActivityStatus(activity) === 'success' ? 'success' : 'warn'}>
+                  {getRuntimeActivityBadgeLabel(activity)}
                 </StatusBadge>
                 <span>{new Date(activity.timestamp).toLocaleString()}</span>
               </div>
