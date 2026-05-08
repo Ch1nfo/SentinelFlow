@@ -7,6 +7,8 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -71,6 +73,33 @@ def _run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> in
 
 def _spawn(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> subprocess.Popen:
     return subprocess.Popen(command, cwd=str(cwd), env=env)
+
+
+def _api_health_url(api_base_url: str) -> str:
+    return f"{api_base_url.rstrip('/')}/api/sentinelflow/health"
+
+
+def _wait_for_backend_health(api_base_url: str, process: subprocess.Popen, timeout: float = 60.0) -> bool:
+    health_url = _api_health_url(api_base_url)
+    deadline = time.monotonic() + timeout
+    last_error = ""
+    print(f"{_product_tag()} waiting for backend health -> {health_url}")
+    while time.monotonic() < deadline:
+        exit_code = process.poll()
+        if exit_code is not None:
+            print(f"{_product_tag()} backend exited before health check passed (exit code {exit_code}).")
+            return False
+        try:
+            with urllib.request.urlopen(health_url, timeout=1.0) as response:
+                if 200 <= response.status < 300:
+                    print(f"{_product_tag()} backend health check passed.")
+                    return True
+                last_error = f"HTTP {response.status}"
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_error = str(exc)
+        time.sleep(0.5)
+    print(f"{_product_tag()} backend health check timed out after {timeout:.0f}s: {last_error or 'unknown error'}")
+    return False
 
 
 def _stop_process(process: subprocess.Popen) -> None:
@@ -168,8 +197,8 @@ def command_dev(args: argparse.Namespace) -> int:
     print(f"{_product_tag()} webui   -> http://{args.webui_host}:{args.webui_port}")
 
     backend = _spawn(backend_cmd, RUNTIME_DIR, env=backend_env)
-    frontend = _spawn(frontend_cmd, WEBUI_DIR, env=frontend_env)
-    processes = [backend, frontend]
+    frontend: subprocess.Popen | None = None
+    processes = [backend]
 
     def _shutdown() -> None:
         for process in reversed(processes):
@@ -184,9 +213,14 @@ def command_dev(args: argparse.Namespace) -> int:
     original_sigint = signal.signal(signal.SIGINT, _handle_signal)
     original_sigterm = signal.signal(signal.SIGTERM, _handle_signal)
     try:
+        if not _wait_for_backend_health(args.api_base_url, backend):
+            _shutdown()
+            return backend.poll() or 1
+        frontend = _spawn(frontend_cmd, WEBUI_DIR, env=frontend_env)
+        processes.append(frontend)
         while True:
             backend_code = backend.poll()
-            frontend_code = frontend.poll()
+            frontend_code = frontend.poll() if frontend else None
             if backend_code is not None or frontend_code is not None:
                 _shutdown()
                 return backend_code or frontend_code or 0
