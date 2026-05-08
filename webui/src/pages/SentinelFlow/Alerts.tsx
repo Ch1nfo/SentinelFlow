@@ -5,11 +5,9 @@ import {
   fetchDashboardSummary,
   fetchPollAlerts,
   handleAlertAction,
-  type AlertActionResponse,
   type AlertTask,
   type PollAlertsResponse,
 } from '@/api/sentinelflow'
-import JsonPreview from '@/components/sentinelflow/JsonPreview'
 import StatusBadge from '@/components/sentinelflow/StatusBadge'
 import Surface from '@/components/sentinelflow/Surface'
 import PageHeader from '@/components/common/PageHeader'
@@ -249,7 +247,6 @@ export default function SentinelFlowAlertsPage() {
   const [timeRange, setTimeRange] = useState<AlertTimeRange>('today')
   const [payloadExpanded, setPayloadExpanded] = useState(false)
   const [actionState, setActionState] = useState<{ action: string; running: boolean }>({ action: '', running: false })
-  const [actionResult, setActionResult] = useState<AlertActionResponse | null>(null)
   const queuePanelRef = useRef<HTMLDivElement | null>(null)
   const detailPanelRef = useRef<HTMLDivElement | null>(null)
   const [queuePanelHeight, setQueuePanelHeight] = useState<number | null>(null)
@@ -410,7 +407,6 @@ export default function SentinelFlowAlertsPage() {
           ? await handleAlertAction(action, selectedTask, undefined, selectedSourceId ?? data?.source_id)
           : null
       if (!result) return
-      setActionResult(result)
       publishRuntimeActivity({
         type: 'alert_action',
         title: selectedTask ? `${selectedTask.title} / ${action}` : action,
@@ -420,13 +416,12 @@ export default function SentinelFlowAlertsPage() {
       })
       await loadTasks()
     } catch (runError) {
-      setActionResult({
-        action,
+      publishRuntimeActivity({
+        type: 'alert_action',
+        title: selectedTask ? `${selectedTask.title} / ${action}` : action,
+        detail: runError instanceof Error ? runError.message : 'Unknown error',
         success: false,
-        task_id: selectedTask?.task_id ?? '',
-        event_ids: selectedTask?.event_ids ?? '',
-        data: {},
-        error: runError instanceof Error ? runError.message : 'Unknown error',
+        timestamp: new Date().toISOString(),
       })
     } finally {
       setActionState({ action: '', running: false })
@@ -438,16 +433,7 @@ export default function SentinelFlowAlertsPage() {
     if (!approvalId) return
     setActionState({ action: decision, running: true })
     try {
-      const result = await decideApproval(approvalId, decision)
-      setActionResult({
-        action: decision,
-        success: result.success,
-        task_id: selectedTask?.task_id ?? '',
-        event_ids: selectedTask?.event_ids ?? '',
-        data: result.data,
-        task: result.task ?? null,
-        error: result.error,
-      })
+      await decideApproval(approvalId, decision)
       await loadTasks()
     } finally {
       setActionState({ action: '', running: false })
@@ -736,22 +722,18 @@ export default function SentinelFlowAlertsPage() {
                 <div className="mt-1 text-2xl font-bold text-red-950">{summary?.judgment.true_attack ?? 0}</div>
               </div>
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                <div className="text-xs text-gray-700">未明确分类</div>
-                <div className="mt-1 text-2xl font-bold text-gray-950">{summary?.judgment.unknown ?? 0}</div>
+                <div className="text-xs text-gray-700">人工处置</div>
+                <div className="mt-1 text-2xl font-bold text-gray-950">{summary?.operations.manual_completed ?? 0}</div>
               </div>
             </div>
           </div>
 
           <div className="rounded-xl border border-gray-200 bg-white p-5">
             <div className="mb-3 text-sm font-semibold text-gray-900">封禁与处置</div>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3">
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
                 <div className="text-xs text-amber-800">封禁 IP 数</div>
                 <div className="mt-1 text-2xl font-bold text-amber-950">{summary?.operations.banned_ip_count ?? 0}</div>
-              </div>
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                <div className="text-xs text-amber-800">人工处置</div>
-                <div className="mt-1 text-2xl font-bold text-amber-950">{summary?.operations.manual_completed ?? 0}</div>
               </div>
             </div>
             <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -768,10 +750,6 @@ export default function SentinelFlowAlertsPage() {
             </div>
           </div>
         </div>
-      </Surface>
-
-      <Surface title="动作结果" subtitle="保留结构化回执，便于在值班场景里快速确认执行状态。">
-        {actionResult ? <JsonPreview value={actionResult} /> : <p className="sentinelflow-muted-text">执行动作后，这里会显示结构化回执。</p>}
       </Surface>
     </div>
   )
