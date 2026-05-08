@@ -262,38 +262,28 @@ class SkillRunAnalyzerMixin:
             return False
         return bool(policy.get("enabled")) and str(policy.get("completion_effect", "")).strip() == "closure"
 
+    def _completion_policy_enabled(self, skill_name: str) -> bool:
+        resolver = getattr(self, "_completion_policy_for_skill", None)
+        if not callable(resolver):
+            return False
+        try:
+            policy = resolver(skill_name)
+        except Exception:
+            return False
+        if not isinstance(policy, dict):
+            return False
+        return bool(policy.get("enabled"))
+
     def _is_closure_run(self, run: dict[str, Any]) -> bool:
         """Classify a skill run as a closure (结单) run.
 
         Priority order:
         1. completion_policy.closure explicitly set on the skill.
-        2. Skill name matches well-known closure keywords.
-        3. Payload / arguments contain the *full* canonical closure field set
-           ({status, memo, detailMsg} or {status, memo, detail_msg}).
-
-        Single-field heuristics (e.g. just `status`) are intentionally NOT used
-        here to avoid mis-classifying query/enrichment skills that happen to
-        return a `status` field.  Looser fallback matching is available via
-        ``_looks_like_closure_fallback`` which is only consulted by
-        ``_select_closure_run`` when action_hint demands a closure attempt.
+        Unconfigured / disabled skills do not participate in completion-state
+        closure detection, even if their name or payload looks closure-like.
         """
         skill_name = str(run.get("skill_name", "")).strip().lower()
-        if skill_name and self._completion_policy_marks_closure(skill_name):
-            return True
-        if self._is_closure_skill_name(skill_name):
-            return True
-        payload = run.get("payload", {})
-        arguments = run.get("arguments", {})
-        payload = payload if isinstance(payload, dict) else {}
-        arguments = arguments if isinstance(arguments, dict) else {}
-        combined_keys = set(payload.keys()) | set(arguments.keys())
-        # Require the full canonical 3-field set to avoid false positives on
-        # query skills that incidentally carry a `status` or `memo` field.
-        if {"status", "memo", "detailMsg"}.issubset(combined_keys):
-            return True
-        if {"status", "memo", "detail_msg"}.issubset(combined_keys):
-            return True
-        return bool({"closeStatus", "close_status"} & combined_keys)
+        return bool(skill_name) and self._completion_policy_marks_closure(skill_name)
 
     def _is_closure_skill_name(self, skill_name: str) -> bool:
         normalized = skill_name.strip().lower()
@@ -317,18 +307,19 @@ class SkillRunAnalyzerMixin:
         skill_name = str(run.get("skill_name", "")).strip()
         if skill_name and self._completion_policy_marks_closure(skill_name):
             return True
-        if self._is_closure_skill_name(skill_name):
-            return True
+        if not skill_name or not self._completion_policy_enabled(skill_name):
+            return False
         payload = run.get("payload", {})
         arguments = run.get("arguments", {})
         payload = payload if isinstance(payload, dict) else {}
         arguments = arguments if isinstance(arguments, dict) else {}
         combined_keys = set(payload.keys()) | set(arguments.keys())
-        if {"status", "memo", "detailMsg"} <= combined_keys:
+        event_id_keys = {"eventIds", "event_id", "alert_id"}
+        status_keys = {"status", "closeStatus", "close_status"}
+        closure_detail_keys = {"memo", "detailMsg", "detail_msg", "message", "result"}
+        if (combined_keys & event_id_keys) and (combined_keys & status_keys) and (combined_keys & closure_detail_keys):
             return True
-        if {"status", "memo", "detail_msg"} <= combined_keys:
-            return True
-        return bool({"closeStatus", "close_status"} & combined_keys)
+        return False
 
     def _select_closure_run(
         self,
